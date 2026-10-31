@@ -214,18 +214,52 @@
    ACCESSIBILITY CONTROLS OVERRIDES
    ============================================================================== */
 
-/* 1. Text Scale */
-html[data-text-size="100"] {
-  font-size: 16px;
+/* 1. Text Scale (Keeps html root fixed at 16px, scales text tokens without ballooning layout rem) */
+html {
+  font-size: 16px !important;
 }
-html[data-text-size="115"] {
-  font-size: 18.4px;
+
+:root,
+[data-text-size="100"] {
+  --khata-text-scale: 1;
 }
-html[data-text-size="130"] {
-  font-size: 20.8px;
+[data-text-size="115"] {
+  --khata-text-scale: 1.15;
 }
-html[data-text-size="145"] {
-  font-size: 23.2px;
+[data-text-size="130"] {
+  --khata-text-scale: 1.30;
+}
+[data-text-size="145"] {
+  --khata-text-scale: 1.45;
+}
+
+.text-xs {
+  font-size: calc(0.75rem * var(--khata-text-scale)) !important;
+  line-height: calc(1.1rem * var(--khata-text-scale)) !important;
+}
+.text-sm {
+  font-size: calc(0.875rem * var(--khata-text-scale)) !important;
+  line-height: calc(1.3rem * var(--khata-text-scale)) !important;
+}
+.text-base {
+  font-size: calc(1rem * var(--khata-text-scale)) !important;
+  line-height: calc(1.5rem * var(--khata-text-scale)) !important;
+}
+.text-lg {
+  font-size: calc(1.125rem * var(--khata-text-scale)) !important;
+  line-height: calc(1.75rem * var(--khata-text-scale)) !important;
+}
+.text-xl {
+  font-size: calc(1.25rem * var(--khata-text-scale)) !important;
+  line-height: calc(1.75rem * var(--khata-text-scale)) !important;
+}
+.text-2xl {
+  font-size: calc(1.5rem * var(--khata-text-scale)) !important;
+  line-height: calc(2rem * var(--khata-text-scale)) !important;
+}
+.text-3xl {
+  font-size: calc(1.875rem * var(--khata-text-scale)) !important;
+  line-height: calc(2.25rem * var(--khata-text-scale)) !important;
 }
 
 /* 2. Enhanced Contrast Override */
@@ -262,11 +296,13 @@ html[data-text-size="145"] {
 
 /* 4. Spacing */
 [data-spacing="increased"] {
-  line-height: 1.8 !important;
+  --khata-card-gap: 1.5rem;
 }
-[data-spacing="increased"] .neu-card {
-  padding: 1.5rem !important;
-  margin-bottom: 1.25rem !important;
+[data-spacing="increased"] .space-y-6 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 2rem !important;
+}
+[data-spacing="increased"] .space-y-4 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 1.5rem !important;
 }
 
 /* 5. Strong Keyboard Focus Indicator */
@@ -279,6 +315,10 @@ html[data-text-size="145"] {
 /* ==============================================================================
    GLOBAL MONTSERRAT TYPOGRAPHY & BODY STYLING
    ============================================================================== */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
 
 html, body {
   font-family: 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -300,30 +340,32 @@ input, button, select, textarea, table {
 }
 
 /* ==============================================================================
-   TACTILE NEUMORPHIC UTILITY CLASSES
+   TACTILE NEUMORPHIC UTILITY CLASSES (Gradient & Solid Surface Compatible)
    ============================================================================== */
 
 .neu-surface {
-  background-color: var(--khata-surface);
+  background: var(--khata-surface);
   color: var(--khata-text);
 }
 
 .neu-card {
-  background-color: var(--khata-surface-raised);
+  background: var(--khata-surface-raised);
   border: 1px solid var(--khata-border);
   box-shadow: var(--khata-shadow-raised);
   border-radius: 1rem;
   transition: box-shadow 180ms ease, transform 180ms ease;
+  min-width: 0;
 }
 
 .neu-input {
-  background-color: var(--khata-surface-inset);
+  background: var(--khata-surface-inset);
   border: 1px solid var(--khata-border);
   box-shadow: var(--khata-shadow-inset);
   border-radius: 0.75rem;
   color: var(--khata-text);
   padding: 0.65rem 1rem;
   transition: border-color 150ms ease, box-shadow 150ms ease;
+  min-height: 42px;
 }
 
 .neu-input:focus {
@@ -345,6 +387,7 @@ input, button, select, textarea, table {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
+  min-height: 42px;
 }
 
 .neu-btn-primary:hover:not(:disabled) {
@@ -363,7 +406,7 @@ input, button, select, textarea, table {
 }
 
 .neu-btn-secondary {
-  background-color: var(--khata-surface);
+  background: var(--khata-surface);
   color: var(--khata-text);
   box-shadow: var(--khata-shadow-btn);
   border: 1px solid var(--khata-border);
@@ -376,10 +419,11 @@ input, button, select, textarea, table {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
+  min-height: 42px;
 }
 
 .neu-btn-secondary:hover:not(:disabled) {
-  background-color: var(--khata-surface-raised);
+  background: var(--khata-surface-raised);
 }
 
 .neu-btn-secondary:active:not(:disabled) {
@@ -406,6 +450,7 @@ input, button, select, textarea, table {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
+  min-height: 42px;
 }
 
 .neu-btn-danger:hover:not(:disabled) {

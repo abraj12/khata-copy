@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { apiClient } from '../../lib/apiClient.js';
 import {
   Users,
@@ -147,6 +147,8 @@ export const KhataLedgerView: React.FC = () => {
   const [isSubmittingUdhar, setIsSubmittingUdhar] = useState(false);
 
   // Customer Detail & History Modal state
+  const activeRequestIdRef = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [activeCustomerDetailId, setActiveCustomerDetailId] = useState<number | null>(null);
   const [customerHistory, setCustomerHistory] = useState<CustomerHistoryData | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
@@ -193,8 +195,15 @@ export const KhataLedgerView: React.FC = () => {
     fetchOverviewData();
   }, []);
 
-  // Fetch individual customer history
+  // Fetch individual customer history with race-condition prevention & AbortController
   const fetchCustomerHistory = async (customerId: number) => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const currentRequestId = ++activeRequestIdRef.current;
+
     try {
       setIsLoadingHistory(true);
       const res = await apiClient<{
@@ -203,26 +212,36 @@ export const KhataLedgerView: React.FC = () => {
         customer?: CustomerHistoryData['customer'];
         transactions?: UdharTransactionDetail[];
         payments?: PaymentRecordDetail[];
-      }>(`/api/v1/khata/customers/${customerId}/history`);
+      }>(`/api/v1/khata/customers/${customerId}/history`, {
+        signal: controller.signal,
+      });
 
-      if (res.data.data) {
-        setCustomerHistory(res.data.data);
-      } else if (res.data.customer) {
-        setCustomerHistory({
-          customer: res.data.customer,
-          transactions: res.data.transactions || [],
-          payments: res.data.payments || [],
-        });
+      // Stale check: discard response if user already selected a different customer
+      if (currentRequestId !== activeRequestIdRef.current) return;
+
+      const payload = res.data.data || {
+        customer: res.data.customer!,
+        transactions: res.data.transactions || [],
+        payments: res.data.payments || [],
+      };
+
+      // Verify customer ID matches
+      if (payload.customer && payload.customer.id === customerId) {
+        setCustomerHistory(payload);
       }
-    } catch (err) {
+    } catch (err: unknown) {
+      if ((err as Error)?.name === 'AbortError') return;
       showNotification('error', (err as Error).message || 'Failed to load customer history.');
     } finally {
-      setIsLoadingHistory(false);
+      if (currentRequestId === activeRequestIdRef.current) {
+        setIsLoadingHistory(false);
+      }
     }
   };
 
   const handleOpenCustomerDetail = (customerId: number) => {
     setActiveCustomerDetailId(customerId);
+    setCustomerHistory(null); // Clear immediately so stale customer data is never rendered
     setPaymentAmount('');
     setPaymentNote('');
     setPaymentError(null);
@@ -782,7 +801,7 @@ export const KhataLedgerView: React.FC = () => {
                   {udharLines.map((line, idx) => (
                     <div
                       key={idx}
-                      className="grid grid-cols-12 gap-2.5 items-center p-3 rounded-xl border border-[var(--khata-border)]"
+                      className="grid grid-cols-12 gap-2.5 items-center p-3.5 rounded-xl border border-[var(--khata-border)] shadow-sm"
                       style={{ backgroundColor: 'var(--khata-surface-raised)' }}
                     >
                       {/* Product Selector */}
@@ -812,7 +831,7 @@ export const KhataLedgerView: React.FC = () => {
                       </div>
 
                       {/* Quantity */}
-                      <div className="col-span-5 sm:col-span-2">
+                      <div className="col-span-6 sm:col-span-2">
                         <label className="block text-[11px] font-semibold text-[var(--khata-text-muted)] mb-0.5">
                           Quantity
                         </label>
@@ -828,7 +847,7 @@ export const KhataLedgerView: React.FC = () => {
                       </div>
 
                       {/* Custom Selling Price */}
-                      <div className="col-span-5 sm:col-span-3">
+                      <div className="col-span-6 sm:col-span-3">
                         <label className="block text-[11px] font-semibold text-[var(--khata-text-muted)] mb-0.5">
                           Custom Selling ₹
                         </label>
@@ -844,7 +863,8 @@ export const KhataLedgerView: React.FC = () => {
                       </div>
 
                       {/* Line Total & Remove */}
-                      <div className="col-span-2 sm:col-span-2 flex items-center justify-end gap-2 pt-4">
+                      <div className="col-span-12 sm:col-span-2 flex items-center justify-between sm:justify-end gap-2 pt-2 sm:pt-4 border-t sm:border-t-0 border-[var(--khata-border)]/50">
+                        <div className="sm:hidden text-xs text-[var(--khata-text-muted)] font-medium">Line Total:</div>
                         <span className="text-xs font-bold text-[var(--khata-text)] tabular-numbers">
                           {formatCurrency(lineCalculations[idx])}
                         </span>
@@ -852,7 +872,7 @@ export const KhataLedgerView: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => handleRemoveLine(idx)}
-                            className="p-1 text-[var(--khata-text-muted)] hover:text-[var(--khata-danger)] transition"
+                            className="p-1.5 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-danger)] transition min-h-[36px]"
                             title="Remove line"
                             aria-label={`Remove line ${idx + 1}`}
                           >

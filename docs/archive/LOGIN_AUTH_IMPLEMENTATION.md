@@ -1,3 +1,7 @@
+> [!NOTE] SUPERSEDED — NOT CURRENT OPERATING INSTRUCTIONS
+> This document is an archived historical report/prompt preserved for audit trail purposes.
+> Refer to the canonical documentation in docs/ and README.md for current operational instructions.
+
 # Khata Owner Login & Authentication — Implementation Specification
 
 > Scope note: this document covers the owner login/authentication system, its security controls, Neon PostgreSQL/Realtime integration, and the Capacitor Android authentication/build requirements. It does not ask the agent to invent or rebuild the separate Products, Khata ledger, Udhar, or payment business features unless those features are already present and need auth protection.

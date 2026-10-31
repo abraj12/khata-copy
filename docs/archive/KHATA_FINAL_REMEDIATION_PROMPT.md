@@ -1,3 +1,7 @@
+> [!NOTE] SUPERSEDED — NOT CURRENT OPERATING INSTRUCTIONS
+> This document is an archived historical report/prompt preserved for audit trail purposes.
+> Refer to the canonical documentation in docs/ and README.md for current operational instructions.
+
 # KHATA — FINAL CORRECTNESS, SECURITY & RELEASE REMEDIATION MASTER PROMPT
 
 **Prompt type:** Execute the remaining final remediation in the existing Khata repository.  

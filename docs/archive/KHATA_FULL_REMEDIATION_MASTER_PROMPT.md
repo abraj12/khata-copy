@@ -1,3 +1,7 @@
+> [!NOTE] SUPERSEDED — NOT CURRENT OPERATING INSTRUCTIONS
+> This document is an archived historical report/prompt preserved for audit trail purposes.
+> Refer to the canonical documentation in docs/ and README.md for current operational instructions.
+
 # MASTER AGENT PROMPT — KHATA APPLICATION FULL REMEDIATION
 
 **Mission:** Repair and complete the existing Khata application in this repository in one coordinated implementation pass. Preserve all working code that is correct. Fix every verified blocker and security defect found in the prior audit. Complete the missing real Khata workflows, Neon PostgreSQL integration, optional/required Realtime integration, Android release signing, deployment configuration, and end-to-end verification. Do not merely write another report or claim completion: make the code changes, run the commands, inspect the outputs, and provide reproducible evidence.
