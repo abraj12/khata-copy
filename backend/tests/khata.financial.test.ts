@@ -261,7 +261,44 @@ class MockDatabaseState {
       };
     }
 
-    // Outstanding Transactions in FIFO order
+    // Outstanding Transactions in FIFO order (Clean non-aggregated FOR UPDATE query)
+    if (s.includes('FROM UDHAR_TRANSACTIONS') && s.includes('FOR UPDATE') && s.includes('WHERE CUSTOMER_ID = $1')) {
+      const custId = params[0]?.toString();
+      const customerTxs = this.udharTransactions
+        .filter((t) => t.customer_id === custId)
+        .sort((a, b) => a.transaction_date.localeCompare(b.transaction_date) || a.created_at.localeCompare(b.created_at) || parseInt(a.id, 10) - parseInt(b.id, 10));
+
+      return {
+        rows: customerTxs.map((t) => ({
+          id: t.id,
+          total_amount: t.total_amount,
+          transaction_date: t.transaction_date,
+          created_at: t.created_at,
+        })),
+        rowCount: customerTxs.length,
+      };
+    }
+
+    // Separate transaction allocations query without FOR UPDATE
+    if (s.includes('FROM PAYMENT_ALLOCATIONS PA') && s.includes('GROUP BY PA.TRANSACTION_ID')) {
+      const custId = params[0]?.toString();
+      const customerTxIds = new Set(this.udharTransactions.filter((t) => t.customer_id === custId).map((t) => t.id));
+
+      const allocationSums = {};
+      for (const a of this.paymentAllocations) {
+        if (customerTxIds.has(a.transaction_id)) {
+          allocationSums[a.transaction_id] = (allocationSums[a.transaction_id] || 0) + parseFloat(a.amount);
+        }
+      }
+
+      const rows = Object.entries(allocationSums).map(([txId, sum]) => ({
+        transaction_id: txId,
+        allocated_amount: sum.toFixed(2),
+      }));
+
+      return { rows, rowCount: rows.length };
+    }
+
     if (s.includes('FROM UDHAR_TRANSACTIONS T') && s.includes('COALESCE(SUM(PA.AMOUNT), 0) AS ALLOCATED_AMOUNT')) {
       const custId = params[0]?.toString();
       const customerTxs = this.udharTransactions.filter((t) => t.customer_id === custId);

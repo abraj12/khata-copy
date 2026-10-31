@@ -111,7 +111,7 @@ router.get('/customers/:customerId/history', async (req: Request, res: Response,
       return;
     }
 
-    res.json({ success: true, ...history });
+    res.json({ success: true, data: history, ...history });
   } catch (err) {
     next(err);
   }

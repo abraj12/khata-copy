@@ -15,22 +15,24 @@ import {
   AlertCircle,
   FileText,
   DollarSign,
-  Trash2
+  Trash2,
 } from 'lucide-react';
+import Decimal from 'decimal.js';
+import { formatCurrency, formatQuantity, safeDecimal } from '../../lib/formatters.js';
 
 interface SummaryData {
-  totalCustomers: number;
-  totalOutstanding: number;
-  totalReceived: number;
+  totalCustomers: number | string;
+  totalOutstanding: number | string;
+  totalReceived: number | string;
 }
 
 interface CustomerListItem {
   id: number;
   name: string;
   phone: string | null;
-  totalUdhar: number;
-  totalReceived: number;
-  outstanding: number;
+  totalUdhar: number | string;
+  totalReceived: number | string;
+  outstanding: number | string;
   created_at: string;
 }
 
@@ -52,30 +54,42 @@ interface UdharItemDetail {
 
 interface UdharTransactionDetail {
   id: number;
-  transaction_date: string;
-  total_amount: string;
-  settled_amount: string;
-  remaining_amount: string;
-  is_fully_settled: boolean;
+  transaction_date?: string;
+  transactionDate?: string;
+  total_amount?: string;
+  totalAmount?: string;
+  settled_amount?: string;
+  allocated_payment?: string;
+  allocatedPayment?: string;
+  remaining_amount?: string;
+  outstanding?: string;
+  is_fully_settled?: boolean;
+  isSettled?: boolean;
   note: string | null;
-  created_at: string;
+  created_at?: string;
+  createdAt?: string;
   items: UdharItemDetail[];
 }
 
 interface PaymentAllocationDetail {
-  id: number;
-  udhar_transaction_id: number;
-  allocated_amount: string;
-  transaction_date: string;
-  total_amount: string;
+  id?: number;
+  transactionId?: number;
+  udhar_transaction_id?: number;
+  amount?: string;
+  allocated_amount?: string;
+  transaction_date?: string;
+  total_amount?: string;
 }
 
 interface PaymentRecordDetail {
   id: number;
   amount: string;
-  payment_date: string;
+  payment_date?: string;
+  receivedAt?: string;
+  received_at?: string;
   note: string | null;
-  created_at: string;
+  created_at?: string;
+  createdAt?: string;
   allocations: PaymentAllocationDetail[];
 }
 
@@ -84,9 +98,9 @@ interface CustomerHistoryData {
     id: number;
     name: string;
     phone: string | null;
-    totalUdhar: number;
-    totalReceived: number;
-    outstanding: number;
+    totalUdhar: number | string;
+    totalReceived: number | string;
+    outstanding: number | string;
   };
   transactions: UdharTransactionDetail[];
   payments: PaymentRecordDetail[];
@@ -98,12 +112,19 @@ interface UdharFormLine {
   sellingPrice: string;
 }
 
+function generateIdempotencyKey(prefix: string): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return `${prefix}_${crypto.randomUUID()}`;
+  }
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+}
+
 export const KhataLedgerView: React.FC = () => {
   // Global state
   const [summary, setSummary] = useState<SummaryData>({
     totalCustomers: 0,
-    totalOutstanding: 0,
-    totalReceived: 0,
+    totalOutstanding: '0.00',
+    totalReceived: '0.00',
   });
   const [customers, setCustomers] = useState<CustomerListItem[]>([]);
   const [activeProducts, setActiveProducts] = useState<ProductReference[]>([]);
@@ -113,6 +134,7 @@ export const KhataLedgerView: React.FC = () => {
 
   // New Udhar Modal state
   const [isNewUdharOpen, setIsNewUdharOpen] = useState(false);
+  const [udharIdempotencyKey, setUdharIdempotencyKey] = useState<string>('');
   const [selectedExistingCustomerId, setSelectedExistingCustomerId] = useState<number | ''>('');
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
@@ -130,10 +152,11 @@ export const KhataLedgerView: React.FC = () => {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [expandedTxIds, setExpandedTxIds] = useState<Set<number>>(new Set());
 
-  // Record Payment Modal/State within Customer Detail
+  // Record Payment state
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentNote, setPaymentNote] = useState('');
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState<string>('');
   const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
 
   const showNotification = (type: 'success' | 'error', message: string) => {
@@ -146,13 +169,18 @@ export const KhataLedgerView: React.FC = () => {
     try {
       setIsLoading(true);
       const [sumRes, custRes, prodRes] = await Promise.all([
-        apiClient<{ success: boolean; summary: SummaryData }>('/api/v1/khata/summary'),
-        apiClient<{ success: boolean; customers: CustomerListItem[] }>('/api/v1/khata/customers'),
-        apiClient<{ success: boolean; data: ProductReference[] }>('/api/v1/products'),
+        apiClient<{ success: boolean; summary?: SummaryData; data?: SummaryData }>('/api/v1/khata/summary'),
+        apiClient<{ success: boolean; customers?: CustomerListItem[]; data?: CustomerListItem[] }>('/api/v1/khata/customers'),
+        apiClient<{ success: boolean; data?: ProductReference[] }>('/api/v1/products'),
       ]);
 
-      setSummary(sumRes.data.summary);
-      setCustomers(custRes.data.customers || []);
+      const sumData = sumRes.data.summary || sumRes.data.data || {
+        totalCustomers: 0,
+        totalOutstanding: '0.00',
+        totalReceived: '0.00',
+      };
+      setSummary(sumData);
+      setCustomers(custRes.data.customers || custRes.data.data || []);
       setActiveProducts(prodRes.data.data || []);
     } catch (err) {
       showNotification('error', (err as Error).message || 'Failed to load Khata data.');
@@ -165,14 +193,27 @@ export const KhataLedgerView: React.FC = () => {
     fetchOverviewData();
   }, []);
 
-  // Fetch individual customer history when detail modal is opened
+  // Fetch individual customer history
   const fetchCustomerHistory = async (customerId: number) => {
     try {
       setIsLoadingHistory(true);
-      const res = await apiClient<{ success: boolean; data: CustomerHistoryData }>(
-        `/api/v1/khata/customers/${customerId}/history`
-      );
-      setCustomerHistory(res.data.data);
+      const res = await apiClient<{
+        success: boolean;
+        data?: CustomerHistoryData;
+        customer?: CustomerHistoryData['customer'];
+        transactions?: UdharTransactionDetail[];
+        payments?: PaymentRecordDetail[];
+      }>(`/api/v1/khata/customers/${customerId}/history`);
+
+      if (res.data.data) {
+        setCustomerHistory(res.data.data);
+      } else if (res.data.customer) {
+        setCustomerHistory({
+          customer: res.data.customer,
+          transactions: res.data.transactions || [],
+          payments: res.data.payments || [],
+        });
+      }
     } catch (err) {
       showNotification('error', (err as Error).message || 'Failed to load customer history.');
     } finally {
@@ -185,31 +226,36 @@ export const KhataLedgerView: React.FC = () => {
     setPaymentAmount('');
     setPaymentNote('');
     setPaymentError(null);
+    setPaymentIdempotencyKey(generateIdempotencyKey('pay'));
     setExpandedTxIds(new Set());
     fetchCustomerHistory(customerId);
   };
 
-  // Live calculations for New Udhar Form
+  const handleOpenNewUdharModal = () => {
+    setIsNewUdharOpen(true);
+    setUdharFormError(null);
+    setUdharIdempotencyKey(generateIdempotencyKey('tx'));
+  };
+
+  // Precise Decimal arithmetic for line totals
   const lineCalculations = useMemo(() => {
     return udharLines.map((line) => {
-      const q = parseFloat(line.quantity);
-      const p = parseFloat(line.sellingPrice);
-      if (!isNaN(q) && q > 0 && !isNaN(p) && p >= 0) {
-        return Math.round(q * p * 100) / 100;
+      const q = safeDecimal(line.quantity);
+      const p = safeDecimal(line.sellingPrice);
+      if (q.greaterThan(0) && p.greaterThanOrEqualTo(0)) {
+        return q.times(p).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
       }
-      return 0;
+      return new Decimal(0);
     });
   }, [udharLines]);
 
   const calculatedTotalAmount = useMemo(() => {
-    const sum = lineCalculations.reduce((acc, curr) => acc + curr, 0);
-    return Math.round(sum * 100) / 100;
+    return lineCalculations.reduce((acc, curr) => acc.plus(curr), new Decimal(0));
   }, [lineCalculations]);
 
   const calculatedRemainingUdhar = useMemo(() => {
-    const initPay = parseFloat(initialPayment) || 0;
-    const diff = calculatedTotalAmount - initPay;
-    return Math.max(0, Math.round(diff * 100) / 100);
+    const initPay = safeDecimal(initialPayment);
+    return Decimal.max(0, calculatedTotalAmount.minus(initPay));
   }, [calculatedTotalAmount, initialPayment]);
 
   // Form row actions
@@ -264,20 +310,20 @@ export const KhataLedgerView: React.FC = () => {
         setUdharFormError(`Please select a product for line #${i + 1}.`);
         return;
       }
-      const qty = parseFloat(line.quantity);
-      if (isNaN(qty) || qty <= 0) {
+      const qtyDec = safeDecimal(line.quantity);
+      if (qtyDec.lessThanOrEqualTo(0)) {
         setUdharFormError(`Line #${i + 1} has an invalid quantity.`);
         return;
       }
-      const price = parseFloat(line.sellingPrice);
-      if (isNaN(price) || price < 0) {
+      const priceDec = safeDecimal(line.sellingPrice);
+      if (priceDec.lessThan(0)) {
         setUdharFormError(`Line #${i + 1} has an invalid selling price.`);
         return;
       }
       validatedItems.push({
         productId: Number(line.productId),
-        quantity: qty,
-        sellingPrice: price,
+        quantity: qtyDec.toNumber(),
+        sellingPrice: priceDec.toNumber(),
       });
     }
 
@@ -286,13 +332,13 @@ export const KhataLedgerView: React.FC = () => {
       return;
     }
 
-    const initPaymentVal = initialPayment ? parseFloat(initialPayment) : 0;
-    if (isNaN(initPaymentVal) || initPaymentVal < 0) {
+    const initPaymentDec = safeDecimal(initialPayment);
+    if (initPaymentDec.lessThan(0)) {
       setUdharFormError('Initial payment must be a non-negative number.');
       return;
     }
 
-    if (initPaymentVal > calculatedTotalAmount) {
+    if (initPaymentDec.greaterThan(calculatedTotalAmount)) {
       setUdharFormError('Initial payment cannot exceed the total transaction amount.');
       return;
     }
@@ -300,26 +346,29 @@ export const KhataLedgerView: React.FC = () => {
     setIsSubmittingUdhar(true);
 
     try {
-      const idempotencyKey = 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
-      const res = await apiClient<{ success: boolean; data: { transactionId: number; customerId: number } }>(
-        '/api/v1/khata/transactions',
-        {
-          method: 'POST',
-          headers: {
-            'Idempotency-Key': idempotencyKey,
-          },
-          body: JSON.stringify({
-            customer: customerPayload,
-            items: validatedItems,
-            initialPayment: initPaymentVal > 0 ? initPaymentVal : null,
-            note: transactionNote.trim() || null,
-            idempotencyKey,
-          }),
-        }
-      );
+      const activeKey = udharIdempotencyKey || generateIdempotencyKey('tx');
+      const res = await apiClient<{
+        success: boolean;
+        data?: { transactionId: number; customerId: number };
+        transactionId?: number;
+        customerId?: number;
+      }>('/api/v1/khata/transactions', {
+        method: 'POST',
+        headers: {
+          'Idempotency-Key': activeKey,
+        },
+        body: JSON.stringify({
+          customer: customerPayload,
+          items: validatedItems,
+          initialPayment: initPaymentDec.greaterThan(0) ? initPaymentDec.toNumber() : null,
+          note: transactionNote.trim() || null,
+          idempotencyKey: activeKey,
+        }),
+      });
 
+      // Clear pending operation state on confirmed success
       setIsNewUdharOpen(false);
-      // Reset form
+      setUdharIdempotencyKey('');
       setSelectedExistingCustomerId('');
       setNewCustomerName('');
       setNewCustomerPhone('');
@@ -327,14 +376,15 @@ export const KhataLedgerView: React.FC = () => {
       setInitialPayment('');
       setTransactionNote('');
 
-      showNotification('success', 'Udhar transaction created successfully.');
+      showNotification('success', 'Udhar transaction recorded successfully.');
       await fetchOverviewData();
 
-      // Open detail of the customer
-      if (res.data?.data?.customerId) {
-        handleOpenCustomerDetail(res.data.data.customerId);
+      const createdCustId = res.data?.data?.customerId || res.data?.customerId;
+      if (createdCustId) {
+        handleOpenCustomerDetail(createdCustId);
       }
     } catch (err) {
+      // Retain the idempotency key for retry!
       setUdharFormError((err as Error).message || 'Failed to create Udhar transaction.');
     } finally {
       setIsSubmittingUdhar(false);
@@ -346,15 +396,16 @@ export const KhataLedgerView: React.FC = () => {
     e.preventDefault();
     if (!activeCustomerDetailId || !customerHistory) return;
 
-    const amountNum = parseFloat(paymentAmount);
-    if (isNaN(amountNum) || amountNum <= 0) {
+    const payDec = safeDecimal(paymentAmount);
+    if (payDec.lessThanOrEqualTo(0)) {
       setPaymentError('Payment amount must be greater than zero.');
       return;
     }
 
-    if (amountNum > customerHistory.customer.outstanding) {
+    const outstandingDec = safeDecimal(customerHistory.customer.outstanding);
+    if (payDec.greaterThan(outstandingDec)) {
       setPaymentError(
-        `Payment amount (₹${amountNum.toFixed(2)}) exceeds customer total outstanding balance of ₹${customerHistory.customer.outstanding.toFixed(2)}.`
+        `Payment amount (${formatCurrency(payDec)}) exceeds customer total balance of ${formatCurrency(outstandingDec)}.`
       );
       return;
     }
@@ -363,25 +414,27 @@ export const KhataLedgerView: React.FC = () => {
     setIsSubmittingPayment(true);
 
     try {
-      const idempotencyKey = 'pay_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+      const activeKey = paymentIdempotencyKey || generateIdempotencyKey('pay');
       await apiClient(`/api/v1/khata/customers/${activeCustomerDetailId}/payments`, {
         method: 'POST',
         headers: {
-          'Idempotency-Key': idempotencyKey,
+          'Idempotency-Key': activeKey,
         },
         body: JSON.stringify({
-          amount: amountNum,
+          amount: payDec.toNumber(),
           note: paymentNote.trim() || null,
-          idempotencyKey,
+          idempotencyKey: activeKey,
         }),
       });
 
+      // Clear pending state on confirmed success
       setPaymentAmount('');
       setPaymentNote('');
-      showNotification('success', `Payment of ₹${amountNum.toFixed(2)} recorded and allocated.`);
-      // Refetch history and global summary
+      setPaymentIdempotencyKey(generateIdempotencyKey('pay'));
+      showNotification('success', `Payment of ${formatCurrency(payDec)} recorded and allocated.`);
       await Promise.all([fetchCustomerHistory(activeCustomerDetailId), fetchOverviewData()]);
     } catch (err) {
+      // Retain the idempotency key for safe retry!
       setPaymentError((err as Error).message || 'Failed to record payment.');
     } finally {
       setIsSubmittingPayment(false);
@@ -412,219 +465,248 @@ export const KhataLedgerView: React.FC = () => {
       {/* Notification banner */}
       {notification && (
         <div
-          className={`flex items-center justify-between p-4 rounded-xl text-sm font-semibold transition ${
+          role="status"
+          aria-live="polite"
+          className={`flex items-center justify-between p-4 rounded-xl text-xs sm:text-sm font-semibold border ${
             notification.type === 'success'
-              ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-              : 'bg-rose-50 text-rose-800 border border-rose-200'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-[var(--khata-success)]'
+              : 'bg-red-500/10 border-red-500/30 text-[var(--khata-danger)]'
           }`}
         >
           <div className="flex items-center gap-2">
             {notification.type === 'success' ? (
-              <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+              <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
             ) : (
-              <AlertCircle className="w-5 h-5 text-rose-600" />
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
             )}
             <span>{notification.message}</span>
           </div>
           <button
             onClick={() => setNotification(null)}
-            className="text-slate-400 hover:text-slate-600"
-            aria-label="Dismiss"
+            className="p-1 text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] transition"
+            aria-label="Dismiss notification"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* Overview KPI Cards */}
+      {/* Overview KPI Cards with Neumorphic Elevation */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {/* Total Outstanding */}
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+        <div className="neu-card p-5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+            <span className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
               Total Amount to Receive
             </span>
-            <div className="w-8 h-8 rounded-full bg-rose-50 flex items-center justify-center text-rose-600">
+            <div className="w-8 h-8 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-[var(--khata-danger)]">
               <ArrowUpRight className="w-4 h-4" />
             </div>
           </div>
-          <p className="mt-2 text-2xl font-black text-rose-600 font-mono">
-            ₹{summary.totalOutstanding.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          <p className="mt-2 text-2xl font-black text-[var(--khata-danger)] tabular-numbers">
+            {formatCurrency(summary.totalOutstanding)}
           </p>
-          <p className="text-xs text-slate-400 mt-1">Current uncollected Udhar balance</p>
+          <p className="text-xs text-[var(--khata-text-muted)] mt-1">Current uncollected Udhar balance</p>
         </div>
 
         {/* Total Received */}
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+        <div className="neu-card p-5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Payments Collected (All Time)
+            <span className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
+              Payments Collected
             </span>
-            <div className="w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center text-emerald-600">
+            <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-[var(--khata-success)]">
               <ArrowDownLeft className="w-4 h-4" />
             </div>
           </div>
-          <p className="mt-2 text-2xl font-black text-emerald-600 font-mono">
-            ₹{summary.totalReceived.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          <p className="mt-2 text-2xl font-black text-[var(--khata-success)] tabular-numbers">
+            {formatCurrency(summary.totalReceived)}
           </p>
-          <p className="text-xs text-slate-400 mt-1">Total credit successfully settled</p>
+          <p className="text-xs text-[var(--khata-text-muted)] mt-1">Total credit settled across all time</p>
         </div>
 
         {/* Total Customers */}
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+        <div className="neu-card p-5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+            <span className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
               Total Udhar Customers
             </span>
-            <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600">
+            <div className="w-8 h-8 rounded-xl bg-[var(--khata-accent)]/10 border border-[var(--khata-accent)]/20 flex items-center justify-center text-[var(--khata-accent)]">
               <Users className="w-4 h-4" />
             </div>
           </div>
-          <p className="mt-2 text-2xl font-black text-slate-900 font-mono">
+          <p className="mt-2 text-2xl font-black text-[var(--khata-text)] tabular-numbers">
             {summary.totalCustomers}
           </p>
-          <p className="text-xs text-slate-400 mt-1">Distinct customers in ledger</p>
+          <p className="text-xs text-[var(--khata-text-muted)] mt-1">Distinct customers recorded in ledger</p>
         </div>
       </div>
 
       {/* Action Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+      <div className="neu-card p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-            <CreditCard className="w-5 h-5 text-indigo-600" />
-            <span>Customer Khata</span>
+          <h2 className="text-lg sm:text-xl font-bold text-[var(--khata-text)] flex items-center gap-2">
+            <CreditCard className="w-5 h-5 text-[var(--khata-accent)]" />
+            <span>Customer Khata Ledger</span>
           </h2>
-          <p className="text-xs text-slate-500 mt-1">
-            Track multi-item credit transactions, custom selling prices, and deterministic payment settlements.
+          <p className="text-xs text-[var(--khata-text-muted)] mt-1">
+            Deterministic Udhar tracking, custom per-item selling prices, and FIFO payment allocations.
           </p>
         </div>
 
         <button
-          onClick={() => {
-            setIsNewUdharOpen(true);
-            setUdharFormError(null);
-          }}
-          className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-md transition"
+          onClick={handleOpenNewUdharModal}
+          className="neu-btn-primary text-xs sm:text-sm font-bold px-4 py-2.5 self-start sm:self-auto"
         >
           <Plus className="w-4 h-4" />
           <span>New Udhar</span>
         </button>
       </div>
 
-      {/* Customer Search Bar */}
+      {/* Customer Inset Search Bar */}
       <div className="relative">
-        <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+        <Search className="w-4 h-4 text-[var(--khata-text-muted)] absolute left-3.5 top-3.5" />
         <input
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search customer by name or phone..."
-          className="w-full pl-10 pr-4 py-2.5 text-sm rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-600 shadow-sm"
+          className="neu-input w-full pl-10 pr-4 py-3 text-sm font-medium"
         />
       </div>
 
-      {/* Customer List Table */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+      {/* Customer List Card */}
+      <div className="neu-card overflow-hidden">
         {isLoading ? (
-          <div className="p-8 text-center text-sm text-slate-400">Loading Khata ledger...</div>
+          <div className="p-8 text-center text-sm text-[var(--khata-text-muted)] font-medium">
+            Loading Khata ledger...
+          </div>
         ) : filteredCustomers.length === 0 ? (
-          <div className="p-8 text-center text-sm text-slate-400">
+          <div className="p-8 text-center text-sm text-[var(--khata-text-muted)]">
             {search
               ? 'No customers found matching search.'
               : 'No Udhar customers yet. Click "New Udhar" above to record customer credit.'}
           </div>
         ) : (
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                <th className="py-3 px-4">Customer</th>
-                <th className="py-3 px-4 text-right">Total Udhar</th>
-                <th className="py-3 px-4 text-right">Total Received</th>
-                <th className="py-3 px-4 text-right">Outstanding Balance</th>
-                <th className="py-3 px-4 text-center">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-sm">
-              {filteredCustomers.map((c) => {
-                const isSettled = c.outstanding <= 0;
-                return (
-                  <tr
-                    key={c.id}
-                    onClick={() => handleOpenCustomerDetail(c.id)}
-                    className="hover:bg-indigo-50/50 cursor-pointer transition"
-                  >
-                    <td className="py-3 px-4">
-                      <div className="font-semibold text-slate-900">{c.name}</div>
-                      {c.phone && <div className="text-xs text-slate-400 font-mono">{c.phone}</div>}
-                    </td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-700">
-                      ₹{c.totalUdhar.toFixed(2)}
-                    </td>
-                    <td className="py-3 px-4 text-right font-mono text-emerald-600">
-                      ₹{c.totalReceived.toFixed(2)}
-                    </td>
-                    <td
-                      className={`py-3 px-4 text-right font-mono font-bold ${
-                        isSettled ? 'text-slate-400' : 'text-rose-600'
-                      }`}
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
+                  <th className="py-3.5 px-4 sm:px-6">Customer</th>
+                  <th className="py-3.5 px-4 sm:px-6 text-right">Total Udhar</th>
+                  <th className="py-3.5 px-4 sm:px-6 text-right">Total Received</th>
+                  <th className="py-3.5 px-4 sm:px-6 text-right">Outstanding Due</th>
+                  <th className="py-3.5 px-4 sm:px-6 text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--khata-border)] text-sm">
+                {filteredCustomers.map((c) => {
+                  const outDec = safeDecimal(c.outstanding);
+                  const isSettled = outDec.lessThanOrEqualTo(0);
+                  return (
+                    <tr
+                      key={c.id}
+                      onClick={() => handleOpenCustomerDetail(c.id)}
+                      className="hover:bg-[var(--khata-surface-inset)]/70 cursor-pointer transition-colors"
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`View ledger for ${c.name}`}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          handleOpenCustomerDetail(c.id);
+                        }
+                      }}
                     >
-                      ₹{c.outstanding.toFixed(2)}
-                    </td>
-                    <td className="py-3 px-4 text-center">
-                      <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                          isSettled
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-rose-100 text-rose-800'
+                      <td className="py-3.5 px-4 sm:px-6">
+                        <div className="font-semibold text-[var(--khata-text)]">{c.name}</div>
+                        {c.phone && (
+                          <div className="text-xs text-[var(--khata-text-muted)] font-mono">{c.phone}</div>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4 sm:px-6 text-right tabular-numbers font-medium text-[var(--khata-text)]">
+                        {formatCurrency(c.totalUdhar)}
+                      </td>
+                      <td className="py-3.5 px-4 sm:px-6 text-right tabular-numbers font-medium text-[var(--khata-success)]">
+                        {formatCurrency(c.totalReceived)}
+                      </td>
+                      <td
+                        className={`py-3.5 px-4 sm:px-6 text-right tabular-numbers font-bold ${
+                          isSettled ? 'text-[var(--khata-text-muted)]' : 'text-[var(--khata-danger)]'
                         }`}
                       >
-                        {isSettled ? 'Settled' : 'Pending'}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                        {formatCurrency(c.outstanding)}
+                      </td>
+                      <td className="py-3.5 px-4 sm:px-6 text-center">
+                        <span
+                          className={`neu-badge ${
+                            isSettled ? 'neu-badge-success' : 'neu-badge-danger'
+                          }`}
+                        >
+                          {isSettled ? 'Settled' : 'Pending'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
-      {/* NEW UDHAR MODAL */}
+      {/* ==============================================================================
+          NEW UDHAR MODAL
+          ============================================================================== */}
       {isNewUdharOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-2xl w-full p-6 my-8 space-y-5">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="new-udhar-title"
+        >
+          <div
+            className="neu-card max-w-2xl w-full p-6 my-8 space-y-5"
+            style={{ backgroundColor: 'var(--khata-surface)' }}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-[var(--khata-border)]">
               <div>
-                <h3 className="text-lg font-bold text-slate-900">Record New Udhar Transaction</h3>
-                <p className="text-xs text-slate-500">
-                  Select an existing customer or enter a new customer name. Add one or more product lines with custom selling prices.
+                <h3 id="new-udhar-title" className="text-lg font-bold text-[var(--khata-text)]">
+                  Record New Udhar Transaction
+                </h3>
+                <p className="text-xs text-[var(--khata-text-muted)]">
+                  Select an existing customer or enter a new customer. Add product items with custom selling prices.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsNewUdharOpen(false)}
-                className="text-slate-400 hover:text-slate-600"
+                className="p-1 text-[var(--khata-text-muted)] hover:text-[var(--khata-text)]"
+                aria-label="Close"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {udharFormError && (
-              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl font-medium">
+              <div className="p-3 bg-red-500/10 border border-red-500/30 text-[var(--khata-danger)] text-xs rounded-xl font-medium">
                 {udharFormError}
               </div>
             )}
 
             <form onSubmit={handleSubmitNewUdhar} className="space-y-5">
               {/* Customer Selector / Creator */}
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
-                <span className="text-xs font-bold text-slate-600 uppercase tracking-wider block">
-                  Customer Information
+              <div
+                className="p-4 rounded-xl border border-[var(--khata-border)] space-y-3"
+                style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+              >
+                <span className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider block">
+                  Customer Identification
                 </span>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    <label className="block text-xs font-semibold text-[var(--khata-text)] mb-1">
                       Existing Customer
                     </label>
                     <select
@@ -637,12 +719,12 @@ export const KhataLedgerView: React.FC = () => {
                           setNewCustomerPhone('');
                         }
                       }}
-                      className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                      className="neu-input w-full text-sm font-medium"
                     >
                       <option value="">-- Or enter new customer below --</option>
                       {customers.map((c) => (
                         <option key={c.id} value={c.id}>
-                          {c.name} {c.phone ? `(${c.phone})` : ''} — Bal: ₹{c.outstanding.toFixed(2)}
+                          {c.name} {c.phone ? `(${c.phone})` : ''} — Due: {formatCurrency(c.outstanding)}
                         </option>
                       ))}
                     </select>
@@ -651,7 +733,7 @@ export const KhataLedgerView: React.FC = () => {
                   {!selectedExistingCustomerId && (
                     <>
                       <div>
-                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        <label className="block text-xs font-semibold text-[var(--khata-text)] mb-1">
                           New Customer Name <span className="text-rose-500">*</span>
                         </label>
                         <input
@@ -660,11 +742,11 @@ export const KhataLedgerView: React.FC = () => {
                           value={newCustomerName}
                           onChange={(e) => setNewCustomerName(e.target.value)}
                           placeholder="e.g. Ramesh Kumar"
-                          className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                          className="neu-input w-full text-sm font-medium"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        <label className="block text-xs font-semibold text-[var(--khata-text)] mb-1">
                           Mobile Number (Optional)
                         </label>
                         <input
@@ -672,7 +754,7 @@ export const KhataLedgerView: React.FC = () => {
                           value={newCustomerPhone}
                           onChange={(e) => setNewCustomerPhone(e.target.value)}
                           placeholder="e.g. 9876543210"
-                          className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                          className="neu-input w-full text-sm font-medium"
                         />
                       </div>
                     </>
@@ -683,28 +765,29 @@ export const KhataLedgerView: React.FC = () => {
               {/* Multi-line Products */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
-                    Product Items
+                  <span className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
+                    Purchased Item Lines
                   </span>
                   <button
                     type="button"
                     onClick={handleAddLine}
-                    className="inline-flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg transition"
+                    className="neu-btn-secondary text-xs px-3 py-1 flex items-center gap-1"
                   >
-                    <Plus className="w-3.5 h-3.5" />
+                    <Plus className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
                     <span>Add Item</span>
                   </button>
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-2.5">
                   {udharLines.map((line, idx) => (
                     <div
                       key={idx}
-                      className="grid grid-cols-12 gap-2 items-center bg-slate-50/70 p-3 rounded-xl border border-slate-200"
+                      className="grid grid-cols-12 gap-2.5 items-center p-3 rounded-xl border border-[var(--khata-border)]"
+                      style={{ backgroundColor: 'var(--khata-surface-raised)' }}
                     >
                       {/* Product Selector */}
                       <div className="col-span-12 sm:col-span-5">
-                        <label className="block text-[11px] font-semibold text-slate-500 mb-0.5">
+                        <label className="block text-[11px] font-semibold text-[var(--khata-text-muted)] mb-0.5">
                           Product #{idx + 1}
                         </label>
                         <select
@@ -717,12 +800,12 @@ export const KhataLedgerView: React.FC = () => {
                               e.target.value ? Number(e.target.value) : ''
                             )
                           }
-                          className="w-full px-2.5 py-1.5 text-sm rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                          className="neu-input w-full text-sm font-medium"
                         >
-                          <option value="">Select Product...</option>
+                          <option value="">Select Reference Product...</option>
                           {activeProducts.map((p) => (
                             <option key={p.id} value={p.id}>
-                              {p.name} (Ref: ₹{parseFloat(p.buying_price).toFixed(2)})
+                              {p.name} (Ref: {formatCurrency(p.buying_price)})
                             </option>
                           ))}
                         </select>
@@ -730,49 +813,48 @@ export const KhataLedgerView: React.FC = () => {
 
                       {/* Quantity */}
                       <div className="col-span-5 sm:col-span-2">
-                        <label className="block text-[11px] font-semibold text-slate-500 mb-0.5">
+                        <label className="block text-[11px] font-semibold text-[var(--khata-text-muted)] mb-0.5">
                           Quantity
                         </label>
                         <input
-                          type="number"
-                          step="any"
-                          min="0.01"
+                          type="text"
+                          inputMode="decimal"
                           required
                           value={line.quantity}
                           onChange={(e) => handleLineChange(idx, 'quantity', e.target.value)}
                           placeholder="Qty"
-                          className="w-full px-2.5 py-1.5 text-sm rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                          className="neu-input w-full text-sm font-medium tabular-numbers"
                         />
                       </div>
 
-                      {/* Selling Price */}
+                      {/* Custom Selling Price */}
                       <div className="col-span-5 sm:col-span-3">
-                        <label className="block text-[11px] font-semibold text-slate-500 mb-0.5">
-                          Selling Price (₹)
+                        <label className="block text-[11px] font-semibold text-[var(--khata-text-muted)] mb-0.5">
+                          Custom Selling ₹
                         </label>
                         <input
-                          type="number"
-                          step="0.01"
-                          min="0"
+                          type="text"
+                          inputMode="decimal"
                           required
                           value={line.sellingPrice}
                           onChange={(e) => handleLineChange(idx, 'sellingPrice', e.target.value)}
                           placeholder="Selling ₹"
-                          className="w-full px-2.5 py-1.5 text-sm rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                          className="neu-input w-full text-sm font-medium tabular-numbers"
                         />
                       </div>
 
                       {/* Line Total & Remove */}
                       <div className="col-span-2 sm:col-span-2 flex items-center justify-end gap-2 pt-4">
-                        <span className="text-xs font-mono font-bold text-slate-800">
-                          ₹{lineCalculations[idx].toFixed(2)}
+                        <span className="text-xs font-bold text-[var(--khata-text)] tabular-numbers">
+                          {formatCurrency(lineCalculations[idx])}
                         </span>
                         {udharLines.length > 1 && (
                           <button
                             type="button"
                             onClick={() => handleRemoveLine(idx)}
-                            className="text-slate-400 hover:text-rose-600 transition"
+                            className="p-1 text-[var(--khata-text-muted)] hover:text-[var(--khata-danger)] transition"
                             title="Remove line"
+                            aria-label={`Remove line ${idx + 1}`}
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -784,59 +866,69 @@ export const KhataLedgerView: React.FC = () => {
               </div>
 
               {/* Initial Payment & Note */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+              <div
+                className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-xl border border-[var(--khata-border)]"
+                style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+              >
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label className="block text-xs font-semibold text-[var(--khata-text)] mb-1">
                     Initial Payment Received (₹) (Optional)
                   </label>
                   <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    max={calculatedTotalAmount}
+                    type="text"
+                    inputMode="decimal"
                     value={initialPayment}
                     onChange={(e) => setInitialPayment(e.target.value)}
                     placeholder="0.00"
-                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                    className="neu-input w-full text-sm font-medium tabular-numbers"
                   />
-                  <span className="text-[11px] text-slate-400 mt-0.5 block">
+                  <span className="text-[11px] text-[var(--khata-text-muted)] mt-1 block">
                     Cash received at purchase time
                   </span>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label className="block text-xs font-semibold text-[var(--khata-text)] mb-1">
                     Transaction Note (Optional)
                   </label>
                   <input
                     type="text"
                     value={transactionNote}
                     onChange={(e) => setTransactionNote(e.target.value)}
-                    placeholder="e.g. Bathroom fitting items"
-                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                    placeholder="e.g. Construction hardware items"
+                    className="neu-input w-full text-sm font-medium"
                   />
                 </div>
               </div>
 
               {/* Live Preview Summary Box */}
-              <div className="bg-indigo-50/70 p-4 rounded-xl border border-indigo-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-sm">
+              <div
+                className="p-4 rounded-xl border border-[var(--khata-border)] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-sm"
+                style={{ backgroundColor: 'var(--khata-surface-inset)' }}
+              >
                 <div>
-                  <span className="text-xs text-indigo-950 font-bold block">Live Calculation Preview</span>
-                  <span className="text-xs text-indigo-700">
-                    Calculated by client preview; backend computes authoritative final totals.
+                  <span className="text-xs font-bold text-[var(--khata-text)] block">
+                    Live Calculation Preview
+                  </span>
+                  <span className="text-xs text-[var(--khata-text-muted)]">
+                    Accurate Decimal arithmetic matching backend validation.
                   </span>
                 </div>
                 <div className="flex items-center gap-6 text-right">
                   <div>
-                    <span className="text-[11px] text-slate-500 uppercase block font-semibold">Total</span>
-                    <span className="font-mono font-bold text-slate-900 text-base">
-                      ₹{calculatedTotalAmount.toFixed(2)}
+                    <span className="text-[11px] text-[var(--khata-text-muted)] uppercase block font-semibold">
+                      Total
+                    </span>
+                    <span className="font-bold text-[var(--khata-text)] text-base tabular-numbers">
+                      {formatCurrency(calculatedTotalAmount)}
                     </span>
                   </div>
                   <div>
-                    <span className="text-[11px] text-rose-600 uppercase block font-bold">New Udhar Due</span>
-                    <span className="font-mono font-black text-rose-600 text-lg">
-                      ₹{calculatedRemainingUdhar.toFixed(2)}
+                    <span className="text-[11px] text-[var(--khata-danger)] uppercase block font-bold">
+                      New Udhar Due
+                    </span>
+                    <span className="font-black text-[var(--khata-danger)] text-lg tabular-numbers">
+                      {formatCurrency(calculatedRemainingUdhar)}
                     </span>
                   </div>
                 </div>
@@ -847,14 +939,14 @@ export const KhataLedgerView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsNewUdharOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                  className="neu-btn-secondary text-xs px-4 py-2"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingUdhar || calculatedTotalAmount <= 0}
-                  className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow transition"
+                  disabled={isSubmittingUdhar || calculatedTotalAmount.lessThanOrEqualTo(0)}
+                  className="neu-btn-primary text-xs px-5 py-2.5 font-bold"
                 >
                   {isSubmittingUdhar ? 'Recording Udhar...' : 'Save Udhar Transaction'}
                 </button>
@@ -864,33 +956,47 @@ export const KhataLedgerView: React.FC = () => {
         </div>
       )}
 
-      {/* CUSTOMER DETAIL & HISTORY MODAL */}
+      {/* ==============================================================================
+          CUSTOMER DETAIL & HISTORY MODAL
+          ============================================================================== */}
       {activeCustomerDetailId && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-3xl w-full p-6 my-8 space-y-6">
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="customer-detail-title"
+        >
+          <div
+            className="neu-card max-w-3xl w-full p-6 my-8 space-y-6"
+            style={{ backgroundColor: 'var(--khata-surface)' }}
+          >
             {isLoadingHistory || !customerHistory ? (
-              <div className="p-12 text-center text-sm text-slate-400">Loading customer ledger...</div>
+              <div className="p-12 text-center text-sm text-[var(--khata-text-muted)] font-medium">
+                Loading customer ledger...
+              </div>
             ) : (
               <>
                 {/* Customer Header */}
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-200">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-[var(--khata-border)]">
                   <div>
                     <div className="flex items-center gap-2">
-                      <h3 className="text-xl font-bold text-slate-900">
+                      <h3 id="customer-detail-title" className="text-xl font-bold text-[var(--khata-text)]">
                         {customerHistory.customer.name}
                       </h3>
                       <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                          customerHistory.customer.outstanding <= 0
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-rose-100 text-rose-800'
+                        className={`neu-badge ${
+                          safeDecimal(customerHistory.customer.outstanding).lessThanOrEqualTo(0)
+                            ? 'neu-badge-success'
+                            : 'neu-badge-danger'
                         }`}
                       >
-                        {customerHistory.customer.outstanding <= 0 ? 'Settled' : 'Outstanding'}
+                        {safeDecimal(customerHistory.customer.outstanding).lessThanOrEqualTo(0)
+                          ? 'Settled'
+                          : 'Outstanding'}
                       </span>
                     </div>
                     {customerHistory.customer.phone && (
-                      <p className="text-xs text-slate-500 font-mono mt-0.5">
+                      <p className="text-xs text-[var(--khata-text-muted)] font-mono mt-0.5">
                         {customerHistory.customer.phone}
                       </p>
                     )}
@@ -898,21 +1004,27 @@ export const KhataLedgerView: React.FC = () => {
 
                   <div className="flex items-center gap-4 text-right">
                     <div>
-                      <span className="text-[11px] text-slate-400 uppercase font-semibold block">Total Udhar</span>
-                      <span className="font-mono font-bold text-slate-800">
-                        ₹{customerHistory.customer.totalUdhar.toFixed(2)}
+                      <span className="text-[11px] text-[var(--khata-text-muted)] uppercase font-semibold block">
+                        Total Udhar
+                      </span>
+                      <span className="font-bold text-[var(--khata-text)] tabular-numbers">
+                        {formatCurrency(customerHistory.customer.totalUdhar)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-[11px] text-slate-400 uppercase font-semibold block">Total Received</span>
-                      <span className="font-mono font-bold text-emerald-600">
-                        ₹{customerHistory.customer.totalReceived.toFixed(2)}
+                      <span className="text-[11px] text-[var(--khata-text-muted)] uppercase font-semibold block">
+                        Total Received
+                      </span>
+                      <span className="font-bold text-[var(--khata-success)] tabular-numbers">
+                        {formatCurrency(customerHistory.customer.totalReceived)}
                       </span>
                     </div>
-                    <div className="bg-rose-50 px-3 py-1.5 rounded-xl border border-rose-100">
-                      <span className="text-[11px] text-rose-600 uppercase font-bold block">Balance Due</span>
-                      <span className="font-mono font-black text-rose-600 text-base">
-                        ₹{customerHistory.customer.outstanding.toFixed(2)}
+                    <div className="p-2 px-3 rounded-xl border border-[var(--khata-border)]" style={{ backgroundColor: 'var(--khata-surface-raised)' }}>
+                      <span className="text-[11px] text-[var(--khata-danger)] uppercase font-bold block">
+                        Balance Due
+                      </span>
+                      <span className="font-black text-[var(--khata-danger)] text-base tabular-numbers">
+                        {formatCurrency(customerHistory.customer.outstanding)}
                       </span>
                     </div>
                   </div>
@@ -920,45 +1032,47 @@ export const KhataLedgerView: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setActiveCustomerDetailId(null)}
-                    className="text-slate-400 hover:text-slate-600"
+                    className="p-1 text-[var(--khata-text-muted)] hover:text-[var(--khata-text)]"
+                    aria-label="Close"
                   >
                     <X className="w-5 h-5" />
                   </button>
                 </div>
 
                 {/* Record Payment Section */}
-                <div className="bg-emerald-50/60 border border-emerald-200/70 p-4 rounded-xl space-y-3">
-                  <div className="flex items-center gap-2 text-emerald-900 font-bold text-sm">
-                    <DollarSign className="w-4 h-4 text-emerald-600" />
+                <div
+                  className="p-4 rounded-xl border border-[var(--khata-border)] space-y-3"
+                  style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+                >
+                  <div className="flex items-center gap-2 text-[var(--khata-text)] font-bold text-sm">
+                    <DollarSign className="w-4 h-4 text-[var(--khata-success)]" />
                     <span>Record Payment Received</span>
                   </div>
 
                   {paymentError && (
-                    <div className="p-2.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg font-medium">
+                    <div className="p-2.5 bg-red-500/10 border border-red-500/30 text-[var(--khata-danger)] text-xs rounded-lg font-medium">
                       {paymentError}
                     </div>
                   )}
 
                   <form onSubmit={handleSubmitPayment} className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      <label className="block text-xs font-semibold text-[var(--khata-text-muted)] mb-1">
                         Payment Amount (₹) <span className="text-rose-500">*</span>
                       </label>
                       <input
-                        type="number"
-                        step="0.01"
-                        min="0.01"
-                        max={customerHistory.customer.outstanding}
+                        type="text"
+                        inputMode="decimal"
                         required
                         value={paymentAmount}
                         onChange={(e) => setPaymentAmount(e.target.value)}
-                        placeholder={`Max ₹${customerHistory.customer.outstanding.toFixed(2)}`}
-                        className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                        placeholder={`Max ${formatCurrency(customerHistory.customer.outstanding)}`}
+                        className="neu-input w-full text-sm font-medium tabular-numbers"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      <label className="block text-xs font-semibold text-[var(--khata-text-muted)] mb-1">
                         Note / Mode (Optional)
                       </label>
                       <input
@@ -966,7 +1080,7 @@ export const KhataLedgerView: React.FC = () => {
                         value={paymentNote}
                         onChange={(e) => setPaymentNote(e.target.value)}
                         placeholder="e.g. Cash / UPI"
-                        className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                        className="neu-input w-full text-sm font-medium"
                       />
                     </div>
 
@@ -975,10 +1089,10 @@ export const KhataLedgerView: React.FC = () => {
                         type="submit"
                         disabled={
                           isSubmittingPayment ||
-                          customerHistory.customer.outstanding <= 0 ||
+                          safeDecimal(customerHistory.customer.outstanding).lessThanOrEqualTo(0) ||
                           !paymentAmount
                         }
-                        className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold py-2.5 rounded-xl shadow transition"
+                        className="neu-btn-primary w-full text-xs font-bold py-2.5"
                       >
                         {isSubmittingPayment ? 'Recording...' : 'Record Payment'}
                       </button>
@@ -986,43 +1100,57 @@ export const KhataLedgerView: React.FC = () => {
                   </form>
                 </div>
 
-                {/* Section: Historical Udhar Transactions */}
+                {/* Historical Udhar Transactions */}
                 <div className="space-y-3">
-                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                    <FileText className="w-4 h-4 text-indigo-600" />
+                  <h4 className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
+                    <FileText className="w-4 h-4 text-[var(--khata-accent)]" />
                     <span>Historical Udhar Transactions</span>
                   </h4>
 
                   {customerHistory.transactions.length === 0 ? (
-                    <p className="text-xs text-slate-400 p-4 bg-slate-50 rounded-xl text-center">
+                    <p className="text-xs text-[var(--khata-text-muted)] p-4 rounded-xl text-center border border-[var(--khata-border)]">
                       No Udhar transactions recorded.
                     </p>
                   ) : (
-                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                       {customerHistory.transactions.map((tx) => {
                         const isExpanded = expandedTxIds.has(tx.id);
-                        const isSettled = tx.is_fully_settled;
+                        const isSettled = tx.isSettled ?? tx.is_fully_settled ?? false;
+                        const txDate = tx.transactionDate || tx.transaction_date;
+                        const txTotal = tx.totalAmount || tx.total_amount;
+                        const txRemaining = tx.outstanding || tx.remaining_amount;
+
                         return (
                           <div
                             key={tx.id}
-                            className="border border-slate-200 rounded-xl overflow-hidden bg-white"
+                            className="border border-[var(--khata-border)] rounded-xl overflow-hidden"
+                            style={{ backgroundColor: 'var(--khata-surface-raised)' }}
                           >
                             <div
                               onClick={() => toggleExpandTx(tx.id)}
-                              className="flex items-center justify-between p-3.5 hover:bg-slate-50 cursor-pointer transition"
+                              className="flex items-center justify-between p-3.5 hover:bg-[var(--khata-surface-inset)] cursor-pointer transition-colors"
+                              tabIndex={0}
+                              role="button"
+                              aria-expanded={isExpanded}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  toggleExpandTx(tx.id);
+                                }
+                              }}
                             >
                               <div className="flex items-center gap-3">
                                 {isExpanded ? (
-                                  <ChevronUp className="w-4 h-4 text-slate-400" />
+                                  <ChevronUp className="w-4 h-4 text-[var(--khata-text-muted)]" />
                                 ) : (
-                                  <ChevronDown className="w-4 h-4 text-slate-400" />
+                                  <ChevronDown className="w-4 h-4 text-[var(--khata-text-muted)]" />
                                 )}
                                 <div>
-                                  <div className="text-xs font-bold text-slate-800">
-                                    Tx #{tx.id} • {tx.transaction_date}
+                                  <div className="text-xs font-bold text-[var(--khata-text)]">
+                                    Tx #{tx.id} • {txDate}
                                   </div>
                                   {tx.note && (
-                                    <div className="text-[11px] text-slate-400 italic">
+                                    <div className="text-[11px] text-[var(--khata-text-muted)] italic">
                                       {tx.note}
                                     </div>
                                   )}
@@ -1031,26 +1159,28 @@ export const KhataLedgerView: React.FC = () => {
 
                               <div className="flex items-center gap-4 text-right">
                                 <div>
-                                  <span className="text-[10px] text-slate-400 uppercase font-semibold block">Total</span>
-                                  <span className="text-xs font-mono font-bold text-slate-800">
-                                    ₹{parseFloat(tx.total_amount).toFixed(2)}
+                                  <span className="text-[10px] text-[var(--khata-text-muted)] uppercase font-semibold block">
+                                    Total
+                                  </span>
+                                  <span className="text-xs font-bold text-[var(--khata-text)] tabular-numbers">
+                                    {formatCurrency(txTotal)}
                                   </span>
                                 </div>
                                 <div>
-                                  <span className="text-[10px] text-slate-400 uppercase font-semibold block">Remaining</span>
+                                  <span className="text-[10px] text-[var(--khata-text-muted)] uppercase font-semibold block">
+                                    Remaining
+                                  </span>
                                   <span
-                                    className={`text-xs font-mono font-bold ${
-                                      isSettled ? 'text-emerald-600' : 'text-rose-600'
+                                    className={`text-xs tabular-numbers font-bold ${
+                                      isSettled ? 'text-[var(--khata-success)]' : 'text-[var(--khata-danger)]'
                                     }`}
                                   >
-                                    ₹{parseFloat(tx.remaining_amount).toFixed(2)}
+                                    {formatCurrency(txRemaining)}
                                   </span>
                                 </div>
                                 <span
-                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                    isSettled
-                                      ? 'bg-emerald-100 text-emerald-800'
-                                      : 'bg-rose-100 text-rose-800'
+                                  className={`neu-badge ${
+                                    isSettled ? 'neu-badge-success' : 'neu-badge-danger'
                                   }`}
                                 >
                                   {isSettled ? 'Settled' : 'Pending'}
@@ -1060,33 +1190,36 @@ export const KhataLedgerView: React.FC = () => {
 
                             {/* Expanded Item Lines */}
                             {isExpanded && (
-                              <div className="bg-slate-50 p-3 border-t border-slate-200 space-y-2">
-                                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                              <div
+                                className="p-3 border-t border-[var(--khata-border)] space-y-2"
+                                style={{ backgroundColor: 'var(--khata-surface-inset)' }}
+                              >
+                                <span className="text-[11px] font-bold text-[var(--khata-text-muted)] uppercase tracking-wider block">
                                   Purchased Items Snapshot
                                 </span>
                                 <table className="w-full text-xs text-left border-collapse">
                                   <thead>
-                                    <tr className="text-slate-400 border-b border-slate-200">
+                                    <tr className="text-[var(--khata-text-muted)] border-b border-[var(--khata-border)]">
                                       <th className="py-1">Product</th>
                                       <th className="py-1 text-right">Qty</th>
                                       <th className="py-1 text-right">Selling Price</th>
                                       <th className="py-1 text-right">Line Total</th>
                                     </tr>
                                   </thead>
-                                  <tbody className="divide-y divide-slate-100">
+                                  <tbody className="divide-y divide-[var(--khata-border)]">
                                     {tx.items.map((item) => (
                                       <tr key={item.id}>
-                                        <td className="py-1 font-medium text-slate-800">
+                                        <td className="py-1 font-medium text-[var(--khata-text)]">
                                           {item.product_name_snapshot}
                                         </td>
-                                        <td className="py-1 text-right font-mono text-slate-600">
-                                          {item.quantity}
+                                        <td className="py-1 text-right tabular-numbers text-[var(--khata-text-muted)]">
+                                          {formatQuantity(item.quantity)}
                                         </td>
-                                        <td className="py-1 text-right font-mono text-slate-600">
-                                          ₹{parseFloat(item.selling_price).toFixed(2)}
+                                        <td className="py-1 text-right tabular-numbers text-[var(--khata-text-muted)]">
+                                          {formatCurrency(item.selling_price)}
                                         </td>
-                                        <td className="py-1 text-right font-mono font-bold text-slate-900">
-                                          ₹{parseFloat(item.line_total).toFixed(2)}
+                                        <td className="py-1 text-right tabular-numbers font-bold text-[var(--khata-text)]">
+                                          {formatCurrency(item.line_total)}
                                         </td>
                                       </tr>
                                     ))}
@@ -1101,66 +1234,74 @@ export const KhataLedgerView: React.FC = () => {
                   )}
                 </div>
 
-                {/* Section: Payment History & FIFO Allocations */}
+                {/* Payment History & FIFO Allocations */}
                 <div className="space-y-3">
-                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                    <Clock className="w-4 h-4 text-emerald-600" />
+                  <h4 className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 text-[var(--khata-success)]" />
                     <span>Payment History & FIFO Allocations</span>
                   </h4>
 
                   {customerHistory.payments.length === 0 ? (
-                    <p className="text-xs text-slate-400 p-4 bg-slate-50 rounded-xl text-center">
+                    <p className="text-xs text-[var(--khata-text-muted)] p-4 rounded-xl text-center border border-[var(--khata-border)]">
                       No payments recorded yet.
                     </p>
                   ) : (
-                    <div className="space-y-2 max-h-56 overflow-y-auto">
-                      {customerHistory.payments.map((p) => (
-                        <div
-                          key={p.id}
-                          className="bg-slate-50 border border-slate-200 p-3 rounded-xl space-y-1.5"
-                        >
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <span className="text-xs font-bold text-slate-900">
-                                Payment #{p.id} • {p.payment_date}
+                    <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                      {customerHistory.payments.map((p) => {
+                        const payDate = p.receivedAt || p.received_at || p.payment_date;
+                        return (
+                          <div
+                            key={p.id}
+                            className="p-3 rounded-xl border border-[var(--khata-border)] space-y-1.5"
+                            style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <span className="text-xs font-bold text-[var(--khata-text)]">
+                                  Payment #{p.id} • {payDate}
+                                </span>
+                                {p.note && (
+                                  <span className="text-xs text-[var(--khata-text-muted)] ml-2 italic">
+                                    ({p.note})
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-xs font-bold text-[var(--khata-success)] tabular-numbers">
+                                + {formatCurrency(p.amount)}
                               </span>
-                              {p.note && (
-                                <span className="text-xs text-slate-500 ml-2 italic">({p.note})</span>
-                              )}
                             </div>
-                            <span className="text-xs font-mono font-bold text-emerald-600">
-                              + ₹{parseFloat(p.amount).toFixed(2)}
-                            </span>
-                          </div>
 
-                          {/* Allocation details */}
-                          {p.allocations && p.allocations.length > 0 && (
-                            <div className="pt-1 border-t border-slate-200/70 text-[11px] text-slate-500 space-y-0.5">
-                              <span className="font-semibold text-slate-600 block">FIFO Allocation:</span>
-                              {p.allocations.map((alloc) => (
-                                <div key={alloc.id} className="flex justify-between pl-2">
-                                  <span>
-                                    Allocated to Tx #{alloc.udhar_transaction_id} ({alloc.transaction_date})
-                                  </span>
-                                  <span className="font-mono text-emerald-700 font-semibold">
-                                    ₹{parseFloat(alloc.allocated_amount).toFixed(2)}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                            {/* Allocation details */}
+                            {p.allocations && p.allocations.length > 0 && (
+                              <div className="pt-1 border-t border-[var(--khata-border)] text-[11px] text-[var(--khata-text-muted)] space-y-0.5">
+                                <span className="font-semibold block">FIFO Allocations:</span>
+                                {p.allocations.map((alloc, aIdx) => {
+                                  const allocTxId = alloc.transactionId || alloc.udhar_transaction_id;
+                                  const allocAmt = alloc.amount || alloc.allocated_amount;
+                                  return (
+                                    <div key={alloc.id || aIdx} className="flex justify-between pl-2">
+                                      <span>Allocated to Tx #{allocTxId}</span>
+                                      <span className="tabular-numbers text-[var(--khata-success)] font-semibold">
+                                        {formatCurrency(allocAmt)}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
 
-                {/* Footer */}
+                {/* Modal Footer */}
                 <div className="flex justify-end pt-2">
                   <button
                     type="button"
                     onClick={() => setActiveCustomerDetailId(null)}
-                    className="px-5 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition"
+                    className="neu-btn-secondary text-xs px-5 py-2 font-bold"
                   >
                     Close
                   </button>

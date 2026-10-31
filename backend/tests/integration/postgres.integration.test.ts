@@ -3,6 +3,7 @@ import pg from 'pg';
 import fs from 'fs';
 import path from 'path';
 import Decimal from 'decimal.js';
+import { assertSafeTestDatabaseUrl } from '../../src/config/testDbGuard.js';
 
 const { Pool } = pg;
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
@@ -14,6 +15,9 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
   let pool: pg.Pool;
 
   beforeAll(async () => {
+    // Enforce destructive test database safeguard
+    assertSafeTestDatabaseUrl(testDbUrl!);
+
     pool = new Pool({
       connectionString: testDbUrl,
       ssl: false,

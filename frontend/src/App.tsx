@@ -4,31 +4,52 @@ import { ProtectedRoute } from './components/ProtectedRoute.js';
 import { Navbar } from './components/Navbar.js';
 import { KhataLedgerView } from './features/khata/KhataLedgerView.js';
 import { ProductsView } from './features/products/ProductsView.js';
+import { ThemeAccessibilityProvider } from './context/ThemeAccessibilityContext.js';
+import { AppearanceAccessibilityModal } from './components/AppearanceAccessibilityModal.js';
 
 export function KhataDashboard() {
   const [currentTab, setCurrentTab] = useState<'khata' | 'products'>('khata');
+  const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      <Navbar currentTab={currentTab} onTabChange={setCurrentTab} />
+    <div
+      className="min-h-screen flex flex-col"
+      style={{ backgroundColor: 'var(--khata-bg)', color: 'var(--khata-text)' }}
+    >
+      <Navbar
+        currentTab={currentTab}
+        onTabChange={setCurrentTab}
+        onOpenAppearance={() => setIsAppearanceOpen(true)}
+      />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {currentTab === 'khata' ? <KhataLedgerView /> : <ProductsView />}
       </main>
 
-      <footer className="py-4 border-t border-slate-200 bg-white text-center text-xs text-slate-400">
-        Khata • Protected Single-Shopkeeper System • Algions Technologies
+      <footer
+        className="py-4 border-t border-[var(--khata-border)] text-center text-xs text-[var(--khata-text-muted)]"
+        style={{ backgroundColor: 'var(--khata-surface)' }}
+      >
+        Khata • Single-Shopkeeper Ledger Book • Algions
       </footer>
+
+      {/* Persistent Appearance & Accessibility Modal */}
+      <AppearanceAccessibilityModal
+        isOpen={isAppearanceOpen}
+        onClose={() => setIsAppearanceOpen(false)}
+      />
     </div>
   );
 }
 
 export default function App() {
   return (
-    <AuthProvider>
-      <ProtectedRoute>
-        <KhataDashboard />
-      </ProtectedRoute>
-    </AuthProvider>
+    <ThemeAccessibilityProvider>
+      <AuthProvider>
+        <ProtectedRoute>
+          <KhataDashboard />
+        </ProtectedRoute>
+      </AuthProvider>
+    </ThemeAccessibilityProvider>
   );
 }

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from './AuthProvider.js';
-import { Lock, Phone, Eye, EyeOff, Store, AlertCircle, Clock } from 'lucide-react';
+import { Lock, Phone, Eye, EyeOff, Store, AlertCircle, Clock, Palette } from 'lucide-react';
+import { AppearanceAccessibilityModal } from '../../components/AppearanceAccessibilityModal.js';
 
 export const LoginPage: React.FC = () => {
   const { login } = useAuth();
@@ -11,6 +12,7 @@ export const LoginPage: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLocked, setIsLocked] = useState(false);
   const [lockoutRemainingSec, setLockoutRemainingSec] = useState<number>(0);
+  const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,14 +37,18 @@ export const LoginPage: React.FC = () => {
 
     try {
       await login(phone, password);
-      // On success, AuthProvider state updates and parent renders protected dashboard
     } catch (err: unknown) {
-      const errorObj = err as { payload?: { isLocked?: boolean; remainingMs?: number; message?: string }; message?: string };
+      const errorObj = err as {
+        payload?: { isLocked?: boolean; remainingMs?: number; message?: string };
+        message?: string;
+      };
       if (errorObj?.payload?.isLocked) {
         setIsLocked(true);
         const remainingSec = Math.ceil((errorObj.payload.remainingMs || 900000) / 1000);
         setLockoutRemainingSec(remainingSec);
-        setErrorMessage(errorObj.payload.message || 'Account temporarily locked due to failed attempts.');
+        setErrorMessage(
+          errorObj.payload.message || 'Account temporarily locked due to repeated failed attempts.'
+        );
 
         // Start countdown timer
         const timer = setInterval(() => {
@@ -57,9 +63,10 @@ export const LoginPage: React.FC = () => {
           });
         }, 1000);
       } else {
-        setErrorMessage(errorObj.payload?.message || errorObj.message || 'Invalid mobile number or password.');
+        setErrorMessage(
+          errorObj.payload?.message || errorObj.message || 'Invalid mobile number or password.'
+        );
       }
-      // Clear password field on failed attempt for security
       setPassword('');
     } finally {
       setIsSubmitting(false);
@@ -67,43 +74,67 @@ export const LoginPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4 py-8 select-none">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100">
-        {/* Header / Brand identity */}
-        <div className="bg-gradient-to-r from-indigo-600 to-indigo-800 px-8 py-8 text-white text-center">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-white/10 backdrop-blur-md mb-3 border border-white/20">
-            <Store className="w-8 h-8 text-white" />
+    <div
+      className="min-h-screen flex flex-col items-center justify-center p-4 relative"
+      style={{ backgroundColor: 'var(--khata-bg)' }}
+    >
+      {/* Top Floating Appearance & Accessibility Control */}
+      <header className="absolute top-4 right-4 z-20">
+        <button
+          onClick={() => setIsAppearanceOpen(true)}
+          className="neu-btn-secondary text-xs py-2 px-3 flex items-center gap-2"
+          aria-label="Open Appearance & Accessibility settings"
+        >
+          <Palette className="w-4 h-4 text-[var(--khata-accent)]" />
+          <span className="hidden sm:inline">Appearance & Accessibility</span>
+        </button>
+      </header>
+
+      {/* Main Login Card with Neumorphic Elevation */}
+      <main className="w-full max-w-md neu-card overflow-hidden my-auto">
+        {/* Brand header */}
+        <div
+          className="p-6 text-center border-b border-[var(--khata-border)]"
+          style={{ background: 'var(--khata-gradient-surface)' }}
+        >
+          <div
+            className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-3 shadow-md border border-[var(--khata-border)]"
+            style={{ backgroundColor: 'var(--khata-surface-inset)', color: 'var(--khata-accent)' }}
+          >
+            <Store className="w-7 h-7" />
           </div>
-          <h1 className="text-3xl font-extrabold tracking-tight">Khata</h1>
-          <p className="text-indigo-200 text-sm font-medium mt-1">Single-Shopkeeper Ledger Book</p>
-          <div className="mt-3 inline-block bg-indigo-900/50 text-indigo-100 text-xs font-semibold px-3 py-1 rounded-full border border-indigo-500/30">
-            Owner Login
+          <h1 className="text-2xl font-black tracking-tight text-[var(--khata-text)]">Khata</h1>
+          <p className="text-xs text-[var(--khata-text-muted)] mt-1 font-medium">
+            Single-Shopkeeper Ledger Book
+          </p>
+          <div className="mt-2.5 inline-block text-[11px] font-semibold px-3 py-0.5 rounded-full bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] text-[var(--khata-text)]">
+            Owner Authentication
           </div>
         </div>
 
-        {/* Form Body */}
-        <div className="p-8">
-          {/* Accessible Error / Alert */}
+        {/* Login form body */}
+        <div className="p-6 sm:p-8">
+          {/* Accessible error alert */}
           {errorMessage && (
             <div
               role="alert"
               aria-live="assertive"
-              className={`mb-6 p-4 rounded-xl flex items-start space-x-3 text-sm ${
+              className={`mb-5 p-4 rounded-xl flex items-start gap-3 text-xs font-medium border ${
                 isLocked
-                  ? 'bg-amber-50 text-amber-900 border border-amber-200'
-                  : 'bg-red-50 text-red-800 border border-red-200'
+                  ? 'bg-amber-500/10 border-amber-500/30 text-[var(--khata-warning)]'
+                  : 'bg-red-500/10 border-red-500/30 text-[var(--khata-danger)]'
               }`}
             >
               {isLocked ? (
-                <Clock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <Clock className="w-4 h-4 flex-shrink-0 mt-0.5" />
               ) : (
-                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
               )}
               <div className="flex-1">
-                <p className="font-semibold">{isLocked ? 'Access Temporarily Restricted' : 'Authentication Error'}</p>
+                <p className="font-bold">{isLocked ? 'Account Temporarily Locked' : 'Authentication Error'}</p>
                 <p className="mt-0.5">{errorMessage}</p>
                 {isLocked && lockoutRemainingSec > 0 && (
-                  <p className="mt-2 text-xs font-mono font-bold text-amber-700">
+                  <p className="mt-1.5 font-mono font-bold">
                     Retry available in: {Math.floor(lockoutRemainingSec / 60)}m {lockoutRemainingSec % 60}s
                   </p>
                 )}
@@ -111,16 +142,19 @@ export const LoginPage: React.FC = () => {
             </div>
           )}
 
-          <form onSubmit={handleSubmit} noValidate className="space-y-5">
-            {/* Mobile Number Field */}
+          <form onSubmit={handleSubmit} noValidate className="space-y-4">
+            {/* Phone input */}
             <div>
-              <label htmlFor="owner-phone" className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+              <label
+                htmlFor="owner-phone"
+                className="block text-xs font-bold uppercase tracking-wider text-[var(--khata-text-muted)] mb-1.5"
+              >
                 Owner Mobile Number
               </label>
-              <div className="relative rounded-xl shadow-sm">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <Phone className="w-4 h-4 text-slate-400" />
-                  <span className="ml-1.5 text-xs font-bold text-slate-500">+91</span>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[var(--khata-text-muted)]">
+                  <Phone className="w-4 h-4" />
+                  <span className="ml-1 text-xs font-bold">+91</span>
                 </div>
                 <input
                   id="owner-phone"
@@ -133,19 +167,24 @@ export const LoginPage: React.FC = () => {
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   placeholder="98765 43210"
-                  className="block w-full pl-16 pr-4 py-3 rounded-xl border border-slate-300 bg-slate-50/50 text-slate-900 placeholder-slate-400 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 transition disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="neu-input w-full pl-16 pr-4 text-sm font-medium"
                 />
               </div>
-              <p className="mt-1 text-xs text-slate-500">Enter registered 10-digit Indian phone number</p>
+              <p className="mt-1 text-[11px] text-[var(--khata-text-muted)]">
+                10-digit registered Indian phone number
+              </p>
             </div>
 
-            {/* Password Field with Show/Hide */}
+            {/* Password input */}
             <div>
-              <label htmlFor="owner-password" className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+              <label
+                htmlFor="owner-password"
+                className="block text-xs font-bold uppercase tracking-wider text-[var(--khata-text-muted)] mb-1.5"
+              >
                 Owner Password
               </label>
-              <div className="relative rounded-xl shadow-sm">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[var(--khata-text-muted)]">
                   <Lock className="w-4 h-4" />
                 </div>
                 <input
@@ -158,31 +197,30 @@ export const LoginPage: React.FC = () => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="block w-full pl-10 pr-11 py-3 rounded-xl border border-slate-300 bg-slate-50/50 text-slate-900 placeholder-slate-400 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 transition disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="neu-input w-full pl-10 pr-10 text-sm font-medium"
                 />
                 <button
                   type="button"
-                  tabIndex={0}
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
                   disabled={isSubmitting || isLocked}
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 focus:outline-none focus:text-indigo-600 transition"
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] transition"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
             </div>
 
-            {/* Submit Button */}
+            {/* Submit button */}
             <button
               type="submit"
               disabled={isSubmitting || isLocked}
-              className="w-full mt-2 py-3 px-4 rounded-xl font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 shadow-lg shadow-indigo-600/30 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+              className="neu-btn-primary w-full mt-3 py-3 text-sm font-bold"
             >
               {isSubmitting ? (
                 <>
                   <svg
-                    className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
+                    className="animate-spin h-4 w-4"
                     xmlns="http://www.w3.org/2000/svg"
                     fill="none"
                     viewBox="0 0 24 24"
@@ -202,15 +240,21 @@ export const LoginPage: React.FC = () => {
             </button>
           </form>
 
-          {/* Security Notice */}
-          <div className="mt-8 pt-6 border-t border-slate-100 text-center">
-            <p className="text-xs text-slate-400 flex items-center justify-center space-x-1">
-              <Lock className="w-3 h-3 inline mr-1 text-slate-400" />
-              <span>Protected by Argon2id & Host-Only Session Security</span>
+          {/* Security footnote */}
+          <footer className="mt-6 pt-4 border-t border-[var(--khata-border)] text-center">
+            <p className="text-[11px] text-[var(--khata-text-muted)] flex items-center justify-center gap-1.5">
+              <Lock className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
+              <span>Protected by Argon2id & Host-Only Sessions</span>
             </p>
-          </div>
+          </footer>
         </div>
-      </div>
+      </main>
+
+      {/* Appearance Modal */}
+      <AppearanceAccessibilityModal
+        isOpen={isAppearanceOpen}
+        onClose={() => setIsAppearanceOpen(false)}
+      />
     </div>
   );
 };

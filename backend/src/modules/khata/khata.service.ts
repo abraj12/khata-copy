@@ -605,6 +605,13 @@ export class KhataService {
 
       const responsePayload = {
         success: true,
+        data: {
+          transactionId,
+          customerId,
+          totalAmount: serverComputedTotal.toFixed(2),
+          initialPayment: initialPaymentRecorded,
+          remainingDue,
+        },
         transactionId,
         customerId,
         totalAmount: serverComputedTotal.toFixed(2),
@@ -716,29 +723,44 @@ export class KhataService {
       );
       const paymentId = parseInt(payRes.rows[0].id, 10);
 
-      // 4. Fetch outstanding transactions in FIFO order (oldest transaction_date, created_at, id)
-      const outstandingTxRes = await client.query(
+      // 4. Lock customer transaction rows with clean non-aggregated FOR UPDATE (PostgreSQL syntax compliant)
+      const lockedTxRes = await client.query(
         `SELECT
-          t.id,
-          t.total_amount,
-          COALESCE(SUM(pa.amount), 0) AS allocated_amount
-         FROM udhar_transactions t
-         LEFT JOIN payment_allocations pa ON pa.transaction_id = t.id
-         WHERE t.customer_id = $1
-         GROUP BY t.id, t.transaction_date, t.created_at
-         HAVING t.total_amount > COALESCE(SUM(pa.amount), 0)
-         ORDER BY t.transaction_date ASC, t.created_at ASC, t.id ASC FOR UPDATE OF t`,
+          id,
+          total_amount,
+          transaction_date,
+          created_at
+         FROM udhar_transactions
+         WHERE customer_id = $1
+         ORDER BY transaction_date ASC, created_at ASC, id ASC
+         FOR UPDATE`,
         [customerId]
       );
 
-      let remainingToAllocate = new Decimal(payDec);
-      const allocationDetails = [];
+      // 5. Query allocations for this customer's transactions without FOR UPDATE
+      const allocsRes = await client.query(
+        `SELECT
+          pa.transaction_id,
+          COALESCE(SUM(pa.amount), 0)::numeric AS allocated_amount
+         FROM payment_allocations pa
+         JOIN udhar_transactions t ON t.id = pa.transaction_id
+         WHERE t.customer_id = $1
+         GROUP BY pa.transaction_id`,
+        [customerId]
+      );
+      const allocMap = new Map<string, Decimal>();
+      for (const row of allocsRes.rows) {
+        allocMap.set(row.transaction_id.toString(), new Decimal(row.allocated_amount));
+      }
 
-      for (const tx of outstandingTxRes.rows) {
+      let remainingToAllocate = new Decimal(payDec);
+      const allocationDetails: Array<{ transactionId: number; allocated: string }> = [];
+
+      for (const tx of lockedTxRes.rows) {
         if (remainingToAllocate.lessThanOrEqualTo(0)) break;
 
         const txTotal = new Decimal(tx.total_amount);
-        const txAllocated = new Decimal(tx.allocated_amount);
+        const txAllocated = allocMap.get(tx.id.toString()) || new Decimal(0);
         const txDue = txTotal.minus(txAllocated);
 
         if (txDue.lessThanOrEqualTo(0)) continue;
@@ -763,6 +785,13 @@ export class KhataService {
 
       const responsePayload = {
         success: true,
+        data: {
+          paymentId,
+          customerId,
+          amountPaid: payDec.toFixed(2),
+          newOutstanding,
+          allocations: allocationDetails,
+        },
         paymentId,
         customerId,
         amount: payDec.toFixed(2),

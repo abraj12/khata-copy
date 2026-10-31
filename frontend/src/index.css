@@ -1,15 +1,447 @@
+@import '@fontsource/montserrat/400.css';
+@import '@fontsource/montserrat/500.css';
+@import '@fontsource/montserrat/600.css';
+@import '@fontsource/montserrat/700.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+/* ==============================================================================
+   KHATA NEUMORPHIC DESIGN SYSTEM — NINE PRESETS & ACCESSIBILITY TOKENS
+   ============================================================================== */
+
+:root,
+[data-neu-preset="soft-light"] {
   color-scheme: light;
+  --khata-bg: #eef2f6;
+  --khata-surface: #eef2f6;
+  --khata-surface-raised: #f3f7fb;
+  --khata-surface-inset: #e5ebf2;
+  --khata-text: #1e293b;
+  --khata-text-muted: #64748b;
+  --khata-border: #cbd5e1;
+  --khata-accent: #315fce;
+  --khata-accent-hover: #254db3;
+  --khata-accent-text: #ffffff;
+  --khata-success: #15803d;
+  --khata-danger: #b91c1c;
+  --khata-warning: #b45309;
+  --khata-shadow-raised: 8px 8px 18px rgba(166, 180, 200, 0.42), -8px -8px 18px rgba(255, 255, 255, 0.95);
+  --khata-shadow-inset: inset 4px 4px 8px rgba(166, 180, 200, 0.38), inset -4px -4px 8px rgba(255, 255, 255, 0.92);
+  --khata-shadow-btn: 5px 5px 12px rgba(166, 180, 200, 0.35), -5px -5px 12px rgba(255, 255, 255, 0.9);
+  --khata-shadow-btn-pressed: inset 3px 3px 6px rgba(166, 180, 200, 0.45), inset -3px -3px 6px rgba(255, 255, 255, 0.85);
+  --khata-gradient-surface: linear-gradient(145deg, #f5f8fc, #e8edf3);
 }
 
-body {
+[data-neu-preset="soft-dark"] {
+  color-scheme: dark;
+  --khata-bg: #1a202c;
+  --khata-surface: #202736;
+  --khata-surface-raised: #252e3e;
+  --khata-surface-inset: #171d27;
+  --khata-text: #f1f5f9;
+  --khata-text-muted: #94a3b8;
+  --khata-border: #334155;
+  --khata-accent: #4f80e1;
+  --khata-accent-hover: #3b6ed3;
+  --khata-accent-text: #ffffff;
+  --khata-success: #22c55e;
+  --khata-danger: #ef4444;
+  --khata-warning: #f59e0b;
+  --khata-shadow-raised: 8px 8px 20px rgba(10, 14, 20, 0.65), -8px -8px 20px rgba(45, 55, 75, 0.35);
+  --khata-shadow-inset: inset 4px 4px 9px rgba(10, 14, 20, 0.70), inset -4px -4px 9px rgba(45, 55, 75, 0.30);
+  --khata-shadow-btn: 5px 5px 14px rgba(10, 14, 20, 0.55), -5px -5px 14px rgba(45, 55, 75, 0.30);
+  --khata-shadow-btn-pressed: inset 3px 3px 6px rgba(10, 14, 20, 0.75), inset -3px -3px 6px rgba(45, 55, 75, 0.25);
+  --khata-gradient-surface: linear-gradient(145deg, #242c3d, #1c2230);
+}
+
+[data-neu-preset="raised"] {
+  color-scheme: light;
+  --khata-bg: #e6ebf2;
+  --khata-surface: #edf1f7;
+  --khata-surface-raised: #f5f8fd;
+  --khata-surface-inset: #dce3ed;
+  --khata-text: #0f172a;
+  --khata-text-muted: #475569;
+  --khata-border: #94a3b8;
+  --khata-accent: #2563eb;
+  --khata-accent-hover: #1d4ed8;
+  --khata-accent-text: #ffffff;
+  --khata-success: #16a34a;
+  --khata-danger: #dc2626;
+  --khata-warning: #d97706;
+  --khata-shadow-raised: 12px 12px 24px rgba(150, 168, 192, 0.55), -12px -12px 24px rgba(255, 255, 255, 0.98);
+  --khata-shadow-inset: inset 6px 6px 12px rgba(150, 168, 192, 0.45), inset -6px -6px 12px rgba(255, 255, 255, 0.95);
+  --khata-shadow-btn: 8px 8px 16px rgba(150, 168, 192, 0.48), -8px -8px 16px rgba(255, 255, 255, 0.95);
+  --khata-shadow-btn-pressed: inset 4px 4px 8px rgba(150, 168, 192, 0.60), inset -4px -4px 8px rgba(255, 255, 255, 0.90);
+  --khata-gradient-surface: linear-gradient(145deg, #f7faff, #e2e8f1);
+}
+
+[data-neu-preset="pressed"] {
+  color-scheme: light;
+  --khata-bg: #e5ebf2;
+  --khata-surface: #dde4ec;
+  --khata-surface-raised: #e8eef6;
+  --khata-surface-inset: #d2dbe5;
+  --khata-text: #1e293b;
+  --khata-text-muted: #526072;
+  --khata-border: #b8c4d2;
+  --khata-accent: #2c60db;
+  --khata-accent-hover: #1f4cb8;
+  --khata-accent-text: #ffffff;
+  --khata-success: #15803d;
+  --khata-danger: #b91c1c;
+  --khata-warning: #b45309;
+  --khata-shadow-raised: 4px 4px 10px rgba(160, 175, 195, 0.35), -4px -4px 10px rgba(255, 255, 255, 0.85);
+  --khata-shadow-inset: inset 5px 5px 11px rgba(150, 167, 188, 0.50), inset -5px -5px 11px rgba(255, 255, 255, 0.95);
+  --khata-shadow-btn: 3px 3px 8px rgba(160, 175, 195, 0.35), -3px -3px 8px rgba(255, 255, 255, 0.85);
+  --khata-shadow-btn-pressed: inset 4px 4px 8px rgba(150, 167, 188, 0.60), inset -4px -4px 8px rgba(255, 255, 255, 0.90);
+  --khata-gradient-surface: linear-gradient(145deg, #e4eaf2, #d5dde6);
+}
+
+[data-neu-preset="concave"] {
+  color-scheme: light;
+  --khata-bg: #edf2f7;
+  --khata-surface: #edf2f7;
+  --khata-surface-raised: linear-gradient(145deg, #e0e6ed, #fdffff);
+  --khata-surface-inset: #e2e8f0;
+  --khata-text: #1e293b;
+  --khata-text-muted: #596a80;
+  --khata-border: #cad4e0;
+  --khata-accent: #315fce;
+  --khata-accent-hover: #224baa;
+  --khata-accent-text: #ffffff;
+  --khata-success: #15803d;
+  --khata-danger: #b91c1c;
+  --khata-warning: #b45309;
+  --khata-shadow-raised: 7px 7px 16px rgba(164, 178, 196, 0.40), -7px -7px 16px rgba(255, 255, 255, 0.92);
+  --khata-shadow-inset: inset 4px 4px 8px rgba(164, 178, 196, 0.36), inset -4px -4px 8px rgba(255, 255, 255, 0.90);
+  --khata-shadow-btn: 6px 6px 14px rgba(164, 178, 196, 0.36), -6px -6px 14px rgba(255, 255, 255, 0.92);
+  --khata-shadow-btn-pressed: inset 3px 3px 6px rgba(164, 178, 196, 0.45), inset -3px -3px 6px rgba(255, 255, 255, 0.85);
+  --khata-gradient-surface: linear-gradient(135deg, #dee4eb, #fbfdff);
+}
+
+[data-neu-preset="convex"] {
+  color-scheme: light;
+  --khata-bg: #eceff4;
+  --khata-surface: #eceff4;
+  --khata-surface-raised: linear-gradient(145deg, #fdffff, #dfe4eb);
+  --khata-surface-inset: #e2e6ec;
+  --khata-text: #1e293b;
+  --khata-text-muted: #5b6c82;
+  --khata-border: #c8d3df;
+  --khata-accent: #2e5ec9;
+  --khata-accent-hover: #1f47a6;
+  --khata-accent-text: #ffffff;
+  --khata-success: #15803d;
+  --khata-danger: #b91c1c;
+  --khata-warning: #b45309;
+  --khata-shadow-raised: 7px 7px 16px rgba(165, 179, 197, 0.40), -7px -7px 16px rgba(255, 255, 255, 0.92);
+  --khata-shadow-inset: inset 4px 4px 8px rgba(165, 179, 197, 0.36), inset -4px -4px 8px rgba(255, 255, 255, 0.90);
+  --khata-shadow-btn: 6px 6px 14px rgba(165, 179, 197, 0.36), -6px -6px 14px rgba(255, 255, 255, 0.92);
+  --khata-shadow-btn-pressed: inset 3px 3px 6px rgba(165, 179, 197, 0.45), inset -3px -3px 6px rgba(255, 255, 255, 0.85);
+  --khata-gradient-surface: linear-gradient(135deg, #fbfdff, #dee4eb);
+}
+
+[data-neu-preset="flat"] {
+  color-scheme: light;
+  --khata-bg: #f4f6f9;
+  --khata-surface: #ffffff;
+  --khata-surface-raised: #ffffff;
+  --khata-surface-inset: #f1f4f8;
+  --khata-text: #1e293b;
+  --khata-text-muted: #64748b;
+  --khata-border: #cbd5e1;
+  --khata-accent: #2563eb;
+  --khata-accent-hover: #1d4ed8;
+  --khata-accent-text: #ffffff;
+  --khata-success: #16a34a;
+  --khata-danger: #dc2626;
+  --khata-warning: #d97706;
+  --khata-shadow-raised: 0 2px 6px rgba(0, 0, 0, 0.06);
+  --khata-shadow-inset: inset 0 2px 4px rgba(0, 0, 0, 0.05);
+  --khata-shadow-btn: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --khata-shadow-btn-pressed: inset 0 2px 4px rgba(0, 0, 0, 0.12);
+  --khata-gradient-surface: #ffffff;
+}
+
+[data-neu-preset="high-contrast"] {
+  color-scheme: light;
+  --khata-bg: #f8fafc;
+  --khata-surface: #ffffff;
+  --khata-surface-raised: #ffffff;
+  --khata-surface-inset: #f1f5f9;
+  --khata-text: #020617;
+  --khata-text-muted: #334155;
+  --khata-border: #0f172a;
+  --khata-accent: #1e40af;
+  --khata-accent-hover: #1e3a8a;
+  --khata-accent-text: #ffffff;
+  --khata-success: #14532d;
+  --khata-danger: #7f1d1d;
+  --khata-warning: #78350f;
+  --khata-shadow-raised: 4px 4px 0px #0f172a;
+  --khata-shadow-inset: inset 2px 2px 0px #0f172a;
+  --khata-shadow-btn: 3px 3px 0px #0f172a;
+  --khata-shadow-btn-pressed: inset 2px 2px 0px #0f172a;
+  --khata-gradient-surface: #ffffff;
+}
+
+[data-neu-preset="accent"] {
+  color-scheme: light;
+  --khata-bg: #e8f0f8;
+  --khata-surface: #ecf3f9;
+  --khata-surface-raised: #f3f8fc;
+  --khata-surface-inset: #e0eaf3;
+  --khata-text: #0f2240;
+  --khata-text-muted: #4a6382;
+  --khata-border: #bed2e6;
+  --khata-accent: #1d58cf;
+  --khata-accent-hover: #1344aa;
+  --khata-accent-text: #ffffff;
+  --khata-success: #15803d;
+  --khata-danger: #b91c1c;
+  --khata-warning: #b45309;
+  --khata-shadow-raised: 8px 8px 18px rgba(150, 175, 202, 0.45), -8px -8px 18px rgba(255, 255, 255, 0.95);
+  --khata-shadow-inset: inset 4px 4px 8px rgba(150, 175, 202, 0.40), inset -4px -4px 8px rgba(255, 255, 255, 0.92);
+  --khata-shadow-btn: 5px 5px 12px rgba(150, 175, 202, 0.38), -5px -5px 12px rgba(255, 255, 255, 0.90);
+  --khata-shadow-btn-pressed: inset 3px 3px 6px rgba(150, 175, 202, 0.50), inset -3px -3px 6px rgba(255, 255, 255, 0.85);
+  --khata-gradient-surface: linear-gradient(145deg, #f4f9fd, #e5eff7);
+}
+
+/* ==============================================================================
+   ACCESSIBILITY CONTROLS OVERRIDES
+   ============================================================================== */
+
+/* 1. Text Scale */
+html[data-text-size="100"] {
+  font-size: 16px;
+}
+html[data-text-size="115"] {
+  font-size: 18.4px;
+}
+html[data-text-size="130"] {
+  font-size: 20.8px;
+}
+html[data-text-size="145"] {
+  font-size: 23.2px;
+}
+
+/* 2. Enhanced Contrast Override */
+[data-contrast="enhanced"] {
+  --khata-border: #0f172a !important;
+  --khata-text: #020617 !important;
+  --khata-text-muted: #1e293b !important;
+}
+[data-neu-preset="soft-dark"][data-contrast="enhanced"] {
+  --khata-border: #94a3b8 !important;
+  --khata-text: #ffffff !important;
+  --khata-text-muted: #cbd5e1 !important;
+}
+
+/* 3. Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  [data-motion="system"] *,
+  [data-motion="system"] *::before,
+  [data-motion="system"] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+[data-motion="on"] *,
+[data-motion="on"] *::before,
+[data-motion="on"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* 4. Spacing */
+[data-spacing="increased"] {
+  line-height: 1.8 !important;
+}
+[data-spacing="increased"] .neu-card {
+  padding: 1.5rem !important;
+  margin-bottom: 1.25rem !important;
+}
+
+/* 5. Strong Keyboard Focus Indicator */
+[data-strong-focus="true"] *:focus-visible {
+  outline: 3px solid var(--khata-accent) !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 0 5px rgba(49, 95, 206, 0.3) !important;
+}
+
+/* ==============================================================================
+   GLOBAL MONTSERRAT TYPOGRAPHY & BODY STYLING
+   ============================================================================== */
+
+html, body {
+  font-family: 'Montserrat', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--khata-bg);
+  color: var(--khata-text);
   margin: 0;
   padding: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+}
+
+input, button, select, textarea, table {
+  font-family: inherit;
+}
+
+.tabular-numbers {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==============================================================================
+   TACTILE NEUMORPHIC UTILITY CLASSES
+   ============================================================================== */
+
+.neu-surface {
+  background-color: var(--khata-surface);
+  color: var(--khata-text);
+}
+
+.neu-card {
+  background-color: var(--khata-surface-raised);
+  border: 1px solid var(--khata-border);
+  box-shadow: var(--khata-shadow-raised);
+  border-radius: 1rem;
+  transition: box-shadow 180ms ease, transform 180ms ease;
+}
+
+.neu-input {
+  background-color: var(--khata-surface-inset);
+  border: 1px solid var(--khata-border);
+  box-shadow: var(--khata-shadow-inset);
+  border-radius: 0.75rem;
+  color: var(--khata-text);
+  padding: 0.65rem 1rem;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.neu-input:focus {
+  outline: none;
+  border-color: var(--khata-accent);
+}
+
+.neu-btn-primary {
+  background-color: var(--khata-accent);
+  color: var(--khata-accent-text);
+  box-shadow: var(--khata-shadow-btn);
+  border: 1px solid transparent;
+  border-radius: 0.75rem;
+  font-weight: 600;
+  padding: 0.65rem 1.25rem;
+  transition: all 160ms ease;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.neu-btn-primary:hover:not(:disabled) {
+  background-color: var(--khata-accent-hover);
+  transform: translateY(-1px);
+}
+
+.neu-btn-primary:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: var(--khata-shadow-btn-pressed);
+}
+
+.neu-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.neu-btn-secondary {
+  background-color: var(--khata-surface);
+  color: var(--khata-text);
+  box-shadow: var(--khata-shadow-btn);
+  border: 1px solid var(--khata-border);
+  border-radius: 0.75rem;
+  font-weight: 500;
+  padding: 0.65rem 1.25rem;
+  transition: all 160ms ease;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.neu-btn-secondary:hover:not(:disabled) {
+  background-color: var(--khata-surface-raised);
+}
+
+.neu-btn-secondary:active:not(:disabled) {
+  box-shadow: var(--khata-shadow-btn-pressed);
+  transform: translateY(1px);
+}
+
+.neu-btn-secondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.neu-btn-danger {
+  background-color: #fee2e2;
+  color: var(--khata-danger);
+  border: 1px solid #fca5a5;
+  box-shadow: var(--khata-shadow-btn);
+  border-radius: 0.75rem;
+  font-weight: 600;
+  padding: 0.65rem 1.25rem;
+  transition: all 160ms ease;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.neu-btn-danger:hover:not(:disabled) {
+  background-color: #fecaca;
+}
+
+.neu-btn-danger:active:not(:disabled) {
+  box-shadow: var(--khata-shadow-btn-pressed);
+  transform: translateY(1px);
+}
+
+.neu-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.neu-badge-success {
+  background-color: rgba(21, 128, 61, 0.12);
+  color: var(--khata-success);
+  border: 1px solid rgba(21, 128, 61, 0.3);
+}
+
+.neu-badge-warning {
+  background-color: rgba(180, 83, 9, 0.12);
+  color: var(--khata-warning);
+  border: 1px solid rgba(180, 83, 9, 0.3);
+}
+
+.neu-badge-danger {
+  background-color: rgba(185, 28, 28, 0.12);
+  color: var(--khata-danger);
+  border: 1px solid rgba(185, 28, 28, 0.3);
 }

@@ -1,0 +1,315 @@
+import React, { useEffect, useRef } from 'react';
+import {
+  X,
+  Palette,
+  Type,
+  Eye,
+  Activity,
+  Layers,
+  RotateCcw,
+  Check,
+} from 'lucide-react';
+import { useThemeAccessibility } from '../context/ThemeAccessibilityContext.js';
+import {
+  NEUMORPHIC_PRESETS,
+  NeuPresetId,
+  TextSizeOption,
+  ContrastOption,
+  MotionOption,
+} from '../theme/neumorphicThemes.js';
+
+interface AppearanceAccessibilityModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModalProps> = ({
+  isOpen,
+  onClose,
+}) => {
+  const {
+    preferences,
+    setPreset,
+    setTextSize,
+    setContrastOverride,
+    setReduceMotion,
+    setIncreaseSpacing,
+    setStrongFocus,
+    resetToDefaults,
+  } = useThemeAccessibility();
+
+  const modalRef = useRef<HTMLDivElement>(null);
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Close on Escape key press
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    closeBtnRef.current?.focus();
+
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="appearance-modal-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={modalRef}
+        className="neu-card w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 my-auto text-left"
+        style={{ backgroundColor: 'var(--khata-surface)' }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between pb-4 border-b border-[var(--khata-border)]">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-[var(--khata-surface-raised)] border border-[var(--khata-border)] text-[var(--khata-accent)]">
+              <Palette className="w-5 h-5" />
+            </div>
+            <div>
+              <h2
+                id="appearance-modal-title"
+                className="text-lg font-bold tracking-tight text-[var(--khata-text)]"
+              >
+                Appearance & Accessibility
+              </h2>
+              <p className="text-xs text-[var(--khata-text-muted)]">
+                Customize your visual theme, typography size, and readability settings.
+              </p>
+            </div>
+          </div>
+          <button
+            ref={closeBtnRef}
+            onClick={onClose}
+            className="p-2 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] hover:bg-[var(--khata-surface-inset)] transition-colors"
+            aria-label="Close Appearance & Accessibility settings"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Section A: Nine Neumorphic Presets */}
+        <div className="mt-6">
+          <div className="flex items-center justify-between mb-3">
+            <label className="text-sm font-semibold flex items-center gap-2 text-[var(--khata-text)]">
+              <Palette className="w-4 h-4 text-[var(--khata-accent)]" />
+              Neumorphic Style Presets (9 Styles)
+            </label>
+            <span className="text-xs text-[var(--khata-text-muted)]">
+              Active: {NEUMORPHIC_PRESETS.find((p) => p.id === preferences.preset)?.name}
+            </span>
+          </div>
+
+          <div
+            className="grid grid-cols-1 sm:grid-cols-3 gap-3"
+            role="radiogroup"
+            aria-label="Neumorphic Style Presets"
+          >
+            {NEUMORPHIC_PRESETS.map((p) => {
+              const isSelected = preferences.preset === p.id;
+              return (
+                <button
+                  key={p.id}
+                  role="radio"
+                  aria-checked={isSelected}
+                  onClick={() => setPreset(p.id as NeuPresetId)}
+                  className={`p-3 rounded-xl text-left border transition-all flex flex-col justify-between ${
+                    isSelected
+                      ? 'border-[var(--khata-accent)] ring-2 ring-[var(--khata-accent)]/30 shadow-md'
+                      : 'border-[var(--khata-border)] hover:border-[var(--khata-accent)]/50'
+                  }`}
+                  style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+                >
+                  <div className="flex items-center justify-between w-full mb-2">
+                    <span className="font-semibold text-xs text-[var(--khata-text)]">
+                      {p.name}
+                    </span>
+                    {isSelected && (
+                      <span className="flex items-center justify-center w-4 h-4 rounded-full bg-[var(--khata-accent)] text-white">
+                        <Check className="w-3 h-3" />
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Visual Theme Swatch */}
+                  <div
+                    className="w-full h-8 rounded-lg mb-2 flex items-center justify-center text-[10px] font-semibold border border-black/10"
+                    style={{
+                      background: p.previewSurface,
+                      color: p.previewText,
+                    }}
+                  >
+                    <span
+                      className="px-2 py-0.5 rounded text-[9px] text-white"
+                      style={{ backgroundColor: p.previewAccent }}
+                    >
+                      Sample
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] leading-snug text-[var(--khata-text-muted)] line-clamp-2">
+                    {p.shortDesc}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Section B: Readability and Accessibility Controls */}
+        <div className="mt-6 pt-5 border-t border-[var(--khata-border)] space-y-5">
+          {/* 1. Text Scale */}
+          <div>
+            <label className="text-sm font-semibold flex items-center gap-2 mb-2 text-[var(--khata-text)]">
+              <Type className="w-4 h-4 text-[var(--khata-accent)]" />
+              Text Scale (rem-based)
+            </label>
+            <div className="grid grid-cols-4 gap-2">
+              {(['100', '115', '130', '145'] as TextSizeOption[]).map((size) => (
+                <button
+                  key={size}
+                  onClick={() => setTextSize(size)}
+                  className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${
+                    preferences.textSize === size
+                      ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-sm'
+                      : 'border-[var(--khata-border)] text-[var(--khata-text)] bg-[var(--khata-surface-inset)] hover:border-[var(--khata-accent)]'
+                  }`}
+                >
+                  {size}% {size === '100' && '(Default)'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 2. Contrast Override & Reduced Motion */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-semibold flex items-center gap-2 mb-2 text-[var(--khata-text)]">
+                <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
+                Contrast Override
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {(['default', 'enhanced'] as ContrastOption[]).map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setContrastOverride(c)}
+                    className={`py-2 px-3 rounded-lg text-xs font-semibold capitalize border transition-all ${
+                      preferences.contrastOverride === c
+                        ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-sm'
+                        : 'border-[var(--khata-border)] text-[var(--khata-text)] bg-[var(--khata-surface-inset)] hover:border-[var(--khata-accent)]'
+                    }`}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-sm font-semibold flex items-center gap-2 mb-2 text-[var(--khata-text)]">
+                <Activity className="w-4 h-4 text-[var(--khata-accent)]" />
+                Reduce Motion
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {(['system', 'on', 'off'] as MotionOption[]).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setReduceMotion(m)}
+                    className={`py-2 px-2 rounded-lg text-xs font-semibold capitalize border transition-all ${
+                      preferences.reduceMotion === m
+                        ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-sm'
+                        : 'border-[var(--khata-border)] text-[var(--khata-text)] bg-[var(--khata-surface-inset)] hover:border-[var(--khata-accent)]'
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 3. Spacing & Strong Focus */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-semibold flex items-center gap-2 mb-2 text-[var(--khata-text)]">
+                <Layers className="w-4 h-4 text-[var(--khata-accent)]" />
+                Layout Spacing
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {[false, true].map((val) => (
+                  <button
+                    key={String(val)}
+                    onClick={() => setIncreaseSpacing(val)}
+                    className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${
+                      preferences.increaseSpacing === val
+                        ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-sm'
+                        : 'border-[var(--khata-border)] text-[var(--khata-text)] bg-[var(--khata-surface-inset)] hover:border-[var(--khata-accent)]'
+                    }`}
+                  >
+                    {val ? 'Increased' : 'Normal'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-sm font-semibold flex items-center gap-2 mb-2 text-[var(--khata-text)]">
+                <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
+                Keyboard Focus Outline
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {[true, false].map((val) => (
+                  <button
+                    key={String(val)}
+                    onClick={() => setStrongFocus(val)}
+                    className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${
+                      preferences.strongFocus === val
+                        ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-sm'
+                        : 'border-[var(--khata-border)] text-[var(--khata-text)] bg-[var(--khata-surface-inset)] hover:border-[var(--khata-accent)]'
+                    }`}
+                  >
+                    {val ? 'Strong Focus' : 'Standard'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer actions: Reset & Close */}
+        <div className="mt-6 pt-4 border-t border-[var(--khata-border)] flex items-center justify-between">
+          <button
+            onClick={resetToDefaults}
+            className="neu-btn-secondary text-xs px-3 py-2 flex items-center gap-1.5"
+            title="Reset to Soft Light preset and standard accessibility settings"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Reset to Defaults
+          </button>
+
+          <button
+            onClick={onClose}
+            className="neu-btn-primary text-xs px-5 py-2"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
