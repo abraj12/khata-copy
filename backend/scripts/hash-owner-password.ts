@@ -49,19 +49,27 @@ async function main() {
   console.log('   Khata Owner Argon2id Password Hash Generator       ');
   console.log('======================================================');
   console.log('This script securely hashes your password with Argon2id.');
-  console.log('Input is hidden and will never be echoed or saved.\n');
 
   try {
-    const pass1 = await promptHiddenPassword('Enter owner password: ');
-    if (!pass1 || pass1.length < 8) {
-      console.error('\x1b[31m[ERROR] Password must be at least 8 characters long.\x1b[0m');
-      process.exit(1);
-    }
+    let pass1 = process.argv[2];
+    if (pass1) {
+      if (pass1.length < 8) {
+        console.error('\x1b[31m[ERROR] Password must be at least 8 characters long.\x1b[0m');
+        process.exit(1);
+      }
+    } else {
+      console.log('Input is hidden and will never be echoed or saved.\n');
+      pass1 = await promptHiddenPassword('Enter owner password: ');
+      if (!pass1 || pass1.length < 8) {
+        console.error('\x1b[31m[ERROR] Password must be at least 8 characters long.\x1b[0m');
+        process.exit(1);
+      }
 
-    const pass2 = await promptHiddenPassword('Confirm owner password: ');
-    if (pass1 !== pass2) {
-      console.error('\x1b[31m[ERROR] Passwords do not match. Please try again.\x1b[0m');
-      process.exit(1);
+      const pass2 = await promptHiddenPassword('Confirm owner password: ');
+      if (pass1 !== pass2) {
+        console.error('\x1b[31m[ERROR] Passwords do not match. Please try again.\x1b[0m');
+        process.exit(1);
+      }
     }
 
     console.log('\nComputing Argon2id hash (memory: 64MB, time: 3 passes, parallelism: 4)...');
