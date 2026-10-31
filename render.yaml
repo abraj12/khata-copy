@@ -1,0 +1,56 @@
+services:
+  - type: web
+    name: khata-api
+    env: node
+    plan: starter
+    region: ohio
+    buildCommand: npm --prefix backend install && npm --prefix backend run build
+    startCommand: npm --prefix backend start
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: OWNER_PHONE
+        sync: false
+      - key: OWNER_PASSWORD_HASH
+        sync: false
+      - key: DATABASE_URL_POOLED
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: NEON_REALTIME_URL
+        sync: false
+      - key: NEON_REALTIME_SECRET
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: SESSION_MAX_AGE_MS
+        value: "604800000"
+      - key: SESSION_COOKIE_NAME
+        value: khata_session
+      - key: SESSION_COOKIE_SECURE
+        value: "true"
+      - key: SESSION_COOKIE_HTTP_ONLY
+        value: "true"
+      - key: SESSION_COOKIE_SAME_SITE
+        value: lax
+      - key: FRONTEND_URL
+        value: https://khata.algions.in
+      - key: LOGIN_MAX_ATTEMPTS
+        value: "5"
+      - key: LOGIN_FAILURE_WINDOW_MS
+        value: "900000"
+      - key: LOGIN_LOCK_DURATION_MS
+        value: "900000"
+      - key: LOGIN_EXTENDED_THRESHOLD
+        value: "10"
+      - key: LOGIN_EXTENDED_WINDOW_MS
+        value: "86400000"
+      - key: LOGIN_EXTENDED_LOCK_DURATION_MS
+        value: "1800000"
+      - key: LOGIN_LOG_RETENTION_DAYS
+        value: "30"
+      - key: TRUST_PROXY
+        value: "1"

@@ -1,0 +1,16 @@
+import { createApp } from './app.js';
+import { env } from './config/env.js';
+
+const app = createApp();
+
+const server = app.listen(env.PORT, () => {
+  console.log(`[KHATA SERVER] Running in ${env.NODE_ENV} mode on port ${env.PORT}`);
+  console.log(`[KHATA SERVER] Bound frontend origin: ${env.FRONTEND_URL}`);
+});
+
+process.on('SIGTERM', () => {
+  console.log('[KHATA SERVER] SIGTERM signal received: closing HTTP server');
+  server.close(() => {
+    console.log('[KHATA SERVER] HTTP server closed');
+  });
+});

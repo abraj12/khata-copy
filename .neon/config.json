@@ -1,0 +1,9 @@
+{
+  "org_id": "org-red-haze-69535662",
+  "project_id": "shy-mud-94919289",
+  "branch": "production",
+  "services": [
+    "postgres",
+    "realtime"
+  ]
+}
