@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import readline from 'readline';
 import pg from 'pg';
 import dotenv from 'dotenv';
 import { directPool } from '../src/config/database.js';
@@ -20,20 +21,47 @@ for (const envFile of envFiles) {
 const { Pool } = pg;
 const MIGRATION_LOCK_ID = 987654321;
 
-// Allow direct CLI URL argument: npm run migrate -- "postgresql://..."
-const cliUrl = process.argv.slice(2).find((arg) => arg.startsWith('postgres://') || arg.startsWith('postgresql://'));
-const effectiveDbUrl = cliUrl || process.env.DATABASE_URL;
+async function resolveConnectionString(): Promise<string | undefined> {
+  // 1. CLI argument: npm run migrate -- "postgresql://..."
+  const cliUrl = process.argv.slice(2).find((arg) => arg.startsWith('postgres://') || arg.startsWith('postgresql://'));
+  if (cliUrl) return cliUrl;
 
-const activePool = effectiveDbUrl
-  ? new Pool({
-      connectionString: effectiveDbUrl,
-      ssl: effectiveDbUrl.includes('localhost') ? false : true,
-      max: 2,
-      connectionTimeoutMillis: 10000,
-    })
-  : directPool;
+  // 2. Environment variable if not a placeholder
+  if (process.env.DATABASE_URL && !process.env.DATABASE_URL.includes('dummy')) {
+    return process.env.DATABASE_URL;
+  }
+
+  // 3. Interactive prompt in terminal
+  if (process.stdin.isTTY) {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    return new Promise((resolve) => {
+      rl.question('\x1b[36mEnter Neon Direct Connection String (DATABASE_URL):\x1b[0m\n> ', (answer) => {
+        rl.close();
+        const trimmed = answer.trim().replace(/^['"]|['"]$/g, '');
+        resolve(trimmed || undefined);
+      });
+    });
+  }
+
+  return undefined;
+}
 
 async function runMigrations() {
+  const customDbUrl = await resolveConnectionString();
+  const effectiveDbUrl = customDbUrl || process.env.DATABASE_URL;
+
+  const activePool = effectiveDbUrl && !effectiveDbUrl.includes('dummy')
+    ? new Pool({
+        connectionString: effectiveDbUrl,
+        ssl: effectiveDbUrl.includes('localhost') ? false : true,
+        max: 2,
+        connectionTimeoutMillis: 10000,
+      })
+    : directPool;
+
   console.log('[MIGRATION] Connecting to PostgreSQL direct endpoint...');
   const client = await activePool.connect();
 
@@ -92,7 +120,7 @@ async function runMigrations() {
       }
     }
 
-    console.log('\x1b[32m[MIGRATION COMPLETE] All schema migrations up to date!\x1b[0m');
+    console.log('\n\x1b[32m[MIGRATION COMPLETE] All schema migrations up to date!\x1b[0m\n');
   } catch (err) {
     console.error('\x1b[31m[MIGRATION FAILED]\x1b[0m', (err as Error).message);
     process.exit(1);
@@ -103,7 +131,9 @@ async function runMigrations() {
       // Ignore unlock failure on exit
     }
     client.release();
-    await activePool.end();
+    if (activePool !== directPool) {
+      await activePool.end();
+    }
   }
 }
 
