@@ -18,7 +18,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import Decimal from 'decimal.js';
-import { formatCurrency, formatQuantity, safeDecimal } from '../../lib/formatters.js';
+import { formatCurrency, formatQuantity, safeDecimal, parseStrictDecimal } from '../../lib/formatters.js';
 
 interface SummaryData {
   totalCustomers: number | string;
@@ -259,12 +259,16 @@ export const KhataLedgerView: React.FC = () => {
   // Precise Decimal arithmetic for line totals
   const lineCalculations = useMemo(() => {
     return udharLines.map((line) => {
-      const q = safeDecimal(line.quantity);
-      const p = safeDecimal(line.sellingPrice);
-      if (q.greaterThan(0) && p.greaterThanOrEqualTo(0)) {
-        return q.times(p).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      try {
+        const q = parseStrictDecimal(line.quantity, { maxDecimalPlaces: 3 });
+        const p = parseStrictDecimal(line.sellingPrice, { maxDecimalPlaces: 2 });
+        if (q.greaterThan(0) && p.greaterThanOrEqualTo(0)) {
+          return q.times(p).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+        }
+        return new Decimal(0);
+      } catch {
+        return new Decimal(0);
       }
-      return new Decimal(0);
     });
   }, [udharLines]);
 
@@ -321,7 +325,7 @@ export const KhataLedgerView: React.FC = () => {
       };
     }
 
-    // Validate items
+    // Validate items strictly with parseStrictDecimal
     const validatedItems: { productId: number; quantity: number; sellingPrice: number }[] = [];
     for (let i = 0; i < udharLines.length; i++) {
       const line = udharLines[i];
@@ -329,21 +333,26 @@ export const KhataLedgerView: React.FC = () => {
         setUdharFormError(`Please select a product for line #${i + 1}.`);
         return;
       }
-      const qtyDec = safeDecimal(line.quantity);
-      if (qtyDec.lessThanOrEqualTo(0)) {
-        setUdharFormError(`Line #${i + 1} has an invalid quantity.`);
+      try {
+        const qtyDec = parseStrictDecimal(line.quantity, { maxDecimalPlaces: 3, fieldName: `Line #${i + 1} quantity` });
+        if (qtyDec.lessThanOrEqualTo(0)) {
+          setUdharFormError(`Line #${i + 1} quantity must be greater than zero.`);
+          return;
+        }
+        const priceDec = parseStrictDecimal(line.sellingPrice, { maxDecimalPlaces: 2, fieldName: `Line #${i + 1} selling price` });
+        if (priceDec.lessThan(0)) {
+          setUdharFormError(`Line #${i + 1} selling price cannot be negative.`);
+          return;
+        }
+        validatedItems.push({
+          productId: Number(line.productId),
+          quantity: qtyDec.toNumber(),
+          sellingPrice: priceDec.toNumber(),
+        });
+      } catch (valErr) {
+        setUdharFormError((valErr as Error).message);
         return;
       }
-      const priceDec = safeDecimal(line.sellingPrice);
-      if (priceDec.lessThan(0)) {
-        setUdharFormError(`Line #${i + 1} has an invalid selling price.`);
-        return;
-      }
-      validatedItems.push({
-        productId: Number(line.productId),
-        quantity: qtyDec.toNumber(),
-        sellingPrice: priceDec.toNumber(),
-      });
     }
 
     if (validatedItems.length === 0) {
@@ -351,7 +360,16 @@ export const KhataLedgerView: React.FC = () => {
       return;
     }
 
-    const initPaymentDec = safeDecimal(initialPayment);
+    let initPaymentDec = new Decimal(0);
+    if (initialPayment && initialPayment.trim()) {
+      try {
+        initPaymentDec = parseStrictDecimal(initialPayment, { maxDecimalPlaces: 2, fieldName: 'Initial payment' });
+      } catch (valErr) {
+        setUdharFormError((valErr as Error).message);
+        return;
+      }
+    }
+
     if (initPaymentDec.lessThan(0)) {
       setUdharFormError('Initial payment must be a non-negative number.');
       return;
@@ -415,7 +433,14 @@ export const KhataLedgerView: React.FC = () => {
     e.preventDefault();
     if (!activeCustomerDetailId || !customerHistory) return;
 
-    const payDec = safeDecimal(paymentAmount);
+    let payDec: Decimal;
+    try {
+      payDec = parseStrictDecimal(paymentAmount, { maxDecimalPlaces: 2, fieldName: 'Payment amount' });
+    } catch (valErr) {
+      setPaymentError((valErr as Error).message);
+      return;
+    }
+
     if (payDec.lessThanOrEqualTo(0)) {
       setPaymentError('Payment amount must be greater than zero.');
       return;
@@ -583,14 +608,14 @@ export const KhataLedgerView: React.FC = () => {
       </div>
 
       {/* Customer Inset Search Bar */}
-      <div className="relative">
-        <Search className="w-4 h-4 text-[var(--khata-text-muted)] absolute left-3.5 top-3.5" />
+      <div className="relative flex items-center">
+        <Search className="w-4 h-4 text-[var(--khata-text-muted)] absolute left-3.5 pointer-events-none" />
         <input
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search customer by name or phone..."
-          className="neu-input w-full pl-10 pr-4 py-3 text-sm font-medium"
+          className="neu-input neu-input-with-leading-icon w-full text-sm font-medium"
         />
       </div>
 
@@ -679,41 +704,41 @@ export const KhataLedgerView: React.FC = () => {
           ============================================================================== */}
       {isNewUdharOpen && (
         <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto"
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
           role="dialog"
           aria-modal="true"
           aria-labelledby="new-udhar-title"
         >
           <div
-            className="neu-card max-w-2xl w-full p-6 my-8 space-y-5"
+            className="neu-card max-w-2xl w-full p-4 sm:p-6 my-4 sm:my-8 max-h-[90vh] flex flex-col space-y-4"
             style={{ backgroundColor: 'var(--khata-surface)' }}
           >
-            <div className="flex items-center justify-between pb-3 border-b border-[var(--khata-border)]">
-              <div>
-                <h3 id="new-udhar-title" className="text-lg font-bold text-[var(--khata-text)]">
+            <div className="flex items-start justify-between pb-3 border-b border-[var(--khata-border)] flex-shrink-0">
+              <div className="min-w-0 flex-1 pr-2">
+                <h3 id="new-udhar-title" className="text-base sm:text-lg font-bold text-[var(--khata-text)]">
                   Record New Udhar Transaction
                 </h3>
-                <p className="text-xs text-[var(--khata-text-muted)]">
+                <p className="text-xs text-[var(--khata-text-muted)] mt-0.5">
                   Select an existing customer or enter a new customer. Add product items with custom selling prices.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsNewUdharOpen(false)}
-                className="p-1 text-[var(--khata-text-muted)] hover:text-[var(--khata-text)]"
-                aria-label="Close"
+                className="p-2 rounded-xl text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] min-h-[44px] min-w-[44px] flex items-center justify-center -mr-1 -mt-1 flex-shrink-0 transition"
+                aria-label="Close new udhar modal"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {udharFormError && (
-              <div className="p-3 bg-red-500/10 border border-red-500/30 text-[var(--khata-danger)] text-xs rounded-xl font-medium">
+              <div className="p-3 bg-red-500/10 border border-red-500/30 text-[var(--khata-danger)] text-xs rounded-xl font-medium flex-shrink-0">
                 {udharFormError}
               </div>
             )}
 
-            <form onSubmit={handleSubmitNewUdhar} className="space-y-5">
+            <form onSubmit={handleSubmitNewUdhar} className="overflow-y-auto pr-1 flex-1 space-y-4">
               {/* Customer Selector / Creator */}
               <div
                 className="p-4 rounded-xl border border-[var(--khata-border)] space-y-3"
@@ -955,18 +980,18 @@ export const KhataLedgerView: React.FC = () => {
               </div>
 
               {/* Form Buttons */}
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2.5 pt-3 border-t border-[var(--khata-border)] flex-shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsNewUdharOpen(false)}
-                  className="neu-btn-secondary text-xs px-4 py-2"
+                  className="neu-btn-secondary text-xs px-4 py-2.5 min-h-[44px] w-full sm:w-auto font-medium"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmittingUdhar || calculatedTotalAmount.lessThanOrEqualTo(0)}
-                  className="neu-btn-primary text-xs px-5 py-2.5 font-bold"
+                  className="neu-btn-primary text-xs px-5 py-2.5 font-bold min-h-[44px] w-full sm:w-auto"
                 >
                   {isSubmittingUdhar ? 'Recording Udhar...' : 'Save Udhar Transaction'}
                 </button>
@@ -981,13 +1006,13 @@ export const KhataLedgerView: React.FC = () => {
           ============================================================================== */}
       {activeCustomerDetailId && (
         <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto"
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
           role="dialog"
           aria-modal="true"
           aria-labelledby="customer-detail-title"
         >
           <div
-            className="neu-card max-w-3xl w-full p-6 my-8 space-y-6"
+            className="neu-card max-w-3xl w-full p-4 sm:p-6 my-4 sm:my-8 max-h-[90vh] flex flex-col space-y-4"
             style={{ backgroundColor: 'var(--khata-surface)' }}
           >
             {isLoadingHistory || !customerHistory ? (
@@ -996,15 +1021,15 @@ export const KhataLedgerView: React.FC = () => {
               </div>
             ) : (
               <>
-                {/* Customer Header */}
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-[var(--khata-border)]">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 id="customer-detail-title" className="text-xl font-bold text-[var(--khata-text)]">
+                {/* Responsive Customer Header: Name + status on left, close button on top-right */}
+                <div className="flex items-start justify-between gap-3 pb-3 border-b border-[var(--khata-border)] flex-shrink-0">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 id="customer-detail-title" className="text-lg sm:text-xl font-bold text-[var(--khata-text)] truncate">
                         {customerHistory.customer.name}
                       </h3>
                       <span
-                        className={`neu-badge ${
+                        className={`neu-badge flex-shrink-0 ${
                           safeDecimal(customerHistory.customer.outstanding).lessThanOrEqualTo(0)
                             ? 'neu-badge-success'
                             : 'neu-badge-danger'
@@ -1022,306 +1047,312 @@ export const KhataLedgerView: React.FC = () => {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-4 text-right">
-                    <div>
-                      <span className="text-[11px] text-[var(--khata-text-muted)] uppercase font-semibold block">
-                        Total Udhar
-                      </span>
-                      <span className="font-bold text-[var(--khata-text)] tabular-numbers">
-                        {formatCurrency(customerHistory.customer.totalUdhar)}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[11px] text-[var(--khata-text-muted)] uppercase font-semibold block">
-                        Total Received
-                      </span>
-                      <span className="font-bold text-[var(--khata-success)] tabular-numbers">
-                        {formatCurrency(customerHistory.customer.totalReceived)}
-                      </span>
-                    </div>
-                    <div className="p-2 px-3 rounded-xl border border-[var(--khata-border)]" style={{ backgroundColor: 'var(--khata-surface-raised)' }}>
-                      <span className="text-[11px] text-[var(--khata-danger)] uppercase font-bold block">
-                        Balance Due
-                      </span>
-                      <span className="font-black text-[var(--khata-danger)] text-base tabular-numbers">
-                        {formatCurrency(customerHistory.customer.outstanding)}
-                      </span>
-                    </div>
-                  </div>
-
                   <button
                     type="button"
                     onClick={() => setActiveCustomerDetailId(null)}
-                    className="p-1 text-[var(--khata-text-muted)] hover:text-[var(--khata-text)]"
+                    className="p-2 rounded-xl text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] transition min-h-[44px] min-w-[44px] flex items-center justify-center -mr-1 -mt-1 flex-shrink-0"
                     aria-label="Close"
                   >
                     <X className="w-5 h-5" />
                   </button>
                 </div>
 
-                {/* Record Payment Section */}
-                <div
-                  className="p-4 rounded-xl border border-[var(--khata-border)] space-y-3"
-                  style={{ backgroundColor: 'var(--khata-surface-raised)' }}
-                >
-                  <div className="flex items-center gap-2 text-[var(--khata-text)] font-bold text-sm">
-                    <DollarSign className="w-4 h-4 text-[var(--khata-success)]" />
-                    <span>Record Payment Received</span>
+                {/* Single predictable scroll container for the modal body */}
+                <div className="overflow-y-auto pr-1 flex-1 space-y-4 sm:space-y-5">
+                  {/* Financial Summary Grid (3 responsive cards) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="neu-card p-3.5 border border-[var(--khata-border)]" style={{ backgroundColor: 'var(--khata-surface-raised)' }}>
+                      <span className="text-[11px] text-[var(--khata-text-muted)] uppercase font-semibold block">
+                        Lifetime Udhar
+                      </span>
+                      <span className="font-bold text-[var(--khata-text)] text-base sm:text-lg tabular-numbers mt-0.5 block">
+                        {formatCurrency(customerHistory.customer.totalUdhar)}
+                      </span>
+                    </div>
+
+                    <div className="neu-card p-3.5 border border-[var(--khata-border)]" style={{ backgroundColor: 'var(--khata-surface-raised)' }}>
+                      <span className="text-[11px] text-[var(--khata-text-muted)] uppercase font-semibold block">
+                        Total Received
+                      </span>
+                      <span className="font-bold text-[var(--khata-success)] text-base sm:text-lg tabular-numbers mt-0.5 block">
+                        {formatCurrency(customerHistory.customer.totalReceived)}
+                      </span>
+                    </div>
+
+                    <div className="neu-card p-3.5 border-2 border-[var(--khata-danger)]/40" style={{ backgroundColor: 'var(--khata-surface-raised)' }}>
+                      <span className="text-[11px] text-[var(--khata-danger)] uppercase font-bold block">
+                        Net Balance Due
+                      </span>
+                      <span className="font-black text-[var(--khata-danger)] text-lg sm:text-xl tabular-numbers mt-0.5 block">
+                        {formatCurrency(customerHistory.customer.outstanding)}
+                      </span>
+                    </div>
                   </div>
 
-                  {paymentError && (
-                    <div className="p-2.5 bg-red-500/10 border border-red-500/30 text-[var(--khata-danger)] text-xs rounded-lg font-medium">
-                      {paymentError}
-                    </div>
-                  )}
-
-                  <form onSubmit={handleSubmitPayment} className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-                    <div>
-                      <label className="block text-xs font-semibold text-[var(--khata-text-muted)] mb-1">
-                        Payment Amount (₹) <span className="text-rose-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        required
-                        value={paymentAmount}
-                        onChange={(e) => setPaymentAmount(e.target.value)}
-                        placeholder={`Max ${formatCurrency(customerHistory.customer.outstanding)}`}
-                        className="neu-input w-full text-sm font-medium tabular-numbers"
-                      />
+                  {/* Record Payment Section */}
+                  <div
+                    className="p-4 rounded-xl border border-[var(--khata-border)] space-y-3"
+                    style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+                  >
+                    <div className="flex items-center gap-2 text-[var(--khata-text)] font-bold text-sm">
+                      <DollarSign className="w-4 h-4 text-[var(--khata-success)]" />
+                      <span>Record Payment Received</span>
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-semibold text-[var(--khata-text-muted)] mb-1">
-                        Note / Mode (Optional)
-                      </label>
-                      <input
-                        type="text"
-                        value={paymentNote}
-                        onChange={(e) => setPaymentNote(e.target.value)}
-                        placeholder="e.g. Cash / UPI"
-                        className="neu-input w-full text-sm font-medium"
-                      />
-                    </div>
+                    {paymentError && (
+                      <div className="p-2.5 bg-red-500/10 border border-red-500/30 text-[var(--khata-danger)] text-xs rounded-lg font-medium">
+                        {paymentError}
+                      </div>
+                    )}
 
-                    <div>
-                      <button
-                        type="submit"
-                        disabled={
-                          isSubmittingPayment ||
-                          safeDecimal(customerHistory.customer.outstanding).lessThanOrEqualTo(0) ||
-                          !paymentAmount
-                        }
-                        className="neu-btn-primary w-full text-xs font-bold py-2.5"
-                      >
-                        {isSubmittingPayment ? 'Recording...' : 'Record Payment'}
-                      </button>
-                    </div>
-                  </form>
-                </div>
+                    <form onSubmit={handleSubmitPayment} className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                      <div>
+                        <label className="block text-xs font-semibold text-[var(--khata-text-muted)] mb-1">
+                          Payment Amount (₹) <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          required
+                          value={paymentAmount}
+                          onChange={(e) => setPaymentAmount(e.target.value)}
+                          placeholder={`Max ${formatCurrency(customerHistory.customer.outstanding)}`}
+                          className="neu-input w-full text-sm font-medium tabular-numbers"
+                        />
+                      </div>
 
-                {/* Historical Udhar Transactions */}
-                <div className="space-y-3">
-                  <h4 className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
-                    <FileText className="w-4 h-4 text-[var(--khata-accent)]" />
-                    <span>Historical Udhar Transactions</span>
-                  </h4>
+                      <div>
+                        <label className="block text-xs font-semibold text-[var(--khata-text-muted)] mb-1">
+                          Note / Mode (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          value={paymentNote}
+                          onChange={(e) => setPaymentNote(e.target.value)}
+                          placeholder="e.g. Cash / UPI"
+                          className="neu-input w-full text-sm font-medium"
+                        />
+                      </div>
 
-                  {customerHistory.transactions.length === 0 ? (
-                    <p className="text-xs text-[var(--khata-text-muted)] p-4 rounded-xl text-center border border-[var(--khata-border)]">
-                      No Udhar transactions recorded.
-                    </p>
-                  ) : (
-                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                      {customerHistory.transactions.map((tx) => {
-                        const isExpanded = expandedTxIds.has(tx.id);
-                        const isSettled = tx.isSettled ?? tx.is_fully_settled ?? false;
-                        const txDate = tx.transactionDate || tx.transaction_date;
-                        const txTotal = tx.totalAmount || tx.total_amount;
-                        const txRemaining = tx.outstanding || tx.remaining_amount;
+                      <div>
+                        <button
+                          type="submit"
+                          disabled={
+                            isSubmittingPayment ||
+                            safeDecimal(customerHistory.customer.outstanding).lessThanOrEqualTo(0) ||
+                            !paymentAmount
+                          }
+                          className="neu-btn-primary w-full text-xs font-bold py-2.5 min-h-[42px]"
+                        >
+                          {isSubmittingPayment ? 'Recording...' : 'Record Payment'}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
 
-                        return (
-                          <div
-                            key={tx.id}
-                            className="border border-[var(--khata-border)] rounded-xl overflow-hidden"
-                            style={{ backgroundColor: 'var(--khata-surface-raised)' }}
-                          >
+                  {/* Historical Udhar Transactions */}
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
+                      <FileText className="w-4 h-4 text-[var(--khata-accent)]" />
+                      <span>Historical Udhar Transactions</span>
+                    </h4>
+
+                    {customerHistory.transactions.length === 0 ? (
+                      <p className="text-xs text-[var(--khata-text-muted)] p-4 rounded-xl text-center border border-[var(--khata-border)]">
+                        No Udhar transactions recorded.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {customerHistory.transactions.map((tx) => {
+                          const isExpanded = expandedTxIds.has(tx.id);
+                          const isSettled = tx.isSettled ?? tx.is_fully_settled ?? false;
+                          const txDate = tx.transactionDate || tx.transaction_date;
+                          const txTotal = tx.totalAmount || tx.total_amount;
+                          const txRemaining = tx.outstanding || tx.remaining_amount;
+
+                          return (
                             <div
-                              onClick={() => toggleExpandTx(tx.id)}
-                              className="flex items-center justify-between p-3.5 hover:bg-[var(--khata-surface-inset)] cursor-pointer transition-colors"
-                              tabIndex={0}
-                              role="button"
-                              aria-expanded={isExpanded}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.preventDefault();
-                                  toggleExpandTx(tx.id);
-                                }
-                              }}
+                              key={tx.id}
+                              className="border border-[var(--khata-border)] rounded-xl overflow-hidden"
+                              style={{ backgroundColor: 'var(--khata-surface-raised)' }}
                             >
-                              <div className="flex items-center gap-3">
-                                {isExpanded ? (
-                                  <ChevronUp className="w-4 h-4 text-[var(--khata-text-muted)]" />
-                                ) : (
-                                  <ChevronDown className="w-4 h-4 text-[var(--khata-text-muted)]" />
-                                )}
-                                <div>
-                                  <div className="text-xs font-bold text-[var(--khata-text)]">
-                                    Tx #{tx.id} • {txDate}
-                                  </div>
-                                  {tx.note && (
-                                    <div className="text-[11px] text-[var(--khata-text-muted)] italic">
-                                      {tx.note}
-                                    </div>
+                              <div
+                                onClick={() => toggleExpandTx(tx.id)}
+                                className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3.5 hover:bg-[var(--khata-surface-inset)] cursor-pointer transition-colors gap-2"
+                                tabIndex={0}
+                                role="button"
+                                aria-expanded={isExpanded}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    toggleExpandTx(tx.id);
+                                  }
+                                }}
+                              >
+                                <div className="flex items-center gap-2.5">
+                                  {isExpanded ? (
+                                    <ChevronUp className="w-4 h-4 text-[var(--khata-text-muted)] flex-shrink-0" />
+                                  ) : (
+                                    <ChevronDown className="w-4 h-4 text-[var(--khata-text-muted)] flex-shrink-0" />
                                   )}
+                                  <div>
+                                    <div className="text-xs font-bold text-[var(--khata-text)]">
+                                      Tx #{tx.id} • {txDate}
+                                    </div>
+                                    {tx.note && (
+                                      <div className="text-[11px] text-[var(--khata-text-muted)] italic">
+                                        {tx.note}
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
 
-                              <div className="flex items-center gap-4 text-right">
-                                <div>
-                                  <span className="text-[10px] text-[var(--khata-text-muted)] uppercase font-semibold block">
-                                    Total
-                                  </span>
-                                  <span className="text-xs font-bold text-[var(--khata-text)] tabular-numbers">
-                                    {formatCurrency(txTotal)}
-                                  </span>
-                                </div>
-                                <div>
-                                  <span className="text-[10px] text-[var(--khata-text-muted)] uppercase font-semibold block">
-                                    Remaining
-                                  </span>
+                                <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4 text-right pt-1 sm:pt-0 border-t sm:border-t-0 border-[var(--khata-border)]/40">
+                                  <div>
+                                    <span className="text-[10px] text-[var(--khata-text-muted)] uppercase font-semibold block sm:inline mr-1">
+                                      Total:
+                                    </span>
+                                    <span className="text-xs font-bold text-[var(--khata-text)] tabular-numbers">
+                                      {formatCurrency(txTotal)}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-[10px] text-[var(--khata-text-muted)] uppercase font-semibold block sm:inline mr-1">
+                                      Due:
+                                    </span>
+                                    <span
+                                      className={`text-xs tabular-numbers font-bold ${
+                                        isSettled ? 'text-[var(--khata-success)]' : 'text-[var(--khata-danger)]'
+                                      }`}
+                                    >
+                                      {formatCurrency(txRemaining)}
+                                    </span>
+                                  </div>
                                   <span
-                                    className={`text-xs tabular-numbers font-bold ${
-                                      isSettled ? 'text-[var(--khata-success)]' : 'text-[var(--khata-danger)]'
+                                    className={`neu-badge flex-shrink-0 ${
+                                      isSettled ? 'neu-badge-success' : 'neu-badge-danger'
                                     }`}
                                   >
-                                    {formatCurrency(txRemaining)}
+                                    {isSettled ? 'Settled' : 'Pending'}
                                   </span>
                                 </div>
-                                <span
-                                  className={`neu-badge ${
-                                    isSettled ? 'neu-badge-success' : 'neu-badge-danger'
-                                  }`}
+                              </div>
+
+                              {/* Expanded Item Lines */}
+                              {isExpanded && (
+                                <div
+                                  className="p-3 border-t border-[var(--khata-border)] space-y-2 overflow-x-auto"
+                                  style={{ backgroundColor: 'var(--khata-surface-inset)' }}
                                 >
-                                  {isSettled ? 'Settled' : 'Pending'}
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* Expanded Item Lines */}
-                            {isExpanded && (
-                              <div
-                                className="p-3 border-t border-[var(--khata-border)] space-y-2"
-                                style={{ backgroundColor: 'var(--khata-surface-inset)' }}
-                              >
-                                <span className="text-[11px] font-bold text-[var(--khata-text-muted)] uppercase tracking-wider block">
-                                  Purchased Items Snapshot
-                                </span>
-                                <table className="w-full text-xs text-left border-collapse">
-                                  <thead>
-                                    <tr className="text-[var(--khata-text-muted)] border-b border-[var(--khata-border)]">
-                                      <th className="py-1">Product</th>
-                                      <th className="py-1 text-right">Qty</th>
-                                      <th className="py-1 text-right">Selling Price</th>
-                                      <th className="py-1 text-right">Line Total</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-[var(--khata-border)]">
-                                    {tx.items.map((item) => (
-                                      <tr key={item.id}>
-                                        <td className="py-1 font-medium text-[var(--khata-text)]">
-                                          {item.product_name_snapshot}
-                                        </td>
-                                        <td className="py-1 text-right tabular-numbers text-[var(--khata-text-muted)]">
-                                          {formatQuantity(item.quantity)}
-                                        </td>
-                                        <td className="py-1 text-right tabular-numbers text-[var(--khata-text-muted)]">
-                                          {formatCurrency(item.selling_price)}
-                                        </td>
-                                        <td className="py-1 text-right tabular-numbers font-bold text-[var(--khata-text)]">
-                                          {formatCurrency(item.line_total)}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* Payment History & FIFO Allocations */}
-                <div className="space-y-3">
-                  <h4 className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
-                    <Clock className="w-4 h-4 text-[var(--khata-success)]" />
-                    <span>Payment History & FIFO Allocations</span>
-                  </h4>
-
-                  {customerHistory.payments.length === 0 ? (
-                    <p className="text-xs text-[var(--khata-text-muted)] p-4 rounded-xl text-center border border-[var(--khata-border)]">
-                      No payments recorded yet.
-                    </p>
-                  ) : (
-                    <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                      {customerHistory.payments.map((p) => {
-                        const payDate = p.receivedAt || p.received_at || p.payment_date;
-                        return (
-                          <div
-                            key={p.id}
-                            className="p-3 rounded-xl border border-[var(--khata-border)] space-y-1.5"
-                            style={{ backgroundColor: 'var(--khata-surface-raised)' }}
-                          >
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <span className="text-xs font-bold text-[var(--khata-text)]">
-                                  Payment #{p.id} • {payDate}
-                                </span>
-                                {p.note && (
-                                  <span className="text-xs text-[var(--khata-text-muted)] ml-2 italic">
-                                    ({p.note})
+                                  <span className="text-[11px] font-bold text-[var(--khata-text-muted)] uppercase tracking-wider block">
+                                    Purchased Items Snapshot
                                   </span>
-                                )}
-                              </div>
-                              <span className="text-xs font-bold text-[var(--khata-success)] tabular-numbers">
-                                + {formatCurrency(p.amount)}
-                              </span>
+                                  <table className="w-full text-xs text-left border-collapse min-w-[320px]">
+                                    <thead>
+                                      <tr className="text-[var(--khata-text-muted)] border-b border-[var(--khata-border)]">
+                                        <th className="py-1">Product</th>
+                                        <th className="py-1 text-right">Qty</th>
+                                        <th className="py-1 text-right">Selling Price</th>
+                                        <th className="py-1 text-right">Line Total</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-[var(--khata-border)]">
+                                      {tx.items.map((item) => (
+                                        <tr key={item.id}>
+                                          <td className="py-1 font-medium text-[var(--khata-text)]">
+                                            {item.product_name_snapshot}
+                                          </td>
+                                          <td className="py-1 text-right tabular-numbers text-[var(--khata-text-muted)]">
+                                            {formatQuantity(item.quantity)}
+                                          </td>
+                                          <td className="py-1 text-right tabular-numbers text-[var(--khata-text-muted)]">
+                                            {formatCurrency(item.selling_price)}
+                                          </td>
+                                          <td className="py-1 text-right tabular-numbers font-bold text-[var(--khata-text)]">
+                                            {formatCurrency(item.line_total)}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
                             </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
 
-                            {/* Allocation details */}
-                            {p.allocations && p.allocations.length > 0 && (
-                              <div className="pt-1 border-t border-[var(--khata-border)] text-[11px] text-[var(--khata-text-muted)] space-y-0.5">
-                                <span className="font-semibold block">FIFO Allocations:</span>
-                                {p.allocations.map((alloc, aIdx) => {
-                                  const allocTxId = alloc.transactionId || alloc.udhar_transaction_id;
-                                  const allocAmt = alloc.amount || alloc.allocated_amount;
-                                  return (
-                                    <div key={alloc.id || aIdx} className="flex justify-between pl-2">
-                                      <span>Allocated to Tx #{allocTxId}</span>
-                                      <span className="tabular-numbers text-[var(--khata-success)] font-semibold">
-                                        {formatCurrency(allocAmt)}
-                                      </span>
-                                    </div>
-                                  );
-                                })}
+                  {/* Payment History & FIFO Allocations */}
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider flex items-center gap-1.5">
+                      <Clock className="w-4 h-4 text-[var(--khata-success)]" />
+                      <span>Payment History & FIFO Allocations</span>
+                    </h4>
+
+                    {customerHistory.payments.length === 0 ? (
+                      <p className="text-xs text-[var(--khata-text-muted)] p-4 rounded-xl text-center border border-[var(--khata-border)]">
+                        No payments recorded yet.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {customerHistory.payments.map((p) => {
+                          const payDate = p.receivedAt || p.received_at || p.payment_date;
+                          return (
+                            <div
+                              key={p.id}
+                              className="p-3 rounded-xl border border-[var(--khata-border)] space-y-1.5"
+                              style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <span className="text-xs font-bold text-[var(--khata-text)]">
+                                    Payment #{p.id} • {payDate}
+                                  </span>
+                                  {p.note && (
+                                    <span className="text-xs text-[var(--khata-text-muted)] ml-2 italic">
+                                      ({p.note})
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-xs font-bold text-[var(--khata-success)] tabular-numbers">
+                                  + {formatCurrency(p.amount)}
+                                </span>
                               </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+
+                              {/* Allocation details */}
+                              {p.allocations && p.allocations.length > 0 && (
+                                <div className="pt-1 border-t border-[var(--khata-border)] text-[11px] text-[var(--khata-text-muted)] space-y-0.5">
+                                  <span className="font-semibold block">FIFO Allocations:</span>
+                                  {p.allocations.map((alloc, aIdx) => {
+                                    const allocTxId = alloc.transactionId || alloc.udhar_transaction_id;
+                                    const allocAmt = alloc.amount || alloc.allocated_amount;
+                                    return (
+                                      <div key={alloc.id || aIdx} className="flex justify-between pl-2">
+                                        <span>Allocated to Tx #{allocTxId}</span>
+                                        <span className="tabular-numbers text-[var(--khata-success)] font-semibold">
+                                          {formatCurrency(allocAmt)}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* Modal Footer */}
-                <div className="flex justify-end pt-2">
+                {/* Fixed Modal Footer */}
+                <div className="flex justify-end pt-3 border-t border-[var(--khata-border)] flex-shrink-0">
                   <button
                     type="button"
                     onClick={() => setActiveCustomerDetailId(null)}
-                    className="neu-btn-secondary text-xs px-5 py-2 font-bold"
+                    className="neu-btn-secondary text-xs px-5 py-2.5 font-bold min-h-[44px] w-full sm:w-auto"
                   >
                     Close
                   </button>

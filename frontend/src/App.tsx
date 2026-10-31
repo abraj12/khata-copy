@@ -27,10 +27,10 @@ export function KhataDashboard() {
       </main>
 
       <footer
-        className="py-4 border-t border-[var(--khata-border)] text-center text-xs text-[var(--khata-text-muted)]"
+        className="py-4 border-t border-[var(--khata-border)] text-center text-xs font-medium text-[var(--khata-text-muted)] px-4"
         style={{ backgroundColor: 'var(--khata-surface)' }}
       >
-        Khata • Single-Shopkeeper Ledger Book • Algions
+        Designed and managed by Algions AI Labs Pvt. Ltd.
       </footer>
 
       {/* Persistent Appearance & Accessibility Modal */}

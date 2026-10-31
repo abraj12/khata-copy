@@ -167,7 +167,7 @@ export const LoginPage: React.FC = () => {
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   placeholder="98765 43210"
-                  className="neu-input w-full pl-16 pr-4 text-sm font-medium"
+                  className="neu-input neu-input-with-phone-prefix w-full text-sm font-medium"
                 />
               </div>
               <p className="mt-1 text-[11px] text-[var(--khata-text-muted)]">
@@ -197,14 +197,14 @@ export const LoginPage: React.FC = () => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="neu-input w-full pl-10 pr-10 text-sm font-medium"
+                  className="neu-input neu-input-with-leading-icon neu-input-with-trailing-icon w-full text-sm font-medium"
                 />
                 <button
                   type="button"
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
                   disabled={isSubmitting || isLocked}
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] transition"
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center justify-center min-w-[44px] min-h-[44px] text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] transition"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>

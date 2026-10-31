@@ -2,6 +2,75 @@ import Decimal from 'decimal.js';
 
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
 
+export class DecimalValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DecimalValidationError';
+  }
+}
+
+/**
+ * Strict validator and parser for financial numbers.
+ * Rejects non-numeric text, exponential notation (e.g. 1e5), NaN, Infinity, negative (unless allowed),
+ * and precision exceeding max allowed decimal places.
+ */
+export function parseStrictDecimal(
+  value: unknown,
+  options: {
+    allowNegative?: boolean;
+    maxDecimalPlaces?: number;
+    fieldName?: string;
+  } = {}
+): Decimal {
+  const { allowNegative = false, maxDecimalPlaces = 2, fieldName = 'Value' } = options;
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
+    throw new DecimalValidationError(`${fieldName} cannot be empty.`);
+  }
+
+  const str = String(value).trim();
+  // Strictly enforce digit format with optional decimal part (no letters, symbols, scientific notation)
+  const regex = allowNegative ? /^-?\d+(\.\d+)?$/ : /^\d+(\.\d+)?$/;
+  if (!regex.test(str)) {
+    throw new DecimalValidationError(`${fieldName} must be a valid numeric amount (e.g. 150.00).`);
+  }
+
+  const d = new Decimal(str);
+  if (!d.isFinite() || d.isNaN()) {
+    throw new DecimalValidationError(`${fieldName} must be a finite number.`);
+  }
+
+  if (!allowNegative && d.isNegative()) {
+    throw new DecimalValidationError(`${fieldName} cannot be negative.`);
+  }
+
+  if (d.decimalPlaces() > maxDecimalPlaces) {
+    throw new DecimalValidationError(
+      `${fieldName} cannot have more than ${maxDecimalPlaces} decimal places.`
+    );
+  }
+
+  return d;
+}
+
+/**
+ * Returns null if valid, or a descriptive error message if invalid.
+ */
+export function validateStrictDecimal(
+  value: unknown,
+  options: {
+    allowNegative?: boolean;
+    maxDecimalPlaces?: number;
+    fieldName?: string;
+  } = {}
+): string | null {
+  try {
+    parseStrictDecimal(value, options);
+    return null;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
 /**
  * Safely parses any value into a Decimal instance.
  * Defaults to 0 if null, undefined, NaN, or invalid.
@@ -14,8 +83,12 @@ export function safeDecimal(value: unknown): Decimal {
     return value;
   }
   try {
-    const d = new Decimal(String(value).trim());
-    return d.isNaN() ? new Decimal(0) : d;
+    const str = String(value).trim();
+    if (!/^-?\d+(\.\d+)?$/.test(str)) {
+      return new Decimal(0);
+    }
+    const d = new Decimal(str);
+    return d.isNaN() || !d.isFinite() ? new Decimal(0) : d;
   } catch {
     return new Decimal(0);
   }

@@ -368,6 +368,21 @@ input, button, select, textarea, table {
   min-height: 42px;
 }
 
+/* Dedicated icon padding variants that safely override the shorthand */
+.neu-input-with-leading-icon,
+.neu-input-has-icon-left {
+  padding-left: 2.75rem !important; /* 44px: leaves room for 16px icon at left-3.5 */
+}
+
+.neu-input-with-phone-prefix {
+  padding-left: 4.75rem !important; /* 76px: leaves ample room for phone icon + +91 at left-3.5 */
+}
+
+.neu-input-with-trailing-icon,
+.neu-input-has-icon-right {
+  padding-right: 2.75rem !important; /* 44px: leaves room for trailing action buttons */
+}
+
 .neu-input:focus {
   outline: none;
   border-color: var(--khata-accent);

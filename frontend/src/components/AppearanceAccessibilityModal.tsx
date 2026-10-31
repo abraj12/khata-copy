@@ -96,7 +96,7 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
           <button
             ref={closeBtnRef}
             onClick={onClose}
-            className="p-2 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] hover:bg-[var(--khata-surface-inset)] transition-colors"
+            className="p-2 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] hover:bg-[var(--khata-surface-inset)] transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Close Appearance & Accessibility settings"
           >
             <X className="w-5 h-5" />

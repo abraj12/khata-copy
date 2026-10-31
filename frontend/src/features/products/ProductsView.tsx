@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { apiClient } from '../../lib/apiClient.js';
 import { Tag, Plus, Search, Edit2, Archive, AlertTriangle, CheckCircle, X } from 'lucide-react';
-import { formatCurrency, safeDecimal } from '../../lib/formatters.js';
+import { formatCurrency, safeDecimal, parseStrictDecimal } from '../../lib/formatters.js';
 
 interface Product {
   id: number;
@@ -61,12 +61,12 @@ export const ProductsView: React.FC = () => {
   }, []);
 
   const validatePrice = (priceStr: string): boolean => {
-    const trimmed = priceStr.trim();
-    if (!trimmed) return false;
-    // Strict numeric decimal check
-    if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return false;
-    const d = safeDecimal(trimmed);
-    return !d.isNaN() && d.greaterThanOrEqualTo(0);
+    try {
+      const d = parseStrictDecimal(priceStr, { maxDecimalPlaces: 2, fieldName: 'Buying price' });
+      return d.greaterThanOrEqualTo(0);
+    } catch {
+      return false;
+    }
   };
 
   const handleAddProduct = async (e: React.FormEvent) => {
@@ -301,14 +301,14 @@ export const ProductsView: React.FC = () => {
       )}
 
       {/* Inset Search Input */}
-      <div className="relative">
-        <Search className="w-4 h-4 text-[var(--khata-text-muted)] absolute left-3.5 top-3.5" />
+      <div className="relative flex items-center">
+        <Search className="w-4 h-4 text-[var(--khata-text-muted)] absolute left-3.5 pointer-events-none" />
         <input
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search products by name..."
-          className="neu-input w-full pl-10 pr-4 py-3 text-sm font-medium"
+          className="neu-input neu-input-with-leading-icon w-full text-sm font-medium"
         />
       </div>
 
@@ -394,7 +394,7 @@ export const ProductsView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setEditingProduct(null)}
-                className="p-1 text-[var(--khata-text-muted)] hover:text-[var(--khata-text)]"
+                className="p-2 rounded-xl text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] min-h-[44px] min-w-[44px] flex items-center justify-center -mr-1 -mt-1"
                 aria-label="Close"
               >
                 <X className="w-5 h-5" />
@@ -439,14 +439,14 @@ export const ProductsView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setEditingProduct(null)}
-                  className="neu-btn-secondary text-xs px-4 py-2"
+                  className="neu-btn-secondary text-xs px-4 py-2.5 min-h-[44px]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmittingEdit}
-                  className="neu-btn-primary text-xs px-5 py-2"
+                  className="neu-btn-primary text-xs px-5 py-2.5 min-h-[44px] font-bold"
                 >
                   {isSubmittingEdit ? 'Updating...' : 'Update Product'}
                 </button>
@@ -496,7 +496,7 @@ export const ProductsView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setArchivingProduct(null)}
-                className="neu-btn-secondary text-xs px-4 py-2"
+                className="neu-btn-secondary text-xs px-4 py-2.5 min-h-[44px]"
               >
                 Cancel
               </button>
@@ -504,7 +504,7 @@ export const ProductsView: React.FC = () => {
                 type="button"
                 onClick={handleConfirmArchive}
                 disabled={isSubmittingArchive}
-                className="neu-btn-danger text-xs px-5 py-2"
+                className="neu-btn-danger text-xs px-5 py-2.5 min-h-[44px] font-bold"
               >
                 {isSubmittingArchive ? 'Archiving...' : 'Confirm Archive'}
               </button>
