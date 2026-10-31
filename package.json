@@ -18,7 +18,7 @@
     "build": "npm run build:backend && npm run build:frontend",
     "test": "npm test --workspace=backend",
     "test:integration": "npm run test:integration --workspace=backend",
-    "migrate": "npm run migrate --workspace=backend",
+    "migrate": "npm run migrate --workspace=backend --",
     "hash-password": "npm run hash-password --workspace=backend"
   },
   "keywords": [

@@ -1,12 +1,41 @@
 import fs from 'fs';
 import path from 'path';
+import pg from 'pg';
+import dotenv from 'dotenv';
 import { directPool } from '../src/config/database.js';
 
+// Pre-load .env and .env.local from current directory or backend directory
+const envFiles = [
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(process.cwd(), '.env.local'),
+  path.resolve(process.cwd(), 'backend/.env'),
+  path.resolve(process.cwd(), 'backend/.env.local'),
+];
+for (const envFile of envFiles) {
+  if (fs.existsSync(envFile)) {
+    dotenv.config({ path: envFile, override: true });
+  }
+}
+
+const { Pool } = pg;
 const MIGRATION_LOCK_ID = 987654321;
 
+// Allow direct CLI URL argument: npm run migrate -- "postgresql://..."
+const cliUrl = process.argv.slice(2).find((arg) => arg.startsWith('postgres://') || arg.startsWith('postgresql://'));
+const effectiveDbUrl = cliUrl || process.env.DATABASE_URL;
+
+const activePool = effectiveDbUrl
+  ? new Pool({
+      connectionString: effectiveDbUrl,
+      ssl: effectiveDbUrl.includes('localhost') ? false : true,
+      max: 2,
+      connectionTimeoutMillis: 10000,
+    })
+  : directPool;
+
 async function runMigrations() {
-  console.log('[MIGRATION] Connecting via direct DATABASE_URL connection...');
-  const client = await directPool.connect();
+  console.log('[MIGRATION] Connecting to PostgreSQL direct endpoint...');
+  const client = await activePool.connect();
 
   try {
     // 1. Acquire advisory lock to prevent concurrent migrations
@@ -74,7 +103,7 @@ async function runMigrations() {
       // Ignore unlock failure on exit
     }
     client.release();
-    await directPool.end();
+    await activePool.end();
   }
 }
 
