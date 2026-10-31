@@ -38,7 +38,7 @@ export class LoginAttemptStore {
 
   /**
    * Evaluates lockout status for an IP and/or phone identifier.
-   * Checks combined bucket and IP bucket to prevent remote distributed DoS against owner.
+   * Checks combined bucket, IP bucket, and phone bucket.
    */
   public async checkLockout(clientIp: string, normalizedPhone?: string): Promise<LockoutStatus> {
     const ipHash = this.hashIdentifier(clientIp);
@@ -50,19 +50,19 @@ export class LoginAttemptStore {
     const extendedWindowStart = new Date(now - env.LOGIN_EXTENDED_WINDOW_MS);
 
     if (this.forceInMemory || (env.NODE_ENV as string) === 'test') {
-      return this.checkInMemoryLockout(ipHash, combinedHash, now);
+      return this.checkInMemoryLockout(ipHash, phoneHash, combinedHash, now);
     }
 
     try {
       // Query PostgreSQL persistent login_attempts table
-      // We check failures for combined (IP+phone) first, then IP bucket
+      // Checks failures across IP, phone, and combined buckets
       const query = `
         SELECT
           COUNT(*) FILTER (WHERE created_at >= $1) AS short_window_failures,
           COUNT(*) FILTER (WHERE created_at >= $2) AS extended_failures,
           MAX(created_at) AS last_failure_at
         FROM login_attempts
-        WHERE (ip_hash = $3 OR ($4::text IS NOT NULL AND combined_hash = $4))
+        WHERE (ip_hash = $3 OR ($4::text IS NOT NULL AND phone_hash = $4) OR ($5::text IS NOT NULL AND combined_hash = $5))
           AND success = false
           AND created_at >= $2
       `;
@@ -71,6 +71,7 @@ export class LoginAttemptStore {
         shortWindowStart.toISOString(),
         extendedWindowStart.toISOString(),
         ipHash,
+        phoneHash,
         combinedHash,
       ]);
 
@@ -105,8 +106,12 @@ export class LoginAttemptStore {
 
       return { isLocked: false, remainingMs: 0 };
     } catch (err) {
-      console.warn('[LOCKOUT STORE] DB error querying login_attempts, checking in-memory fallback:', (err as Error).message);
-      return this.checkInMemoryLockout(ipHash, combinedHash, now);
+      if (env.NODE_ENV === 'production') {
+        const serviceErr = new Error('Database unavailable for persistent abuse controls.');
+        (serviceErr as unknown as { status: number }).status = 503;
+        throw serviceErr;
+      }
+      return this.checkInMemoryLockout(ipHash, phoneHash, combinedHash, now);
     }
   }
 
@@ -119,7 +124,7 @@ export class LoginAttemptStore {
     const combinedHash = this.hashIdentifier(`${clientIp}_${normalizedPhone}`);
     const now = Date.now();
 
-    // Always keep in-memory sync for test/fallback
+    // Always keep in-memory sync for test
     this.inMemoryAttempts.push({
       ipHash,
       phoneHash,
@@ -137,7 +142,6 @@ export class LoginAttemptStore {
         [ipHash, phoneHash, combinedHash, success]
       );
     } catch (err) {
-      // In tests or if DB is offline, continue safely
       if ((env.NODE_ENV as string) !== 'test') {
         console.error('[LOCKOUT STORE ERROR] Failed to record login attempt to PostgreSQL:', (err as Error).message);
       }
@@ -169,9 +173,18 @@ export class LoginAttemptStore {
     this.inMemoryAttempts = [];
   }
 
-  private checkInMemoryLockout(ipHash: string, combinedHash: string | null, now: number): LockoutStatus {
+  private checkInMemoryLockout(
+    ipHash: string,
+    phoneHash: string | null,
+    combinedHash: string | null,
+    now: number
+  ): LockoutStatus {
     const failures = this.inMemoryAttempts.filter(
-      (a) => !a.success && (a.ipHash === ipHash || (combinedHash && a.combinedHash === combinedHash))
+      (a) =>
+        !a.success &&
+        (a.ipHash === ipHash ||
+          (phoneHash && a.phoneHash === phoneHash) ||
+          (combinedHash && a.combinedHash === combinedHash))
     );
 
     const shortFailures = failures.filter((a) => now - a.createdAt <= env.LOGIN_FAILURE_WINDOW_MS);

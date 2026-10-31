@@ -2,23 +2,68 @@ import fs from 'fs';
 import path from 'path';
 import { directPool } from '../src/config/database.js';
 
+const MIGRATION_LOCK_ID = 987654321;
+
 async function runMigrations() {
   console.log('[MIGRATION] Connecting via direct DATABASE_URL connection...');
-  const migrationPath = path.resolve(process.cwd(), 'migrations', '001_auth_tables.sql');
-  const sql = fs.readFileSync(migrationPath, 'utf-8');
-
   const client = await directPool.connect();
+
   try {
-    console.log('[MIGRATION] Applying 001_auth_tables.sql...');
-    await client.query('BEGIN');
-    await client.query(sql);
-    await client.query('COMMIT');
-    console.log('\x1b[32m[MIGRATION SUCCESS] Session, login_attempts, products, and ledger tables verified!\x1b[0m');
+    // 1. Acquire advisory lock to prevent concurrent migrations
+    console.log('[MIGRATION] Acquiring advisory lock...');
+    await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_ID]);
+
+    // 2. Ensure schema_migrations table exists
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "schema_migrations" (
+        "version" VARCHAR(255) PRIMARY KEY,
+        "applied_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    // 3. Find all .sql migration files in order
+    const migrationsDir = path.resolve(process.cwd(), 'migrations');
+    const files = fs
+      .readdirSync(migrationsDir)
+      .filter((f) => f.endsWith('.sql'))
+      .sort();
+
+    // 4. Fetch already applied versions
+    const appliedRes = await client.query('SELECT version FROM schema_migrations');
+    const appliedSet = new Set(appliedRes.rows.map((r) => r.version));
+
+    for (const file of files) {
+      if (appliedSet.has(file)) {
+        console.log(`[MIGRATION] Skipping already applied: ${file}`);
+        continue;
+      }
+
+      console.log(`[MIGRATION] Applying migration: ${file}...`);
+      const filePath = path.join(migrationsDir, file);
+      const sql = fs.readFileSync(filePath, 'utf-8');
+
+      await client.query('BEGIN');
+      try {
+        await client.query(sql);
+        await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [file]);
+        await client.query('COMMIT');
+        console.log(`\x1b[32m[MIGRATION SUCCESS] Successfully applied ${file}\x1b[0m`);
+      } catch (migrationErr) {
+        await client.query('ROLLBACK');
+        throw migrationErr;
+      }
+    }
+
+    console.log('\x1b[32m[MIGRATION COMPLETE] All schema migrations up to date!\x1b[0m');
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('\x1b[31m[MIGRATION FAILED]\x1b[0m', (err as Error).message);
     process.exit(1);
   } finally {
+    try {
+      await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_ID]);
+    } catch {
+      // Ignore unlock failure on exit
+    }
     client.release();
     await directPool.end();
   }

@@ -1,12 +1,18 @@
+# ==============================================================================
+# RENDER BLUEPRINT DEPLOYMENT SPECIFICATION — KHATA API
+# Cost Safety Note: Explicitly configured with plan 'free' to ensure zero charges.
+# Free instance cold-start: instance spins down after inactivity, resumes on request.
+# ==============================================================================
+
 services:
   - type: web
     name: khata-api
     env: node
-    plan: starter
-    region: ohio
+    plan: free
+    region: singapore
     buildCommand: npm --prefix backend install && npm --prefix backend run build
     startCommand: npm --prefix backend start
-    healthCheckPath: /api/v1/health
+    healthCheckPath: /api/v1/health/live
     envVars:
       - key: NODE_ENV
         value: production

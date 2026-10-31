@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { env, loadAndValidateEnv } from '../src/config/env.js';
+import { appPool } from '../src/config/database.js';
 import { loginAttemptStore } from '../src/modules/auth/loginAttemptStore.js';
 import { authService } from '../src/modules/auth/auth.service.js';
 import { neonRealtimeService } from '../src/modules/realtime/realtime.service.js';
@@ -21,6 +22,9 @@ const app = createApp({ useMemoryStoreInTest: true });
 describe('Khata Owner Authentication & Application Security Test Suite', () => {
   beforeEach(() => {
     loginAttemptStore.resetInMemory();
+    vi.spyOn(appPool, 'query').mockImplementation(async () => {
+      return { rows: [], rowCount: 0 } as any;
+    });
   });
 
   // TEST CASE 1: Correct phone + correct password succeeds

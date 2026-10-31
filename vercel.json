@@ -30,7 +30,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; connect-src 'self' https://api-khata.algions.in wss://ep-shy-mud-94919289.realtime.us-east-2.aws.neon.tech https://*.neon.tech http://localhost:5000 ws://localhost:5000; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:;"
+          "value": "default-src 'self'; connect-src 'self' https://api-khata.algions.in http://localhost:5000 ws://localhost:5000; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:;"
         }
       ]
     }

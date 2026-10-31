@@ -2,8 +2,9 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { z } from 'zod';
 
-// Load .env if present
+// Load .env and .env.local if present
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
 const booleanStringSchema = z
   .union([z.boolean(), z.string()])

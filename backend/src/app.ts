@@ -4,11 +4,12 @@ import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { env } from './config/env.js';
 import { createSessionMiddleware } from './config/session.js';
+import { checkDatabaseReadiness } from './config/database.js';
 import { csrfProtection, isAllowedOrigin } from './middleware/csrf.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
 import { productsRoutes } from './modules/products/products.routes.js';
-import { ledgerRoutes } from './modules/ledger/ledger.routes.js';
+import { khataRoutes } from './modules/khata/khata.routes.js';
 import { realtimeRoutes } from './modules/realtime/realtime.service.js';
 
 export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
@@ -31,9 +32,6 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
       origin: (requestOrigin, callback) => {
         // Allow requests with no origin (e.g. mobile apps or curl) in development/test
         if (!requestOrigin) {
-          if (env.NODE_ENV === 'production') {
-            return callback(null, true);
-          }
           return callback(null, true);
         }
 
@@ -61,7 +59,39 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
   // 6. CSRF and Origin Protection
   app.use(csrfProtection);
 
-  // 7. Health Check
+  // 7. Health & Readiness Probes
+  // Liveness: lightweight process-alive probe (does not wake up sleeping Neon instance)
+  app.get('/api/v1/health/live', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      status: 'alive',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    });
+  });
+
+  // Readiness: verifies database connectivity and dependencies
+  app.get('/api/v1/health/ready', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const dbStatus = await checkDatabaseReadiness();
+
+    if (!dbStatus.isReady && env.NODE_ENV !== 'test') {
+      res.status(503).json({
+        status: 'unready',
+        database: dbStatus,
+        message: 'Database service is currently unavailable.',
+      });
+      return;
+    }
+
+    res.json({
+      status: 'ready',
+      database: dbStatus,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Legacy / backward-compatible health check
   app.get('/api/v1/health', (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.json({
@@ -74,7 +104,8 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
   // 8. Application Routes
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/products', productsRoutes);
-  app.use('/api/v1/ledger', ledgerRoutes);
+  app.use('/api/v1/khata', khataRoutes);
+  app.use('/api/v1/ledger', khataRoutes); // Backward compatibility
   app.use('/api/v1/realtime', realtimeRoutes);
 
   // 9. Centralized Error Handler
