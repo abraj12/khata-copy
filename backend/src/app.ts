@@ -43,8 +43,15 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
       },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Requested-With'],
+      allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'X-CSRF-Token',
+        'X-Requested-With',
+        'Idempotency-Key',
+      ],
       exposedHeaders: ['Set-Cookie'],
+      optionsSuccessStatus: 204,
     })
   );
 
@@ -70,16 +77,21 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
     });
   });
 
-  // Readiness: verifies database connectivity and dependencies
+  // Readiness: verifies database connectivity, schema migrations table, applied migrations, and core tables
   app.get('/api/v1/health/ready', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const dbStatus = await checkDatabaseReadiness();
 
-    if (!dbStatus.isReady && env.NODE_ENV !== 'test') {
+    if (!dbStatus.isReady) {
       res.status(503).json({
         status: 'unready',
-        database: dbStatus,
-        message: 'Database service is currently unavailable.',
+        database: {
+          isReady: false,
+          latencyMs: dbStatus.latencyMs,
+          checks: dbStatus.checks,
+          error: dbStatus.error,
+        },
+        message: 'Database service is unready: missing tables or unapplied migrations.',
       });
       return;
     }

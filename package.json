@@ -7,15 +7,19 @@
     "backend",
     "frontend"
   ],
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
-    "install:all": "npm --prefix backend install && npm --prefix frontend install",
-    "dev:backend": "npm --prefix backend run dev",
-    "dev:frontend": "npm --prefix frontend run dev",
-    "build:backend": "npm --prefix backend run build",
-    "build:frontend": "npm --prefix frontend run build",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "build:backend": "npm run build --workspace=backend",
+    "build:frontend": "npm run build --workspace=frontend",
     "build": "npm run build:backend && npm run build:frontend",
-    "test": "npm --prefix backend test",
-    "hash-password": "npm --prefix backend run hash-password"
+    "test": "npm test --workspace=backend",
+    "test:integration": "npm run test:integration --workspace=backend",
+    "migrate": "npm run migrate --workspace=backend",
+    "hash-password": "npm run hash-password --workspace=backend"
   },
   "keywords": [
     "khata",
@@ -26,9 +30,5 @@
     "express-session"
   ],
   "author": "Algions",
-  "license": "UNLICENSED",
-  "devDependencies": {
-    "@esbuild/win32-x64": "^0.21.5",
-    "pg-mem": "^3.0.14"
-  }
+  "license": "UNLICENSED"
 }

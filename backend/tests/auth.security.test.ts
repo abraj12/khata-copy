@@ -3,9 +3,9 @@ import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { env, loadAndValidateEnv } from '../src/config/env.js';
 import { appPool } from '../src/config/database.js';
-import { loginAttemptStore } from '../src/modules/auth/loginAttemptStore.js';
+import { loginAttemptStore, LoginAttemptStore } from '../src/modules/auth/loginAttemptStore.js';
 import { authService } from '../src/modules/auth/auth.service.js';
-import { neonRealtimeService } from '../src/modules/realtime/realtime.service.js';
+import { realtimeManager } from '../src/modules/realtime/realtime.service.js';
 
 // Configure test credentials
 const TEST_PHONE = '9876543210';
@@ -22,7 +22,37 @@ const app = createApp({ useMemoryStoreInTest: true });
 describe('Khata Owner Authentication & Application Security Test Suite', () => {
   beforeEach(() => {
     loginAttemptStore.resetInMemory();
-    vi.spyOn(appPool, 'query').mockImplementation(async () => {
+    vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
+      const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
+      if (sqlText.includes('information_schema.tables')) {
+        if (sqlText.includes('schema_migrations')) {
+          return { rows: [{ has_table: true }], rowCount: 1 } as any;
+        }
+        return {
+          rows: [
+            { table_name: 'session' },
+            { table_name: 'login_attempts' },
+            { table_name: 'products' },
+            { table_name: 'customers' },
+            { table_name: 'udhar_transactions' },
+            { table_name: 'udhar_items' },
+            { table_name: 'payments' },
+            { table_name: 'payment_allocations' },
+            { table_name: 'idempotency_keys' },
+          ],
+          rowCount: 9,
+        } as any;
+      }
+      if (sqlText.includes('FROM schema_migrations')) {
+        return {
+          rows: [
+            { version: '001_auth_tables.sql' },
+            { version: '002_khata_transactions.sql' },
+            { version: '003_idempotency_and_hardening.sql' },
+          ],
+          rowCount: 3,
+        } as any;
+      }
       return { rows: [], rowCount: 0 } as any;
     });
   });
@@ -438,5 +468,120 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
         SESSION_SECRET: 'super_secret_session_key_at_least_32_characters_long_khata',
       });
     }).toThrow(/SESSION_SECRET must be an explicitly configured/);
+  });
+
+  // TEST CASE 29: CORS OPTIONS preflight request with Idempotency-Key
+  it('29. CORS OPTIONS preflight with Idempotency-Key returns 204, exact origin, credentials, and allowed header', async () => {
+    const res = await request(app)
+      .options('/api/v1/khata/transactions')
+      .set('Origin', 'https://khata.algions.in')
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'content-type,x-csrf-token,idempotency-key');
+
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe('https://khata.algions.in');
+    expect(res.headers['access-control-allow-credentials']).toBe('true');
+    const allowedHeaders = (res.headers['access-control-allow-headers'] || '').toLowerCase();
+    expect(allowedHeaders).toContain('idempotency-key');
+    expect(allowedHeaders).toContain('x-csrf-token');
+  });
+
+  // TEST CASE 30: CORS OPTIONS preflight from unauthorized origin is rejected
+  it('30. CORS preflight request from unauthorized origin does not return allow headers', async () => {
+    const res = await request(app)
+      .options('/api/v1/khata/transactions')
+      .set('Origin', 'https://malicious-phishing-site.com')
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'content-type,idempotency-key');
+
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
+  });
+
+  // TEST CASE 31: Production environment fails closed on insecure cookie configs
+  it('31. Production environment fails closed if SESSION_COOKIE_HTTP_ONLY is false or SameSite is invalid', () => {
+    expect(() => {
+      loadAndValidateEnv({
+        NODE_ENV: 'production',
+        SESSION_COOKIE_SECURE: 'true',
+        SESSION_COOKIE_HTTP_ONLY: 'false',
+        SESSION_SECRET: 'valid_random_secret_with_more_than_32_characters_long',
+        OWNER_PHONE: '9812345678',
+        OWNER_PASSWORD_HASH: '$argon2id$v=19$m=65536,t=3,p=4$realvalidhash00000000000000000000',
+        DATABASE_URL_POOLED: 'postgresql://usr:pwd@ep-prod-pooler.aws.neon.tech/neondb?sslmode=require',
+        DATABASE_URL: 'postgresql://usr:pwd@ep-prod.aws.neon.tech/neondb?sslmode=require',
+      });
+    }).toThrow(/SESSION_COOKIE_HTTP_ONLY must be true/);
+
+    expect(() => {
+      loadAndValidateEnv({
+        NODE_ENV: 'production',
+        SESSION_COOKIE_SECURE: 'true',
+        SESSION_COOKIE_HTTP_ONLY: 'true',
+        SESSION_COOKIE_SAME_SITE: 'none',
+        SESSION_SECRET: 'valid_random_secret_with_more_than_32_characters_long',
+        OWNER_PHONE: '9812345678',
+        OWNER_PASSWORD_HASH: '$argon2id$v=19$m=65536,t=3,p=4$realvalidhash00000000000000000000',
+        DATABASE_URL_POOLED: 'postgresql://usr:pwd@ep-prod-pooler.aws.neon.tech/neondb?sslmode=require',
+        DATABASE_URL: 'postgresql://usr:pwd@ep-prod.aws.neon.tech/neondb?sslmode=require',
+      });
+    }).toThrow(/SESSION_COOKIE_SAME_SITE must be lax or strict/);
+  });
+
+  // TEST CASE 32: Production environment fails closed on missing owner phone
+  it('32. Production environment fails closed on unconfigured or default placeholder OWNER_PHONE', () => {
+    expect(() => {
+      loadAndValidateEnv({
+        NODE_ENV: 'production',
+        SESSION_COOKIE_SECURE: 'true',
+        SESSION_COOKIE_HTTP_ONLY: 'true',
+        SESSION_SECRET: 'valid_random_secret_with_more_than_32_characters_long',
+        OWNER_PHONE: '9876543210', // Default placeholder rejected
+        OWNER_PASSWORD_HASH: '$argon2id$v=19$m=65536,t=3,p=4$realvalidhash00000000000000000000',
+        DATABASE_URL_POOLED: 'postgresql://usr:pwd@ep-prod-pooler.aws.neon.tech/neondb?sslmode=require',
+        DATABASE_URL: 'postgresql://usr:pwd@ep-prod.aws.neon.tech/neondb?sslmode=require',
+      });
+    }).toThrow(/OWNER_PHONE must be explicitly configured/);
+  });
+
+  // TEST CASE 33: Production environment fails closed on non-TLS database URLs
+  it('33. Production environment fails closed if DATABASE_URL lacks TLS sslmode requirement', () => {
+    expect(() => {
+      loadAndValidateEnv({
+        NODE_ENV: 'production',
+        SESSION_COOKIE_SECURE: 'true',
+        SESSION_COOKIE_HTTP_ONLY: 'true',
+        SESSION_SECRET: 'valid_random_secret_with_more_than_32_characters_long',
+        OWNER_PHONE: '9812345678',
+        OWNER_PASSWORD_HASH: '$argon2id$v=19$m=65536,t=3,p=4$realvalidhash00000000000000000000',
+        DATABASE_URL_POOLED: 'postgresql://usr:pwd@ep-prod-pooler.aws.neon.tech/neondb', // Missing ?sslmode=require
+        DATABASE_URL: 'postgresql://usr:pwd@ep-prod.aws.neon.tech/neondb?sslmode=require',
+      });
+    }).toThrow(/DATABASE_URL_POOLED must be explicitly configured with TLS enabled/);
+  });
+
+  // TEST CASE 34: LoginAttemptStore retention cleanup
+  it('34. LoginAttemptStore pruneOldAttempts cleans up expired attempts and retains recent ones', async () => {
+    const store = new LoginAttemptStore(true);
+    const clientIp = '10.20.30.40';
+    const testPhone = '9876500000';
+
+    await store.recordAttempt(clientIp, testPhone, false);
+    const remaining = await store.pruneOldAttempts();
+    expect(remaining).toBeGreaterThanOrEqual(1);
+
+    const status = await store.checkLockout(clientIp, testPhone);
+    expect(status.isLocked).toBe(false);
+  });
+
+  // TEST CASE 35: Readiness probe returns healthy when tables and migrations are present
+  it('35. Readiness probe /api/v1/health/ready checks connection, schema_migrations, and all core tables', async () => {
+    const res = await request(app).get('/api/v1/health/ready');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ready');
+    expect(res.body.database.isReady).toBe(true);
+    expect(res.body.database.checks.connection).toBe(true);
+    expect(res.body.database.checks.schemaMigrationsTable).toBe(true);
+    expect(res.body.database.checks.migrationsApplied.missing.length).toBe(0);
+    expect(res.body.database.checks.coreTables.missing.length).toBe(0);
   });
 });

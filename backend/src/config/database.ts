@@ -28,6 +28,44 @@ directPool.on('error', (err) => {
   console.error('[DB ERROR] Unexpected error on idle client in direct pool:', err.message);
 });
 
+export const EXPECTED_MIGRATIONS = [
+  '001_auth_tables.sql',
+  '002_khata_transactions.sql',
+  '003_idempotency_and_hardening.sql',
+];
+
+export const EXPECTED_CORE_TABLES = [
+  'session',
+  'login_attempts',
+  'products',
+  'customers',
+  'udhar_transactions',
+  'udhar_items',
+  'payments',
+  'payment_allocations',
+  'idempotency_keys',
+];
+
+export interface ReadinessReport {
+  isReady: boolean;
+  latencyMs: number;
+  checks: {
+    connection: boolean;
+    schemaMigrationsTable: boolean;
+    migrationsApplied: {
+      expected: string[];
+      found: string[];
+      missing: string[];
+    };
+    coreTables: {
+      expected: string[];
+      found: string[];
+      missing: string[];
+    };
+  };
+  error?: string;
+}
+
 /**
  * Lightweight database liveness check
  */
@@ -41,16 +79,79 @@ export async function checkDatabaseLiveness(): Promise<boolean> {
 }
 
 /**
- * Comprehensive database readiness check (measures latency and verifies session table)
+ * Comprehensive database readiness check:
+ * 1. Connectivity via application pool
+ * 2. Presence of schema_migrations table
+ * 3. Applied migration versions check
+ * 4. Verification of all 9 core financial/auth tables
  */
-export async function checkDatabaseReadiness(): Promise<{ isReady: boolean; latencyMs: number; error?: string }> {
+export async function checkDatabaseReadiness(): Promise<ReadinessReport> {
   const start = Date.now();
+  const checks: ReadinessReport['checks'] = {
+    connection: false,
+    schemaMigrationsTable: false,
+    migrationsApplied: {
+      expected: [...EXPECTED_MIGRATIONS],
+      found: [],
+      missing: [...EXPECTED_MIGRATIONS],
+    },
+    coreTables: {
+      expected: [...EXPECTED_CORE_TABLES],
+      found: [],
+      missing: [...EXPECTED_CORE_TABLES],
+    },
+  };
+
   try {
+    // 1. Connection check
     await appPool.query('SELECT 1');
-    const latencyMs = Date.now() - start;
-    return { isReady: true, latencyMs };
+    checks.connection = true;
+
+    // 2. Check schema_migrations table
+    const migTableRes = await appPool.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'schema_migrations'
+      ) AS has_table;
+    `);
+
+    const hasMigrationsTable = Boolean(migTableRes.rows[0]?.has_table);
+    checks.schemaMigrationsTable = hasMigrationsTable;
+
+    if (hasMigrationsTable) {
+      const versionsRes = await appPool.query('SELECT version FROM schema_migrations');
+      const foundVersions = versionsRes.rows.map((r: { version: string }) => r.version);
+      checks.migrationsApplied.found = foundVersions;
+      checks.migrationsApplied.missing = EXPECTED_MIGRATIONS.filter((m) => !foundVersions.includes(m));
+    }
+
+    // 3. Check core tables
+    const tablesRes = await appPool.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = ANY($1::text[]);
+    `, [EXPECTED_CORE_TABLES]);
+
+    const foundTables = tablesRes.rows.map((r: { table_name: string }) => r.table_name);
+    checks.coreTables.found = foundTables;
+    checks.coreTables.missing = EXPECTED_CORE_TABLES.filter((t) => !foundTables.includes(t));
+
+    const isReady =
+      checks.connection &&
+      checks.schemaMigrationsTable &&
+      checks.migrationsApplied.missing.length === 0 &&
+      checks.coreTables.missing.length === 0;
+
+    return {
+      isReady,
+      latencyMs: Date.now() - start,
+      checks,
+    };
   } catch (err) {
-    const latencyMs = Date.now() - start;
-    return { isReady: false, latencyMs, error: (err as Error).message };
+    return {
+      isReady: false,
+      latencyMs: Date.now() - start,
+      checks,
+      error: (err as Error).message,
+    };
   }
 }

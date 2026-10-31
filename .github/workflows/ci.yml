@@ -1,0 +1,114 @@
+name: Khata CI Matrix
+
+on:
+  push:
+    branches: [main, 'fix/**', 'feat/**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  # Job 1: Cross-platform matrix (Linux + Windows)
+  matrix-build-test:
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Root Clean Install from Lockfile
+        run: npm ci
+
+      - name: Full Monorepo Build
+        run: npm run build
+
+      - name: Unit Test Suite
+        run: npm test
+
+  # Job 2: Linux frontend-only Vercel-equivalent build
+  vercel-frontend-build:
+    name: Vercel Frontend Build (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Frontend Workspace Clean Install
+        run: npm ci --workspace=frontend --include-workspace-root=false
+
+      - name: Frontend Build
+        run: npm run build --workspace=frontend
+
+      - name: Verify Distribution Assets Exist
+        run: test -f frontend/dist/index.html
+
+  # Job 3: Linux backend workspace build (Render-equivalent)
+  render-backend-build:
+    name: Render Backend Build (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Backend Workspace Clean Install
+        run: npm ci --workspace=backend --include-workspace-root=false
+
+      - name: Backend Build
+        run: npm run build --workspace=backend
+
+  # Job 4: Real PostgreSQL Integration Suite
+  postgres-integration:
+    name: PostgreSQL Integration Tests (Real DB)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: khata_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Monorepo
+        run: npm run build
+
+      - name: Run Real PostgreSQL Integration Tests
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/khata_test
+        run: npm run test:integration

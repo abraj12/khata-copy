@@ -10,8 +10,8 @@ services:
     env: node
     plan: free
     region: singapore
-    buildCommand: npm --prefix backend install && npm --prefix backend run build
-    startCommand: npm --prefix backend start
+    buildCommand: npm ci --workspace=backend --include-workspace-root=false && npm run build --workspace=backend
+    startCommand: npm run start --workspace=backend
     healthCheckPath: /api/v1/health/live
     envVars:
       - key: NODE_ENV
@@ -25,10 +25,6 @@ services:
       - key: DATABASE_URL_POOLED
         sync: false
       - key: DATABASE_URL
-        sync: false
-      - key: NEON_REALTIME_URL
-        sync: false
-      - key: NEON_REALTIME_SECRET
         sync: false
       - key: SESSION_SECRET
         generateValue: true

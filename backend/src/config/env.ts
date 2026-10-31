@@ -126,10 +126,17 @@ export function loadAndValidateEnv(overrides: Partial<Record<string, string | un
     if (!env.SESSION_COOKIE_SECURE) {
       throw new Error('[SECURITY FATAL] In production, SESSION_COOKIE_SECURE must be true.');
     }
+    if (!env.SESSION_COOKIE_HTTP_ONLY) {
+      throw new Error('[SECURITY FATAL] In production, SESSION_COOKIE_HTTP_ONLY must be true.');
+    }
+    if (env.SESSION_COOKIE_SAME_SITE !== 'lax' && env.SESSION_COOKIE_SAME_SITE !== 'strict') {
+      throw new Error('[SECURITY FATAL] In production, SESSION_COOKIE_SAME_SITE must be lax or strict.');
+    }
     if (
       !env.SESSION_SECRET ||
       env.SESSION_SECRET === 'super_secret_session_key_at_least_32_characters_long_khata' ||
       env.SESSION_SECRET.includes('dummy') ||
+      env.SESSION_SECRET.includes('super_secret') ||
       env.SESSION_SECRET.length < 32
     ) {
       throw new Error(
@@ -145,7 +152,8 @@ export function loadAndValidateEnv(overrides: Partial<Record<string, string | un
         '[SECURITY FATAL] In production, OWNER_PASSWORD_HASH must be configured with a real, valid Argon2id hash.'
       );
     }
-    if (!env.OWNER_PHONE || env.OWNER_PHONE === '9876543210' && !process.env.OWNER_PHONE) {
+    const rawOwnerPhone = merged.OWNER_PHONE;
+    if (!rawOwnerPhone || rawOwnerPhone === '9876543210') {
       throw new Error(
         '[SECURITY FATAL] In production, OWNER_PHONE must be explicitly configured with the owner canonical phone number.'
       );

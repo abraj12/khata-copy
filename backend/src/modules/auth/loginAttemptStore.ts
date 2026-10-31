@@ -20,14 +20,20 @@ export class LoginAttemptStore {
   private secretPepper: string;
   private inMemoryAttempts: InMemoryAttempt[] = [];
   private forceInMemory: boolean;
+  private lastCleanupTime = 0;
+  private static readonly CLEANUP_LOCK_ID = 987654322;
+  private static readonly CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
   constructor(forceInMemory = false) {
-    this.secretPepper = env.SESSION_SECRET || 'khata_lockout_pepper_salt_value_123';
+    if (!env.SESSION_SECRET) {
+      throw new Error('SESSION_SECRET is required for LoginAttemptStore hashing');
+    }
+    this.secretPepper = env.SESSION_SECRET;
     this.forceInMemory = forceInMemory;
   }
 
   /**
-   * Hashes an identifier with SHA-256 and a secret pepper to avoid storing raw IPs or phone numbers.
+   * Hashes an identifier with SHA-256 and SESSION_SECRET as pepper to avoid storing raw IPs or phone numbers.
    */
   public hashIdentifier(identifier: string): string {
     return crypto
@@ -48,6 +54,9 @@ export class LoginAttemptStore {
     const now = Date.now();
     const shortWindowStart = new Date(now - env.LOGIN_FAILURE_WINDOW_MS);
     const extendedWindowStart = new Date(now - env.LOGIN_EXTENDED_WINDOW_MS);
+
+    // Opportunistically trigger safe throttled maintenance cleanup
+    void this.maybePruneOldAttempts();
 
     if (this.forceInMemory || (env.NODE_ENV as string) === 'test') {
       return this.checkInMemoryLockout(ipHash, phoneHash, combinedHash, now);
@@ -124,6 +133,9 @@ export class LoginAttemptStore {
     const combinedHash = this.hashIdentifier(`${clientIp}_${normalizedPhone}`);
     const now = Date.now();
 
+    // Opportunistically trigger safe throttled maintenance cleanup
+    void this.maybePruneOldAttempts();
+
     // Only keep in-memory sync for test runner / isolated testing
     if (this.forceInMemory || (env.NODE_ENV as string) === 'test') {
       this.inMemoryAttempts.push({
@@ -155,11 +167,47 @@ export class LoginAttemptStore {
   }
 
   /**
+   * Throttled background maintenance that invokes pruneOldAttempts safely without extra worker processes.
+   */
+  private async maybePruneOldAttempts(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastCleanupTime < LoginAttemptStore.CLEANUP_INTERVAL_MS) {
+      return;
+    }
+    this.lastCleanupTime = now;
+
+    if (this.forceInMemory || (env.NODE_ENV as string) === 'test') {
+      await this.pruneOldAttempts();
+      return;
+    }
+
+    try {
+      const lockRes = await appPool.query(
+        'SELECT pg_try_advisory_lock($1) AS acquired',
+        [LoginAttemptStore.CLEANUP_LOCK_ID]
+      );
+      if (lockRes.rows[0]?.acquired) {
+        try {
+          await this.pruneOldAttempts();
+        } finally {
+          await appPool.query('SELECT pg_advisory_unlock($1)', [LoginAttemptStore.CLEANUP_LOCK_ID]);
+        }
+      }
+    } catch (err) {
+      console.warn('[LOCKOUT MAINTENANCE WARNING] Background login attempt pruning skipped:', (err as Error).message);
+    }
+  }
+
+  /**
    * Safe retention cleanup for login attempt records older than LOGIN_LOG_RETENTION_DAYS.
    */
   public async pruneOldAttempts(): Promise<number> {
     const cutoffDate = new Date(Date.now() - env.LOGIN_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000);
     this.inMemoryAttempts = this.inMemoryAttempts.filter((a) => a.createdAt >= cutoffDate.getTime());
+
+    if (this.forceInMemory || (env.NODE_ENV as string) === 'test') {
+      return this.inMemoryAttempts.length;
+    }
 
     try {
       const res = await appPool.query(
