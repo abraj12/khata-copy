@@ -2,17 +2,26 @@
 
 ## 1. Vercel Frontend Deployment (`https://khata.algions.in`)
 
-### Project Settings
-- **Project Name:** `khata`
+Vercel supports two configuration modes. Both use the committed root lockfile (`package-lock.json`) and enforce the exact same production security headers and CSP.
+
+### Mode A: Subdirectory Import (Default when importing from Vercel UI with `frontend`)
+When importing the repo, Vercel detects Vite inside `frontend/` and defaults **Root Directory** to `frontend`.
+- **Root Directory:** `frontend`
+- **Configuration File:** `frontend/vercel.json` (Auto-detected by Vercel)
+- **Install Command:** `npm ci` (Walks up to root `package-lock.json` and installs deterministically)
+- **Build Command:** `npm run build`
+- **Output Directory:** `dist`
 - **Framework Preset:** Vite
-- **Root Directory:** `./` (Repository root, blank / default)
-  - *Rationale:* Vercel must build from the monorepo root to utilize the root npm workspace lockfile (`package-lock.json`).
 - **Node.js Version:** `22.x`
 
-### Build & Output Settings
+### Mode B: Root Monorepo Import
+- **Root Directory:** `./` (Repository root / blank)
+- **Configuration File:** `vercel.json`
 - **Install Command:** `npm ci --workspace=frontend --include-workspace-root=false`
 - **Build Command:** `npm run build --workspace=frontend`
 - **Output Directory:** `frontend/dist`
+- **Framework Preset:** Vite
+- **Node.js Version:** `22.x`
 
 ### Environment Variables on Vercel
 - `VITE_API_BASE_URL`: `https://api-khata.algions.in` (Public, non-secret API endpoint)
