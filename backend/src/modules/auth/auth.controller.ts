@@ -34,8 +34,11 @@ export class AuthController {
       const { phone, password } = parseResult.data;
       const clientIp = this.getClientIp(req);
 
+      // Pre-normalize phone to canonical 10-digit representation before lockout hashing
+      const normalizedPhone = authService.normalizePhone(phone) || phone.trim();
+
       // 2. Persistent lockout check
-      const lockout = await loginAttemptStore.checkLockout(clientIp, phone);
+      const lockout = await loginAttemptStore.checkLockout(clientIp, normalizedPhone);
       if (lockout.isLocked) {
         res.status(429).json({
           success: false,
@@ -47,11 +50,11 @@ export class AuthController {
       }
 
       // 3. Verify owner credentials (Argon2id + constant-time dummy verification on unknown phone)
-      const { success, normalizedPhone } = await authService.verifyCredentials(phone, password);
+      const { success, normalizedPhone: verifiedPhone } = await authService.verifyCredentials(phone, password);
 
-      if (!success || !normalizedPhone) {
-        // Record failed attempt
-        await loginAttemptStore.recordAttempt(clientIp, normalizedPhone || phone, false);
+      if (!success || !verifiedPhone) {
+        // Record failed attempt using normalized phone
+        await loginAttemptStore.recordAttempt(clientIp, normalizedPhone, false);
 
         // Uniform generic error response (no account enumeration)
         res.status(401).json({
@@ -63,7 +66,7 @@ export class AuthController {
       }
 
       // Record successful attempt
-      await loginAttemptStore.recordAttempt(clientIp, normalizedPhone, true);
+      await loginAttemptStore.recordAttempt(clientIp, verifiedPhone, true);
 
       // 4. Regenerate session to eliminate session fixation
       req.session.regenerate((err) => {
@@ -76,19 +79,17 @@ export class AuthController {
         // 5. Store authenticated owner state in server-side session
         req.session.authenticated = true;
         req.session.role = 'OWNER';
-        req.session.ownerPhone = normalizedPhone;
+        req.session.ownerPhone = verifiedPhone;
         req.session.csrfToken = generateCsrfToken();
-        req.session.loginTime = Date.now();
 
         // 6. Explicitly save session before returning HTTP 200
         req.session.save((saveErr) => {
           if (saveErr) {
-            console.error('[AUTH ERROR] Session save failure:', saveErr);
-            res.status(500).json({ success: false, message: 'Failed to establish session.' });
+            console.error('[AUTH ERROR] Session save error:', saveErr);
+            res.status(500).json({ success: false, message: 'Authentication session storage error.' });
             return;
           }
 
-          // Return minimal JSON, opaque cookie is set by Express session
           res.status(200).json({
             success: true,
             authenticated: true,
@@ -155,6 +156,12 @@ export class AuthController {
     req.session.destroy((err) => {
       if (err) {
         console.error('[AUTH ERROR] Session destroy error:', err);
+        res.status(500).json({
+          success: false,
+          authenticated: true,
+          message: 'Failed to destroy session.',
+        });
+        return;
       }
 
       // Clear cookie with exact matching options

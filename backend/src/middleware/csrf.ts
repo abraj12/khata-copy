@@ -2,11 +2,15 @@ import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { env } from '../config/env.js';
 
-const ALLOWED_ORIGINS = new Set([
+const PRODUCTION_ALLOWED_ORIGINS = new Set([
   env.FRONTEND_URL,
   'https://khata.algions.in',
   'capacitor://localhost',
   'https://localhost',
+]);
+
+const DEV_ALLOWED_ORIGINS = new Set([
+  ...PRODUCTION_ALLOWED_ORIGINS,
   'http://localhost',
   'http://localhost:5173',
   'http://localhost:3000',
@@ -23,22 +27,36 @@ export function generateCsrfToken(): string {
 
 /**
  * Checks whether an origin or referer is allowed.
+ * Strict in production: localhost and dev origins are forbidden.
  */
 export function isAllowedOrigin(originHeader?: string, refererHeader?: string): boolean {
+  const allowedSet = env.NODE_ENV === 'production' ? PRODUCTION_ALLOWED_ORIGINS : DEV_ALLOWED_ORIGINS;
+
   if (originHeader) {
-    return ALLOWED_ORIGINS.has(originHeader);
+    return allowedSet.has(originHeader);
   }
   if (refererHeader) {
     try {
       const url = new URL(refererHeader);
-      return ALLOWED_ORIGINS.has(url.origin);
+      return allowedSet.has(url.origin);
     } catch {
       return false;
     }
   }
-  // If neither origin nor referer is provided (e.g. some native apps or direct server-to-server),
-  // in development/test allow, but in production fail closed on browser state-changing requests
-  return env.NODE_ENV !== 'production';
+  // If neither origin nor referer is provided:
+  // In development/test allow, but in production fail closed on browser state-changing requests
+  return (env.NODE_ENV as string) !== 'production';
+}
+
+/**
+ * Constant-time comparison for CSRF tokens
+ */
+function safeTokenCompare(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
 }
 
 /**
@@ -58,28 +76,38 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
     if (!isAllowedOrigin(origin, referer)) {
       res.status(403).json({
         success: false,
-        message: 'CSRF validation error: Unauthorized request origin.',
+        message: 'Origin or Referer not permitted.',
       });
       return;
     }
+  } else if (env.NODE_ENV === 'production') {
+    // In production, require Origin or Referer on state-changing requests
+    res.status(403).json({
+      success: false,
+      message: 'State-changing requests must supply a valid Origin or Referer header.',
+    });
+    return;
   }
 
-  // 2. Login endpoint (/api/v1/auth/login) is exempt from session CSRF token check
-  // because the session does not exist prior to login. Origin check is already performed above.
-  if (req.path === '/api/v1/auth/login' || req.originalUrl?.includes('/auth/login')) {
+  // 2. CSRF Token verification for session-authenticated state-changing requests
+  // Login endpoint does not require CSRF token since session is not established yet
+  if (req.path === '/api/v1/auth/login' || req.originalUrl === '/api/v1/auth/login') {
     return next();
   }
 
-  // 3. For all other state-changing requests, validate synchronizer token
-  const clientToken = (req.headers['x-csrf-token'] as string) || (req.body?._csrf as string);
-  const sessionToken = req.session?.csrfToken;
+  // If a session exists and has a csrfToken, verify the token
+  if (req.session && req.session.authenticated) {
+    const headerToken = req.headers['x-csrf-token'] as string | undefined;
+    const bodyToken = (req.body && (req.body._csrf || req.body.csrfToken)) as string | undefined;
+    const submittedToken = headerToken || bodyToken;
 
-  if (!clientToken || !sessionToken || clientToken !== sessionToken) {
-    res.status(403).json({
-      success: false,
-      message: 'CSRF validation error: Missing or invalid CSRF token.',
-    });
-    return;
+    if (!submittedToken || !req.session.csrfToken || !safeTokenCompare(submittedToken, req.session.csrfToken)) {
+      res.status(403).json({
+        success: false,
+        message: 'Invalid or missing CSRF token.',
+      });
+      return;
+    }
   }
 
   next();

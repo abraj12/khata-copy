@@ -25,11 +25,13 @@ const createTransactionSchema = z.object({
     .min(1, 'At least one item is required'),
   initialPayment: z.union([z.number(), z.string()]).nullable().optional(),
   note: z.string().nullable().optional(),
+  idempotencyKey: z.string().nullable().optional(),
 });
 
 const recordPaymentSchema = z.object({
   amount: z.union([z.number(), z.string()]),
   note: z.string().nullable().optional(),
+  idempotencyKey: z.string().nullable().optional(),
 });
 
 /**
@@ -93,7 +95,7 @@ router.get('/customers/:customerId', async (req: Request, res: Response, next: N
 });
 
 /**
- * GET /api/v1/khata/customers/:customerId/history - Full transaction & payment history
+ * GET /api/v1/khata/customers/:customerId/history - Complete chronological ledger history
  */
 router.get('/customers/:customerId/history', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -129,9 +131,25 @@ router.post('/transactions', async (req: Request, res: Response, next: NextFunct
       return;
     }
 
-    const result = await khataService.createTransaction(parsed.data);
+    const idempotencyKey =
+      (req.headers['idempotency-key'] as string) || parsed.data.idempotencyKey || null;
+
+    const result = await khataService.createTransaction({
+      ...parsed.data,
+      idempotencyKey,
+    });
     res.status(201).json(result);
-  } catch (err) {
+  } catch (err: unknown) {
+    const errorObj = err as { status?: number; code?: string; candidates?: unknown[]; message?: string };
+    if (errorObj.status) {
+      res.status(errorObj.status).json({
+        success: false,
+        code: errorObj.code,
+        message: errorObj.message,
+        candidates: errorObj.candidates,
+      });
+      return;
+    }
     next(err);
   }
 });
@@ -156,9 +174,26 @@ router.post('/customers/:customerId/payments', async (req: Request, res: Respons
       return;
     }
 
-    const result = await khataService.recordPayment(customerId, parsed.data.amount, parsed.data.note);
+    const idempotencyKey =
+      (req.headers['idempotency-key'] as string) || parsed.data.idempotencyKey || null;
+
+    const result = await khataService.recordPayment(
+      customerId,
+      parsed.data.amount,
+      parsed.data.note,
+      idempotencyKey
+    );
     res.status(201).json(result);
-  } catch (err) {
+  } catch (err: unknown) {
+    const errorObj = err as { status?: number; code?: string; message?: string };
+    if (errorObj.status) {
+      res.status(errorObj.status).json({
+        success: false,
+        code: errorObj.code,
+        message: errorObj.message,
+      });
+      return;
+    }
     next(err);
   }
 });

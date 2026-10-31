@@ -1,5 +1,9 @@
+import crypto from 'crypto';
+import { Decimal } from 'decimal.js';
 import { appPool } from '../../config/database.js';
-import { authService } from '../auth/auth.service.js';
+
+// Configure Decimal globally for money arithmetic
+Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
 
 export interface CustomerSummaryItem {
   id: number;
@@ -8,7 +12,7 @@ export interface CustomerSummaryItem {
   totalUdhar: string;
   totalReceived: string;
   outstanding: string;
-  lastActivity: string | null;
+  lastActivity?: string;
 }
 
 export interface KhataOverviewSummary {
@@ -17,7 +21,7 @@ export interface KhataOverviewSummary {
   totalReceived: string;
 }
 
-export interface UdharItemInput {
+export interface CreateTransactionItemInput {
   productId: number;
   quantity: number | string;
   sellingPrice: number | string;
@@ -29,43 +33,88 @@ export interface CreateTransactionInput {
     name: string;
     phone?: string | null;
   };
-  items: UdharItemInput[];
+  items: CreateTransactionItemInput[];
   initialPayment?: number | string | null;
   note?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export class KhataService {
   /**
-   * Normalizes customer Indian phone number to canonical +91XXXXXXXXXX format
+   * Canonical Unicode and whitespace normalization for customer names
    */
-  public normalizeCustomerPhone(rawPhone?: string | null): string | null {
-    if (!rawPhone || !rawPhone.trim()) return null;
-    const digits10 = authService.normalizePhone(rawPhone);
-    if (!digits10) {
-      throw new Error('Invalid Indian mobile number. Enter a valid 10-digit number or +91 format.');
+  public normalizeName(name: string): string {
+    return name
+      .normalize('NFKC')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLowerCase();
+  }
+
+  /**
+   * Normalizes an Indian customer phone number to canonical +91XXXXXXXXXX
+   */
+  public normalizeCustomerPhone(phone?: string | null): string | null {
+    if (!phone || typeof phone !== 'string') return null;
+    let cleaned = phone.replace(/[\s\-()]/g, '');
+    if (cleaned.startsWith('+91')) {
+      cleaned = cleaned.slice(3);
+    } else if (cleaned.startsWith('91') && cleaned.length === 12) {
+      cleaned = cleaned.slice(2);
+    } else if (cleaned.startsWith('0') && cleaned.length === 11) {
+      cleaned = cleaned.slice(1);
     }
-    return `+91${digits10}`;
+
+    if (/^[6-9]\d{9}$/.test(cleaned)) {
+      return `+91${cleaned}`;
+    }
+    return null;
+  }
+
+  /**
+   * Computes SHA-256 hash for idempotency payload comparison
+   */
+  private hashPayload(payload: unknown): string {
+    return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
   }
 
   /**
    * Dashboard Global Overview Summary
+   * Uses separate aggregate CTEs to prevent fan-out / inflated totals
    */
   public async getSummary(): Promise<KhataOverviewSummary> {
     const query = `
+      WITH transaction_totals AS (
+        SELECT
+          COUNT(DISTINCT customer_id)::bigint AS total_customers,
+          COALESCE(SUM(total_amount), 0)::numeric AS total_udhar
+        FROM udhar_transactions
+      ),
+      allocation_totals AS (
+        SELECT COALESCE(SUM(amount), 0)::numeric AS total_allocated
+        FROM payment_allocations
+      ),
+      payment_totals AS (
+        SELECT COALESCE(SUM(amount), 0)::numeric AS total_received
+        FROM payments
+      )
       SELECT
-        COUNT(DISTINCT c.id) FILTER (WHERE t.id IS NOT NULL) AS total_customers,
-        COALESCE(SUM(t.total_amount), 0) - COALESCE(SUM(pa.amount), 0) AS total_outstanding,
-        COALESCE((SELECT SUM(amount) FROM payments), 0) AS total_received
-      FROM customers c
-      INNER JOIN udhar_transactions t ON t.customer_id = c.id
-      LEFT JOIN payment_allocations pa ON pa.transaction_id = t.id
+        transaction_totals.total_customers,
+        GREATEST(
+          transaction_totals.total_udhar - allocation_totals.total_allocated,
+          0
+        ) AS total_outstanding,
+        payment_totals.total_received
+      FROM transaction_totals
+      CROSS JOIN allocation_totals
+      CROSS JOIN payment_totals;
     `;
 
     const result = await appPool.query(query);
     const row = result.rows[0];
 
-    const outstanding = Math.max(0, parseFloat(row?.total_outstanding || '0')).toFixed(2);
-    const received = parseFloat(row?.total_received || '0').toFixed(2);
+    const outstanding = new Decimal(row?.total_outstanding || '0').toFixed(2);
+    const received = new Decimal(row?.total_received || '0').toFixed(2);
     const totalCustomers = parseInt(row?.total_customers || '0', 10);
 
     return {
@@ -76,23 +125,45 @@ export class KhataService {
   }
 
   /**
-   * List of customers with lifetime Udhar, received payments, and current balance
+   * Searchable Customer List with independent pre-aggregated totals
    */
   public async listCustomers(search?: string): Promise<CustomerSummaryItem[]> {
     let sql = `
+      WITH customer_tx AS (
+        SELECT
+          customer_id,
+          COALESCE(SUM(total_amount), 0)::numeric AS total_udhar,
+          MAX(created_at) AS last_activity
+        FROM udhar_transactions
+        GROUP BY customer_id
+      ),
+      customer_alloc AS (
+        SELECT
+          t.customer_id,
+          COALESCE(SUM(pa.amount), 0)::numeric AS total_allocated
+        FROM payment_allocations pa
+        JOIN udhar_transactions t ON t.id = pa.transaction_id
+        GROUP BY t.customer_id
+      ),
+      customer_pay AS (
+        SELECT
+          customer_id,
+          COALESCE(SUM(amount), 0)::numeric AS total_received
+        FROM payments
+        GROUP BY customer_id
+      )
       SELECT
         c.id,
         c.name,
         c.phone,
-        COALESCE(SUM(t.total_amount), 0) AS total_udhar,
-        COALESCE((
-          SELECT SUM(p.amount)
-          FROM payments p
-          WHERE p.customer_id = c.id
-        ), 0) AS total_received,
-        MAX(t.created_at) AS last_activity
+        COALESCE(tx.total_udhar, 0)::numeric AS total_udhar,
+        COALESCE(pay.total_received, 0)::numeric AS total_received,
+        GREATEST(COALESCE(tx.total_udhar, 0) - COALESCE(alloc.total_allocated, 0), 0)::numeric AS outstanding,
+        tx.last_activity
       FROM customers c
-      INNER JOIN udhar_transactions t ON t.customer_id = c.id
+      INNER JOIN customer_tx tx ON tx.customer_id = c.id
+      LEFT JOIN customer_alloc alloc ON alloc.customer_id = c.id
+      LEFT JOIN customer_pay pay ON pay.customer_id = c.id
     `;
 
     const params: unknown[] = [];
@@ -101,24 +172,21 @@ export class KhataService {
       sql += ` WHERE (c.normalized_name ILIKE $1 OR c.phone ILIKE $1) `;
     }
 
-    sql += `
-      GROUP BY c.id, c.name, c.phone
-      ORDER BY last_activity DESC NULLS LAST, c.name ASC
-    `;
+    sql += ` ORDER BY tx.last_activity DESC NULLS LAST, c.name ASC `;
 
     const result = await appPool.query(sql, params);
 
     return result.rows.map((row) => {
-      const udhar = parseFloat(row.total_udhar || '0');
-      const received = parseFloat(row.total_received || '0');
-      const outstanding = Math.max(0, udhar - received).toFixed(2);
+      const udhar = new Decimal(row.total_udhar || '0').toFixed(2);
+      const received = new Decimal(row.total_received || '0').toFixed(2);
+      const outstanding = new Decimal(row.outstanding || '0').toFixed(2);
 
       return {
         id: parseInt(row.id, 10),
         name: row.name,
         phone: row.phone,
-        totalUdhar: udhar.toFixed(2),
-        totalReceived: received.toFixed(2),
+        totalUdhar: udhar,
+        totalReceived: received,
         outstanding,
         lastActivity: row.last_activity,
       };
@@ -130,37 +198,61 @@ export class KhataService {
    */
   public async getCustomerDetail(customerId: number): Promise<CustomerSummaryItem | null> {
     const query = `
+      WITH customer_tx AS (
+        SELECT
+          customer_id,
+          COALESCE(SUM(total_amount), 0)::numeric AS total_udhar,
+          MAX(created_at) AS last_activity
+        FROM udhar_transactions
+        WHERE customer_id = $1
+        GROUP BY customer_id
+      ),
+      customer_alloc AS (
+        SELECT
+          t.customer_id,
+          COALESCE(SUM(pa.amount), 0)::numeric AS total_allocated
+        FROM payment_allocations pa
+        JOIN udhar_transactions t ON t.id = pa.transaction_id
+        WHERE t.customer_id = $1
+        GROUP BY t.customer_id
+      ),
+      customer_pay AS (
+        SELECT
+          customer_id,
+          COALESCE(SUM(amount), 0)::numeric AS total_received
+        FROM payments
+        WHERE customer_id = $1
+        GROUP BY customer_id
+      )
       SELECT
         c.id,
         c.name,
         c.phone,
-        COALESCE(SUM(t.total_amount), 0) AS total_udhar,
-        COALESCE((
-          SELECT SUM(p.amount)
-          FROM payments p
-          WHERE p.customer_id = c.id
-        ), 0) AS total_received,
-        MAX(t.created_at) AS last_activity
+        COALESCE(tx.total_udhar, 0)::numeric AS total_udhar,
+        COALESCE(pay.total_received, 0)::numeric AS total_received,
+        GREATEST(COALESCE(tx.total_udhar, 0) - COALESCE(alloc.total_allocated, 0), 0)::numeric AS outstanding,
+        tx.last_activity
       FROM customers c
-      LEFT JOIN udhar_transactions t ON t.customer_id = c.id
+      LEFT JOIN customer_tx tx ON tx.customer_id = c.id
+      LEFT JOIN customer_alloc alloc ON alloc.customer_id = c.id
+      LEFT JOIN customer_pay pay ON pay.customer_id = c.id
       WHERE c.id = $1
-      GROUP BY c.id, c.name, c.phone
     `;
 
     const result = await appPool.query(query, [customerId]);
     if (result.rows.length === 0) return null;
 
     const row = result.rows[0];
-    const udhar = parseFloat(row.total_udhar || '0');
-    const received = parseFloat(row.total_received || '0');
-    const outstanding = Math.max(0, udhar - received).toFixed(2);
+    const udhar = new Decimal(row.total_udhar || '0').toFixed(2);
+    const received = new Decimal(row.total_received || '0').toFixed(2);
+    const outstanding = new Decimal(row.outstanding || '0').toFixed(2);
 
     return {
       id: parseInt(row.id, 10),
       name: row.name,
       phone: row.phone,
-      totalUdhar: udhar.toFixed(2),
-      totalReceived: received.toFixed(2),
+      totalUdhar: udhar,
+      totalReceived: received,
       outstanding,
       lastActivity: row.last_activity,
     };
@@ -173,7 +265,7 @@ export class KhataService {
     const customer = await this.getCustomerDetail(customerId);
     if (!customer) return null;
 
-    // Fetch transactions with line items
+    // Fetch transactions with allocated payments
     const txQuery = `
       SELECT
         t.id,
@@ -186,12 +278,12 @@ export class KhataService {
       LEFT JOIN payment_allocations pa ON pa.transaction_id = t.id
       WHERE t.customer_id = $1
       GROUP BY t.id, t.transaction_date, t.total_amount, t.note, t.created_at
-      ORDER BY t.transaction_date DESC, t.created_at DESC
+      ORDER BY t.transaction_date DESC, t.created_at DESC, t.id DESC
     `;
     const txRes = await appPool.query(txQuery, [customerId]);
 
     const txIds = txRes.rows.map((r) => r.id);
-    let itemsByTxId: Record<string, unknown[]> = {};
+    const itemsByTxId: Record<string, unknown[]> = {};
 
     if (txIds.length > 0) {
       const itemsRes = await appPool.query(
@@ -212,15 +304,16 @@ export class KhataService {
     }
 
     const transactions = txRes.rows.map((t) => {
-      const total = parseFloat(t.total_amount);
-      const paid = parseFloat(t.allocated_payment);
+      const total = new Decimal(t.total_amount);
+      const paid = new Decimal(t.allocated_payment);
+      const remaining = Decimal.max(0, total.minus(paid));
       return {
         id: parseInt(t.id, 10),
         transactionDate: t.transaction_date,
         totalAmount: total.toFixed(2),
         allocatedPayment: paid.toFixed(2),
-        outstanding: Math.max(0, total - paid).toFixed(2),
-        isSettled: total - paid <= 0.001,
+        outstanding: remaining.toFixed(2),
+        isSettled: remaining.isZero(),
         note: t.note,
         createdAt: t.created_at,
         items: itemsByTxId[t.id.toString()] || [],
@@ -243,13 +336,13 @@ export class KhataService {
        LEFT JOIN payment_allocations pa ON pa.payment_id = p.id
        WHERE p.customer_id = $1
        GROUP BY p.id, p.amount, p.received_at, p.note
-       ORDER BY p.received_at DESC`,
+       ORDER BY p.received_at DESC, p.id DESC`,
       [customerId]
     );
 
     const payments = paymentsRes.rows.map((p) => ({
       id: parseInt(p.id, 10),
-      amount: parseFloat(p.amount).toFixed(2),
+      amount: new Decimal(p.amount).toFixed(2),
       receivedAt: p.received_at,
       note: p.note,
       allocations: p.allocations || [],
@@ -264,6 +357,7 @@ export class KhataService {
 
   /**
    * Creates a new Udhar Transaction with line items and optional initial payment atomically
+   * Supports Idempotency-Key and safe customer resolution
    */
   public async createTransaction(input: CreateTransactionInput) {
     if (!input.items || input.items.length === 0) {
@@ -274,30 +368,63 @@ export class KhataService {
     try {
       await client.query('BEGIN');
 
-      // 1. Resolve Customer
+      // Idempotency check
+      if (input.idempotencyKey) {
+        const idempRes = await client.query(
+          'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
+          [input.idempotencyKey]
+        );
+        if (idempRes.rows.length > 0) {
+          const row = idempRes.rows[0];
+          const currentHash = this.hashPayload({
+            customer: input.customer,
+            items: input.items,
+            initialPayment: input.initialPayment,
+            note: input.note,
+          });
+          if (row.request_hash === currentHash) {
+            await client.query('COMMIT');
+            return row.response_body;
+          } else {
+            const conflictErr = new Error('Idempotency key reused with different request payload.');
+            (conflictErr as unknown as { status: number }).status = 409;
+            throw conflictErr;
+          }
+        }
+      }
+
+      // 1. Resolve Customer safely
       let customerId: number;
       const rawName = input.customer.name.trim();
       if (!rawName) throw new Error('Customer name is required.');
 
-      const normName = rawName.toLowerCase();
+      const normName = this.normalizeName(rawName);
       const normPhone = this.normalizeCustomerPhone(input.customer.phone);
 
       if (input.customer.id) {
         // Explicitly selected customer
         const custRes = await client.query(
-          'SELECT id, name, phone FROM customers WHERE id = $1 FOR UPDATE',
+          'SELECT id, name, phone, normalized_phone FROM customers WHERE id = $1 FOR UPDATE',
           [input.customer.id]
         );
         if (custRes.rows.length === 0) {
           throw new Error('Selected customer not found.');
         }
-        customerId = parseInt(custRes.rows[0].id, 10);
+        const existing = custRes.rows[0];
+        if (normPhone && existing.normalized_phone && existing.normalized_phone !== normPhone) {
+          const conflictErr = new Error(
+            `Customer #${existing.id} already has phone ${existing.phone}. Cannot overwrite with ${input.customer.phone}.`
+          );
+          (conflictErr as unknown as { status: number }).status = 409;
+          throw conflictErr;
+        }
+        customerId = parseInt(existing.id, 10);
       } else {
-        // Customer resolution by phone or exact name
+        // Customer resolution by phone or exact normalized name
         let matchedCustomer = null;
         if (normPhone) {
           const phoneRes = await client.query(
-            'SELECT id, name, phone FROM customers WHERE normalized_phone = $1 FOR UPDATE',
+            'SELECT id, name, phone, normalized_name FROM customers WHERE normalized_phone = $1 FOR UPDATE',
             [normPhone]
           );
           if (phoneRes.rows.length > 0) {
@@ -307,8 +434,20 @@ export class KhataService {
 
         if (matchedCustomer) {
           customerId = parseInt(matchedCustomer.id, 10);
-        } else {
-          // Create new customer
+        } else if (normPhone) {
+          // Phone provided but no phone match. Check if name matches someone with another phone
+          const nameMatches = await client.query(
+            'SELECT id, name, phone FROM customers WHERE normalized_name = $1 FOR UPDATE',
+            [normName]
+          );
+          if (nameMatches.rows.length > 0 && nameMatches.rows.some((c) => c.phone !== null)) {
+            const conflictErr = new Error(
+              `A customer named "${rawName}" already exists with a different phone number. Please select the customer explicitly or verify identity.`
+            );
+            (conflictErr as unknown as { status: number }).status = 409;
+            throw conflictErr;
+          }
+
           const newCust = await client.query(
             `INSERT INTO customers (name, normalized_name, phone, normalized_phone, created_at, updated_at)
              VALUES ($1, $2, $3, $4, NOW(), NOW())
@@ -316,30 +455,58 @@ export class KhataService {
             [rawName, normName, input.customer.phone ? input.customer.phone.trim() : null, normPhone]
           );
           customerId = parseInt(newCust.rows[0].id, 10);
+        } else {
+          // No phone provided. Search by exact normalized name
+          const nameMatches = await client.query(
+            'SELECT id, name, phone FROM customers WHERE normalized_name = $1 FOR UPDATE',
+            [normName]
+          );
+          if (nameMatches.rows.length === 1) {
+            // Exactly one match: safely reuse
+            customerId = parseInt(nameMatches.rows[0].id, 10);
+          } else if (nameMatches.rows.length > 1) {
+            // Ambiguous matches: reject with 409 AMBIGUOUS_CUSTOMER_MATCH
+            const conflictErr = new Error(
+              `Multiple customers found matching "${rawName}". Please specify customer ID or phone.`
+            );
+            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).status = 409;
+            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).code = 'AMBIGUOUS_CUSTOMER_MATCH';
+            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).candidates = nameMatches.rows;
+            throw conflictErr;
+          } else {
+            // 0 matches: create new customer
+            const newCust = await client.query(
+              `INSERT INTO customers (name, normalized_name, phone, normalized_phone, created_at, updated_at)
+               VALUES ($1, $2, NULL, NULL, NOW(), NOW())
+               RETURNING id`,
+              [rawName, normName]
+            );
+            customerId = parseInt(newCust.rows[0].id, 10);
+          }
         }
       }
 
-      // 2. Validate Items & Snapshot Products from DB
+      // 2. Validate Items & Snapshot Products from DB using Decimal Arithmetic
       const verifiedItems: Array<{
         productId: number;
         nameSnapshot: string;
         buyingPriceSnapshot: string;
-        quantity: number;
-        sellingPrice: number;
-        lineTotal: number;
+        quantity: string;
+        sellingPrice: string;
+        lineTotal: string;
       }> = [];
 
-      let serverComputedTotal = 0;
+      let serverComputedTotal = new Decimal(0);
 
       for (const item of input.items) {
         const prodId = Number(item.productId);
-        const qty = Number(item.quantity);
-        const sellPrice = Number(item.sellingPrice);
+        const qtyDec = new Decimal(item.quantity);
+        const sellPriceDec = new Decimal(item.sellingPrice);
 
-        if (isNaN(qty) || qty <= 0) {
+        if (qtyDec.isNaN() || qtyDec.lessThanOrEqualTo(0)) {
           throw new Error(`Quantity for product ID ${prodId} must be greater than zero.`);
         }
-        if (isNaN(sellPrice) || sellPrice < 0) {
+        if (sellPriceDec.isNaN() || sellPriceDec.lessThan(0)) {
           throw new Error(`Selling price for product ID ${prodId} must be non-negative.`);
         }
 
@@ -357,20 +524,20 @@ export class KhataService {
           throw new Error(`Product "${product.name}" is archived and cannot be selected for new Udhar.`);
         }
 
-        const lineTotal = Math.round(qty * sellPrice * 100) / 100;
-        serverComputedTotal = Math.round((serverComputedTotal + lineTotal) * 100) / 100;
+        const lineTotalDec = qtyDec.times(sellPriceDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+        serverComputedTotal = serverComputedTotal.plus(lineTotalDec);
 
         verifiedItems.push({
           productId: prodId,
           nameSnapshot: product.name,
-          buyingPriceSnapshot: product.buying_price,
-          quantity: qty,
-          sellingPrice: sellPrice,
-          lineTotal,
+          buyingPriceSnapshot: new Decimal(product.buying_price).toFixed(2),
+          quantity: qtyDec.toFixed(3),
+          sellingPrice: sellPriceDec.toFixed(2),
+          lineTotal: lineTotalDec.toFixed(2),
         });
       }
 
-      if (serverComputedTotal <= 0) {
+      if (serverComputedTotal.lessThanOrEqualTo(0)) {
         throw new Error('Transaction total must be greater than zero.');
       }
 
@@ -395,8 +562,8 @@ export class KhataService {
             item.nameSnapshot,
             item.buyingPriceSnapshot,
             item.quantity,
-            item.sellingPrice.toFixed(2),
-            item.lineTotal.toFixed(2),
+            item.sellingPrice,
+            item.lineTotal,
           ]
         );
       }
@@ -404,39 +571,39 @@ export class KhataService {
       // 5. Initial Payment Handling (if provided)
       let initialPaymentRecorded = '0.00';
       if (input.initialPayment !== undefined && input.initialPayment !== null && input.initialPayment !== '') {
-        const initPay = Number(input.initialPayment);
-        if (isNaN(initPay) || initPay < 0) {
+        const initPayDec = new Decimal(input.initialPayment).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+        if (initPayDec.isNaN() || initPayDec.lessThan(0)) {
           throw new Error('Initial payment must be a valid non-negative number.');
         }
 
-        if (initPay > serverComputedTotal) {
-          throw new Error(`Initial payment (₹${initPay.toFixed(2)}) cannot exceed transaction total (₹${serverComputedTotal.toFixed(2)}).`);
+        if (initPayDec.greaterThan(serverComputedTotal)) {
+          throw new Error(
+            `Initial payment (₹${initPayDec.toFixed(2)}) cannot exceed transaction total (₹${serverComputedTotal.toFixed(2)}).`
+          );
         }
 
-        if (initPay > 0) {
+        if (initPayDec.greaterThan(0)) {
           const payRes = await client.query(
             `INSERT INTO payments (customer_id, amount, received_at, note)
              VALUES ($1, $2, NOW(), $3)
              RETURNING id, amount`,
-            [customerId, initPay.toFixed(2), 'Initial payment at Udhar creation']
+            [customerId, initPayDec.toFixed(2), 'Initial payment at Udhar creation']
           );
           const paymentId = parseInt(payRes.rows[0].id, 10);
 
           await client.query(
             `INSERT INTO payment_allocations (payment_id, transaction_id, amount, created_at)
              VALUES ($1, $2, $3, NOW())`,
-            [paymentId, transactionId, initPay.toFixed(2)]
+            [paymentId, transactionId, initPayDec.toFixed(2)]
           );
 
-          initialPaymentRecorded = initPay.toFixed(2);
+          initialPaymentRecorded = initPayDec.toFixed(2);
         }
       }
 
-      await client.query('COMMIT');
+      const remainingDue = serverComputedTotal.minus(new Decimal(initialPaymentRecorded)).toFixed(2);
 
-      const remainingDue = (serverComputedTotal - parseFloat(initialPaymentRecorded)).toFixed(2);
-
-      return {
+      const responsePayload = {
         success: true,
         transactionId,
         customerId,
@@ -444,6 +611,24 @@ export class KhataService {
         initialPayment: initialPaymentRecorded,
         remainingDue,
       };
+
+      // Save idempotency key if provided
+      if (input.idempotencyKey) {
+        const currentHash = this.hashPayload({
+          customer: input.customer,
+          items: input.items,
+          initialPayment: input.initialPayment,
+          note: input.note,
+        });
+        await client.query(
+          `INSERT INTO idempotency_keys (key, action, request_hash, response_status, response_body, created_at)
+           VALUES ($1, $2, $3, $4, $5, NOW())`,
+          [input.idempotencyKey, 'CREATE_TRANSACTION', currentHash, 201, JSON.stringify(responsePayload)]
+        );
+      }
+
+      await client.query('COMMIT');
+      return responsePayload;
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -454,20 +639,44 @@ export class KhataService {
 
   /**
    * Records a Customer Payment and allocates it using strict FIFO order to oldest outstanding transactions
+   * Uses exact Decimal arithmetic and idempotency protection
    */
-  public async recordPayment(customerId: number, rawAmount: number | string, note?: string | null) {
-    const payAmount = Number(rawAmount);
-    if (isNaN(payAmount) || payAmount <= 0) {
+  public async recordPayment(
+    customerId: number,
+    rawAmount: number | string,
+    note?: string | null,
+    idempotencyKey?: string | null
+  ) {
+    const payDec = new Decimal(rawAmount).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    if (payDec.isNaN() || payDec.lessThanOrEqualTo(0)) {
       throw new Error('Payment amount must be greater than zero.');
     }
-
-    const roundedPayment = Math.round(payAmount * 100) / 100;
 
     const client = await appPool.connect();
     try {
       await client.query('BEGIN');
 
-      // 1. Lock customer row FOR UPDATE to prevent concurrent payment races
+      // Idempotency check
+      if (idempotencyKey) {
+        const idempRes = await client.query(
+          'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
+          [idempotencyKey]
+        );
+        if (idempRes.rows.length > 0) {
+          const row = idempRes.rows[0];
+          const currentHash = this.hashPayload({ customerId, amount: payDec.toFixed(2), note: note || null });
+          if (row.request_hash === currentHash) {
+            await client.query('COMMIT');
+            return row.response_body;
+          } else {
+            const conflictErr = new Error('Idempotency key reused with different request payload.');
+            (conflictErr as unknown as { status: number }).status = 409;
+            throw conflictErr;
+          }
+        }
+      }
+
+      // 1. Lock customer row FOR UPDATE
       const custRes = await client.query(
         'SELECT id, name FROM customers WHERE id = $1 FOR UPDATE',
         [customerId]
@@ -476,22 +685,25 @@ export class KhataService {
         throw new Error('Customer not found.');
       }
 
-      // 2. Compute current total outstanding for customer
+      // 2. Compute current total outstanding for customer using independent aggregates
       const balanceRes = await client.query(
         `SELECT
-          COALESCE(SUM(t.total_amount), 0) - COALESCE(
-            (SELECT SUM(amount) FROM payments WHERE customer_id = $1), 0
-          ) AS outstanding
-         FROM udhar_transactions t
-         WHERE t.customer_id = $1`,
+          COALESCE(
+            (SELECT SUM(total_amount) FROM udhar_transactions WHERE customer_id = $1), 0
+          )::numeric AS total_udhar,
+          COALESCE(
+            (SELECT SUM(pa.amount) FROM payment_allocations pa JOIN udhar_transactions t ON t.id = pa.transaction_id WHERE t.customer_id = $1), 0
+          )::numeric AS total_allocated`,
         [customerId]
       );
 
-      const currentOutstanding = Math.max(0, parseFloat(balanceRes.rows[0]?.outstanding || '0'));
+      const totalUdharDec = new Decimal(balanceRes.rows[0]?.total_udhar || '0');
+      const totalAllocatedDec = new Decimal(balanceRes.rows[0]?.total_allocated || '0');
+      const currentOutstandingDec = Decimal.max(0, totalUdharDec.minus(totalAllocatedDec));
 
-      if (roundedPayment > currentOutstanding) {
+      if (payDec.greaterThan(currentOutstandingDec)) {
         throw new Error(
-          `Payment amount (₹${roundedPayment.toFixed(2)}) cannot exceed customer total outstanding due (₹${currentOutstanding.toFixed(2)}).`
+          `Payment amount (₹${payDec.toFixed(2)}) cannot exceed customer total outstanding due (₹${currentOutstandingDec.toFixed(2)}).`
         );
       }
 
@@ -500,7 +712,7 @@ export class KhataService {
         `INSERT INTO payments (customer_id, amount, received_at, note)
          VALUES ($1, $2, NOW(), $3)
          RETURNING id, amount, received_at`,
-        [customerId, roundedPayment.toFixed(2), note || null]
+        [customerId, payDec.toFixed(2), note || null]
       );
       const paymentId = parseInt(payRes.rows[0].id, 10);
 
@@ -515,23 +727,23 @@ export class KhataService {
          WHERE t.customer_id = $1
          GROUP BY t.id, t.transaction_date, t.created_at
          HAVING t.total_amount > COALESCE(SUM(pa.amount), 0)
-         ORDER BY t.transaction_date ASC, t.created_at ASC, t.id ASC`,
+         ORDER BY t.transaction_date ASC, t.created_at ASC, t.id ASC FOR UPDATE OF t`,
         [customerId]
       );
 
-      let remainingToAllocate = roundedPayment;
+      let remainingToAllocate = new Decimal(payDec);
       const allocationDetails = [];
 
       for (const tx of outstandingTxRes.rows) {
-        if (remainingToAllocate <= 0) break;
+        if (remainingToAllocate.lessThanOrEqualTo(0)) break;
 
-        const txTotal = parseFloat(tx.total_amount);
-        const txAllocated = parseFloat(tx.allocated_amount);
-        const txDue = Math.round((txTotal - txAllocated) * 100) / 100;
+        const txTotal = new Decimal(tx.total_amount);
+        const txAllocated = new Decimal(tx.allocated_amount);
+        const txDue = txTotal.minus(txAllocated);
 
-        if (txDue <= 0) continue;
+        if (txDue.lessThanOrEqualTo(0)) continue;
 
-        const allocationAmount = Math.min(remainingToAllocate, txDue);
+        const allocationAmount = Decimal.min(remainingToAllocate, txDue);
 
         await client.query(
           `INSERT INTO payment_allocations (payment_id, transaction_id, amount, created_at)
@@ -544,21 +756,32 @@ export class KhataService {
           allocated: allocationAmount.toFixed(2),
         });
 
-        remainingToAllocate = Math.round((remainingToAllocate - allocationAmount) * 100) / 100;
+        remainingToAllocate = remainingToAllocate.minus(allocationAmount);
       }
 
-      await client.query('COMMIT');
+      const newOutstanding = Decimal.max(0, currentOutstandingDec.minus(payDec)).toFixed(2);
 
-      const newOutstanding = Math.max(0, currentOutstanding - roundedPayment).toFixed(2);
-
-      return {
+      const responsePayload = {
         success: true,
         paymentId,
         customerId,
-        amount: roundedPayment.toFixed(2),
+        amount: payDec.toFixed(2),
         newOutstanding,
         allocations: allocationDetails,
       };
+
+      // Save idempotency key if provided
+      if (idempotencyKey) {
+        const currentHash = this.hashPayload({ customerId, amount: payDec.toFixed(2), note: note || null });
+        await client.query(
+          `INSERT INTO idempotency_keys (key, action, request_hash, response_status, response_body, created_at)
+           VALUES ($1, $2, $3, $4, $5, NOW())`,
+          [idempotencyKey, 'RECORD_PAYMENT', currentHash, 201, JSON.stringify(responsePayload)]
+        );
+      }
+
+      await client.query('COMMIT');
+      return responsePayload;
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;

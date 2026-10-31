@@ -22,7 +22,16 @@ async function runMigrations() {
     `);
 
     // 3. Find all .sql migration files in order
-    const migrationsDir = path.resolve(process.cwd(), 'migrations');
+    const possibleDirs = [
+      path.resolve(process.cwd(), 'migrations'),
+      path.resolve(process.cwd(), 'backend/migrations'),
+      path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '../migrations'),
+    ];
+    const migrationsDir = possibleDirs.find((d) => fs.existsSync(d));
+    if (!migrationsDir) {
+      throw new Error(`Could not locate migrations directory in: ${possibleDirs.join(', ')}`);
+    }
+
     const files = fs
       .readdirSync(migrationsDir)
       .filter((f) => f.endsWith('.sql'))

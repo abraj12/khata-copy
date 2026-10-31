@@ -2,9 +2,9 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { z } from 'zod';
 
-// Load .env and .env.local if present
+// Load .env and .env.local if present with deterministic precedence (.env.local overrides .env)
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
-dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+dotenv.config({ path: path.resolve(process.cwd(), '.env.local'), override: true });
 
 const booleanStringSchema = z
   .union([z.boolean(), z.string()])
@@ -16,19 +16,29 @@ const booleanStringSchema = z
     throw new Error(`Invalid boolean string: "${val}"`);
   });
 
-const positiveIntSchema = z
+const strictPositiveIntSchema = z
   .union([z.number(), z.string()])
   .transform((val) => {
-    const num = typeof val === 'number' ? val : parseInt(val, 10);
-    if (isNaN(num) || num <= 0) {
-      throw new Error(`Expected positive integer, got: "${val}"`);
+    if (typeof val === 'number') {
+      if (!Number.isInteger(val) || val <= 0) {
+        throw new Error(`Expected positive integer, got: ${val}`);
+      }
+      return val;
+    }
+    const trimmed = val.trim();
+    if (!/^\d+$/.test(trimmed)) {
+      throw new Error(`Invalid positive integer format: "${val}"`);
+    }
+    const num = parseInt(trimmed, 10);
+    if (num <= 0) {
+      throw new Error(`Expected positive integer, got: ${num}`);
     }
     return num;
   });
 
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  PORT: positiveIntSchema.default(5000),
+  PORT: strictPositiveIntSchema.default(5000),
 
   // Owner Identity
   OWNER_PHONE: z
@@ -52,16 +62,16 @@ export const envSchema = z.object({
     .url()
     .default('postgresql://neondb_owner:dummy@ep-shy-mud-94919289.us-east-2.aws.neon.tech/neondb?sslmode=require'),
 
-  // Neon Realtime
-  NEON_REALTIME_URL: z
-    .string()
-    .url()
-    .default('https://ep-shy-mud-94919289.realtime.us-east-2.aws.neon.tech/v1'),
-  NEON_REALTIME_SECRET: z.string().min(16).default('neon_realtime_dummy_secret_32_characters_long_min'),
+  // Neon Realtime (Optional while Realtime is explicitly deferred)
+  NEON_REALTIME_URL: z.string().url().optional(),
+  NEON_REALTIME_SECRET: z.string().min(16).optional(),
 
   // Server-side Sessions
-  SESSION_SECRET: z.string().min(32, 'SESSION_SECRET must be at least 32 characters').default('super_secret_session_key_at_least_32_characters_long_khata'),
-  SESSION_MAX_AGE_MS: positiveIntSchema.default(604800000), // 7 days
+  SESSION_SECRET: z
+    .string()
+    .min(32, 'SESSION_SECRET must be at least 32 characters')
+    .default('super_secret_session_key_at_least_32_characters_long_khata'),
+  SESSION_MAX_AGE_MS: strictPositiveIntSchema.default(604800000), // 7 days
   SESSION_COOKIE_NAME: z.string().min(1).default('khata_session'),
   SESSION_COOKIE_SECURE: booleanStringSchema.default(false),
   SESSION_COOKIE_HTTP_ONLY: booleanStringSchema.default(true),
@@ -71,22 +81,28 @@ export const envSchema = z.object({
   FRONTEND_URL: z.string().url().default('https://khata.algions.in'),
 
   // Login abuse protection thresholds
-  LOGIN_MAX_ATTEMPTS: positiveIntSchema.default(5),
-  LOGIN_FAILURE_WINDOW_MS: positiveIntSchema.default(900000), // 15 mins
-  LOGIN_LOCK_DURATION_MS: positiveIntSchema.default(900000), // 15 mins
-  LOGIN_EXTENDED_THRESHOLD: positiveIntSchema.default(10),
-  LOGIN_EXTENDED_WINDOW_MS: positiveIntSchema.default(86400000), // 24 hours
-  LOGIN_EXTENDED_LOCK_DURATION_MS: positiveIntSchema.default(1800000), // 30 mins
-  LOGIN_LOG_RETENTION_DAYS: positiveIntSchema.default(30),
+  LOGIN_MAX_ATTEMPTS: strictPositiveIntSchema.default(5),
+  LOGIN_FAILURE_WINDOW_MS: strictPositiveIntSchema.default(900000), // 15 mins
+  LOGIN_LOCK_DURATION_MS: strictPositiveIntSchema.default(900000), // 15 mins
+  LOGIN_EXTENDED_THRESHOLD: strictPositiveIntSchema.default(10),
+  LOGIN_EXTENDED_WINDOW_MS: strictPositiveIntSchema.default(86400000), // 24 hours
+  LOGIN_EXTENDED_LOCK_DURATION_MS: strictPositiveIntSchema.default(1800000), // 30 mins
+  LOGIN_LOG_RETENTION_DAYS: strictPositiveIntSchema.default(30),
 
   // Reverse proxy
   TRUST_PROXY: z
     .union([z.number(), z.string(), z.boolean()])
     .transform((val) => {
       if (typeof val === 'boolean') return val ? 1 : 0;
-      if (typeof val === 'number') return val;
-      const parsed = parseInt(val, 10);
-      return isNaN(parsed) ? 1 : parsed;
+      if (typeof val === 'number') {
+        if (!Number.isInteger(val) || val < 0) throw new Error('TRUST_PROXY number must be non-negative integer');
+        return val;
+      }
+      const trimmed = val.trim();
+      if (!/^\d+$/.test(trimmed)) {
+        throw new Error(`Invalid TRUST_PROXY integer: "${val}"`);
+      }
+      return parseInt(trimmed, 10);
     })
     .default(1),
 });
@@ -105,16 +121,52 @@ export function loadAndValidateEnv(overrides: Partial<Record<string, string | un
 
   const env = result.data;
 
-  // Enforce production security rules
+  // Enforce production security rules: fail closed if production has defaults or dummy placeholders
   if (env.NODE_ENV === 'production') {
     if (!env.SESSION_COOKIE_SECURE) {
       throw new Error('[SECURITY FATAL] In production, SESSION_COOKIE_SECURE must be true.');
     }
-    if (env.SESSION_SECRET.includes('dummy') || env.SESSION_SECRET.length < 32) {
-      throw new Error('[SECURITY FATAL] In production, SESSION_SECRET must be a genuine random secret of at least 32 bytes.');
+    if (
+      !env.SESSION_SECRET ||
+      env.SESSION_SECRET === 'super_secret_session_key_at_least_32_characters_long_khata' ||
+      env.SESSION_SECRET.includes('dummy') ||
+      env.SESSION_SECRET.length < 32
+    ) {
+      throw new Error(
+        '[SECURITY FATAL] In production, SESSION_SECRET must be an explicitly configured, cryptographically random secret of at least 32 characters.'
+      );
     }
-    if (env.OWNER_PASSWORD_HASH.includes('dummy')) {
-      throw new Error('[SECURITY FATAL] In production, OWNER_PASSWORD_HASH must be configured with a real Argon2id hash.');
+    if (
+      !env.OWNER_PASSWORD_HASH ||
+      env.OWNER_PASSWORD_HASH.includes('dummy') ||
+      !env.OWNER_PASSWORD_HASH.startsWith('$argon2id$v=19$')
+    ) {
+      throw new Error(
+        '[SECURITY FATAL] In production, OWNER_PASSWORD_HASH must be configured with a real, valid Argon2id hash.'
+      );
+    }
+    if (!env.OWNER_PHONE || env.OWNER_PHONE === '9876543210' && !process.env.OWNER_PHONE) {
+      throw new Error(
+        '[SECURITY FATAL] In production, OWNER_PHONE must be explicitly configured with the owner canonical phone number.'
+      );
+    }
+    if (
+      !env.DATABASE_URL_POOLED ||
+      env.DATABASE_URL_POOLED.includes('dummy') ||
+      !env.DATABASE_URL_POOLED.includes('sslmode=')
+    ) {
+      throw new Error(
+        '[SECURITY FATAL] In production, DATABASE_URL_POOLED must be explicitly configured with TLS enabled.'
+      );
+    }
+    if (
+      !env.DATABASE_URL ||
+      env.DATABASE_URL.includes('dummy') ||
+      !env.DATABASE_URL.includes('sslmode=')
+    ) {
+      throw new Error(
+        '[SECURITY FATAL] In production, DATABASE_URL must be explicitly configured with TLS enabled.'
+      );
     }
   }
 

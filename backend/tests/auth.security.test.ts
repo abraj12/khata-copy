@@ -374,7 +374,69 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
 
     expect(bodyString).not.toContain(env.SESSION_SECRET);
     expect(bodyString).not.toContain(env.OWNER_PASSWORD_HASH);
-    expect(bodyString).not.toContain(env.NEON_REALTIME_SECRET);
+    if (env.NEON_REALTIME_SECRET) {
+      expect(bodyString).not.toContain(env.NEON_REALTIME_SECRET);
+    }
     expect(headersString).not.toContain(env.SESSION_SECRET);
+  });
+
+  // TEST CASE 26: Phone canonicalization before lockout hashing
+  it('26. Phone formats with "+91", spaces, and dashes map to the same account lockout bucket', async () => {
+    const clientIp = '192.168.1.200';
+
+    // Submit 4 failures with "+91 9876543210"
+    for (let i = 0; i < 4; i++) {
+      const res = await request(app)
+        .post('/api/v1/auth/login')
+        .set('Origin', 'https://khata.algions.in')
+        .set('X-Forwarded-For', clientIp)
+        .send({ phone: '+91 9876543210', password: 'WrongPassword!' });
+      expect(res.status).toBe(401);
+    }
+
+    // 5th failure with "9876543210" (no country code)
+    const fifthRes = await request(app)
+      .post('/api/v1/auth/login')
+      .set('Origin', 'https://khata.algions.in')
+      .set('X-Forwarded-For', clientIp)
+      .send({ phone: '9876543210', password: 'WrongPassword!' });
+    expect(fifthRes.status).toBe(401);
+
+    // 6th attempt with "+91-9876543210" must now be locked out with HTTP 429
+    const blockedRes = await request(app)
+      .post('/api/v1/auth/login')
+      .set('Origin', 'https://khata.algions.in')
+      .set('X-Forwarded-For', clientIp)
+      .send({ phone: '+91-9876543210', password: TEST_PASSWORD });
+
+    expect(blockedRes.status).toBe(429);
+    expect(blockedRes.body.isLocked).toBe(true);
+  });
+
+  // TEST CASE 27: Production origin restrictions reject localhost
+  it('27. Production origin validator rejects http://localhost and dev origins', async () => {
+    const originalEnv = env.NODE_ENV;
+    try {
+      (env as any).NODE_ENV = 'production';
+      const { isAllowedOrigin } = await import('../src/middleware/csrf.js');
+      expect(isAllowedOrigin('http://localhost:5173')).toBe(false);
+      expect(isAllowedOrigin('http://localhost:3000')).toBe(false);
+      expect(isAllowedOrigin('http://127.0.0.1:5173')).toBe(false);
+      expect(isAllowedOrigin('https://khata.algions.in')).toBe(true);
+      expect(isAllowedOrigin('capacitor://localhost')).toBe(true);
+    } finally {
+      (env as any).NODE_ENV = originalEnv;
+    }
+  });
+
+  // TEST CASE 28: Production environment fails closed on placeholder secrets
+  it('28. Production environment startup fails closed on default placeholder SESSION_SECRET', () => {
+    expect(() => {
+      loadAndValidateEnv({
+        NODE_ENV: 'production',
+        SESSION_COOKIE_SECURE: 'true',
+        SESSION_SECRET: 'super_secret_session_key_at_least_32_characters_long_khata',
+      });
+    }).toThrow(/SESSION_SECRET must be an explicitly configured/);
   });
 });

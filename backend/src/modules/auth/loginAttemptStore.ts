@@ -124,16 +124,17 @@ export class LoginAttemptStore {
     const combinedHash = this.hashIdentifier(`${clientIp}_${normalizedPhone}`);
     const now = Date.now();
 
-    // Always keep in-memory sync for test
-    this.inMemoryAttempts.push({
-      ipHash,
-      phoneHash,
-      combinedHash,
-      success,
-      createdAt: now,
-    });
-
-    if (this.forceInMemory || (env.NODE_ENV as string) === 'test') return;
+    // Only keep in-memory sync for test runner / isolated testing
+    if (this.forceInMemory || (env.NODE_ENV as string) === 'test') {
+      this.inMemoryAttempts.push({
+        ipHash,
+        phoneHash,
+        combinedHash,
+        success,
+        createdAt: now,
+      });
+      return;
+    }
 
     try {
       await appPool.query(
@@ -142,6 +143,11 @@ export class LoginAttemptStore {
         [ipHash, phoneHash, combinedHash, success]
       );
     } catch (err) {
+      if (env.NODE_ENV === 'production') {
+        const serviceErr = new Error('Database unavailable for recording persistent login abuse controls.');
+        (serviceErr as unknown as { status: number }).status = 503;
+        throw serviceErr;
+      }
       if ((env.NODE_ENV as string) !== 'test') {
         console.error('[LOCKOUT STORE ERROR] Failed to record login attempt to PostgreSQL:', (err as Error).message);
       }

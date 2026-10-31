@@ -300,15 +300,20 @@ export const KhataLedgerView: React.FC = () => {
     setIsSubmittingUdhar(true);
 
     try {
+      const idempotencyKey = 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
       const res = await apiClient<{ success: boolean; data: { transactionId: number; customerId: number } }>(
         '/api/v1/khata/transactions',
         {
           method: 'POST',
+          headers: {
+            'Idempotency-Key': idempotencyKey,
+          },
           body: JSON.stringify({
             customer: customerPayload,
             items: validatedItems,
             initialPayment: initPaymentVal > 0 ? initPaymentVal : null,
             note: transactionNote.trim() || null,
+            idempotencyKey,
           }),
         }
       );
@@ -358,11 +363,16 @@ export const KhataLedgerView: React.FC = () => {
     setIsSubmittingPayment(true);
 
     try {
+      const idempotencyKey = 'pay_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
       await apiClient(`/api/v1/khata/customers/${activeCustomerDetailId}/payments`, {
         method: 'POST',
+        headers: {
+          'Idempotency-Key': idempotencyKey,
+        },
         body: JSON.stringify({
           amount: amountNum,
           note: paymentNote.trim() || null,
+          idempotencyKey,
         }),
       });
 

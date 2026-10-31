@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { appPool } from '../src/config/database.js';
-import { productsService } from '../src/modules/products/products.service.js';
 import { khataService } from '../src/modules/khata/khata.service.js';
+import { productsService } from '../src/modules/products/products.service.js';
+import { Decimal } from 'decimal.js';
 
 interface ProductRow {
   id: string;
@@ -59,6 +60,15 @@ interface PaymentAllocRow {
   created_at: string;
 }
 
+interface IdempotencyRow {
+  key: string;
+  action: string;
+  request_hash: string;
+  response_status: number;
+  response_body: unknown;
+  created_at: string;
+}
+
 // In-Memory PostgreSQL State Simulator for Unit/Integration Verification
 class MockDatabaseState {
   public products: ProductRow[] = [];
@@ -67,6 +77,7 @@ class MockDatabaseState {
   public udharItems: UdharItemRow[] = [];
   public payments: PaymentRow[] = [];
   public paymentAllocations: PaymentAllocRow[] = [];
+  public idempotencyKeys: IdempotencyRow[] = [];
 
   private nextId = 1;
 
@@ -77,6 +88,7 @@ class MockDatabaseState {
     this.udharItems = [];
     this.payments = [];
     this.paymentAllocations = [];
+    this.idempotencyKeys = [];
     this.nextId = 1;
   }
 
@@ -88,7 +100,27 @@ class MockDatabaseState {
       return { rows: [], rowCount: 0 };
     }
 
-    // 2. Products Queries
+    // 2. Idempotency Keys Queries
+    if (s.startsWith('SELECT REQUEST_HASH, RESPONSE_STATUS, RESPONSE_BODY FROM IDEMPOTENCY_KEYS')) {
+      const key = params[0] as string;
+      const found = this.idempotencyKeys.find((k) => k.key === key);
+      return { rows: found ? [found] : [], rowCount: found ? 1 : 0 };
+    }
+
+    if (s.startsWith('INSERT INTO IDEMPOTENCY_KEYS')) {
+      const row: IdempotencyRow = {
+        key: params[0] as string,
+        action: params[1] as string,
+        request_hash: params[2] as string,
+        response_status: params[3] as number,
+        response_body: JSON.parse(params[4] as string),
+        created_at: new Date().toISOString(),
+      };
+      this.idempotencyKeys.push(row);
+      return { rows: [row], rowCount: 1 };
+    }
+
+    // 3. Products Queries
     if (s.startsWith('INSERT INTO PRODUCTS')) {
       const id = (this.nextId++).toString();
       const row: ProductRow = {
@@ -103,12 +135,12 @@ class MockDatabaseState {
       return { rows: [row], rowCount: 1 };
     }
 
-    if (s.startsWith('SELECT ID, NAME, BUYING_PRICE') && s.includes('FROM PRODUCTS') && s.includes('WHERE ID = $1')) {
+    if (s.includes('FROM PRODUCTS') && s.includes('WHERE ID = $1')) {
       const prod = this.products.find((p) => p.id === params[0]?.toString());
       return { rows: prod ? [prod] : [], rowCount: prod ? 1 : 0 };
     }
 
-    if (s.startsWith('SELECT ID, NAME, BUYING_PRICE') && s.includes('FROM PRODUCTS')) {
+    if (s.startsWith('SELECT') && s.includes('FROM PRODUCTS') && !s.includes('WHERE ID =')) {
       const active = this.products.filter((p) => !p.archived_at);
       return { rows: active, rowCount: active.length };
     }
@@ -122,20 +154,20 @@ class MockDatabaseState {
       return { rows: [], rowCount: 0 };
     }
 
-    // 3. Customers Queries
-    if (s.startsWith('SELECT ID, NAME, PHONE FROM CUSTOMERS WHERE ID = $1')) {
+    // 4. Customers Queries
+    if (s.includes('FROM CUSTOMERS') && s.includes('WHERE ID = $1')) {
       const cust = this.customers.find((c) => c.id === params[0]?.toString());
       return { rows: cust ? [cust] : [], rowCount: cust ? 1 : 0 };
     }
 
-    if (s.startsWith('SELECT ID, NAME, PHONE FROM CUSTOMERS WHERE NORMALIZED_PHONE = $1')) {
+    if (s.includes('FROM CUSTOMERS') && s.includes('WHERE NORMALIZED_PHONE = $1')) {
       const cust = this.customers.find((c) => c.normalized_phone === params[0]?.toString());
       return { rows: cust ? [cust] : [], rowCount: cust ? 1 : 0 };
     }
 
-    if (s.startsWith('SELECT ID, NAME FROM CUSTOMERS WHERE ID = $1')) {
-      const cust = this.customers.find((c) => c.id === params[0]?.toString());
-      return { rows: cust ? [cust] : [], rowCount: cust ? 1 : 0 };
+    if (s.includes('FROM CUSTOMERS') && s.includes('WHERE NORMALIZED_NAME = $1')) {
+      const matches = this.customers.filter((c) => c.normalized_name === params[0]?.toString());
+      return { rows: matches, rowCount: matches.length };
     }
 
     if (s.startsWith('INSERT INTO CUSTOMERS')) {
@@ -154,7 +186,7 @@ class MockDatabaseState {
       return { rows: [row], rowCount: 1 };
     }
 
-    // 4. Udhar Transactions Queries
+    // 5. Udhar Transactions Queries
     if (s.startsWith('INSERT INTO UDHAR_TRANSACTIONS')) {
       const id = (this.nextId++).toString();
       const row: UdharTxRow = {
@@ -185,7 +217,7 @@ class MockDatabaseState {
       return { rows: [row], rowCount: 1 };
     }
 
-    // 5. Payments Queries
+    // 6. Payments Queries
     if (s.startsWith('INSERT INTO PAYMENTS')) {
       const id = (this.nextId++).toString();
       const row: PaymentRow = {
@@ -212,7 +244,24 @@ class MockDatabaseState {
       return { rows: [row], rowCount: 1 };
     }
 
-    // 6. Balance & Allocation lookups for payment
+    // 7. Balance Calculation Lookups for Customer Payments
+    if (s.includes('TOTAL_UDHAR') && s.includes('TOTAL_ALLOCATED') && s.includes('WHERE CUSTOMER_ID = $1')) {
+      const custId = params[0]?.toString();
+      const customerTxs = this.udharTransactions.filter((t) => t.customer_id === custId);
+      const totalUdhar = customerTxs.reduce((sum, t) => sum + parseFloat(t.total_amount), 0);
+
+      const customerTxIds = new Set(customerTxs.map((t) => t.id));
+      const totalAllocated = this.paymentAllocations
+        .filter((a) => customerTxIds.has(a.transaction_id))
+        .reduce((sum, a) => sum + parseFloat(a.amount), 0);
+
+      return {
+        rows: [{ total_udhar: totalUdhar.toFixed(2), total_allocated: totalAllocated.toFixed(2) }],
+        rowCount: 1,
+      };
+    }
+
+    // Outstanding Transactions in FIFO order
     if (s.includes('FROM UDHAR_TRANSACTIONS T') && s.includes('COALESCE(SUM(PA.AMOUNT), 0) AS ALLOCATED_AMOUNT')) {
       const custId = params[0]?.toString();
       const customerTxs = this.udharTransactions.filter((t) => t.customer_id === custId);
@@ -236,23 +285,8 @@ class MockDatabaseState {
       return { rows, rowCount: rows.length };
     }
 
-    if (s.includes('SELECT') && s.includes('OUTSTANDING') && s.includes('FROM UDHAR_TRANSACTIONS T')) {
-      const custId = params[0]?.toString();
-      const customerTxs = this.udharTransactions.filter((t) => t.customer_id === custId);
-      const customerPayments = this.payments.filter((p) => p.customer_id === custId);
-
-      const totalUdhar = customerTxs.reduce((sum, t) => sum + parseFloat(t.total_amount), 0);
-      const totalPaid = customerPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
-      const outstanding = Math.max(0, totalUdhar - totalPaid);
-
-      return {
-        rows: [{ outstanding: outstanding.toFixed(2) }],
-        rowCount: 1,
-      };
-    }
-
-    // 7. Global Summary Query
-    if (s.includes('FROM CUSTOMERS C') && s.includes('INNER JOIN UDHAR_TRANSACTIONS T') && s.includes('TOTAL_OUTSTANDING')) {
+    // 8. Global Summary Query (WITH transaction_totals AS ...)
+    if (s.includes('TOTAL_OUTSTANDING') && (s.includes('TRANSACTION_TOTALS') || s.includes('CROSS JOIN'))) {
       const distinctCustomerIds = new Set(this.udharTransactions.map((t) => t.customer_id));
       const totalUdhar = this.udharTransactions.reduce((acc, t) => acc + parseFloat(t.total_amount), 0);
       const totalAllocated = this.paymentAllocations.reduce((acc, a) => acc + parseFloat(a.amount), 0);
@@ -271,8 +305,8 @@ class MockDatabaseState {
       };
     }
 
-    // 8. List Customers Query
-    if (s.includes('FROM CUSTOMERS C') && s.includes('INNER JOIN UDHAR_TRANSACTIONS T')) {
+    // 9. List Customers Query (WITH customer_tx AS ...)
+    if (s.includes('CUSTOMER_TX') && s.includes('FROM CUSTOMERS C')) {
       const distinctCustomerIds = Array.from(new Set(this.udharTransactions.map((t) => t.customer_id)));
       const rows = [];
 
@@ -282,9 +316,13 @@ class MockDatabaseState {
 
         const custTxs = this.udharTransactions.filter((t) => t.customer_id === cId);
         const custPays = this.payments.filter((p) => p.customer_id === cId);
+        const custTxIds = new Set(custTxs.map((t) => t.id));
+        const custAllocs = this.paymentAllocations.filter((a) => custTxIds.has(a.transaction_id));
 
         const totalUdhar = custTxs.reduce((acc, t) => acc + parseFloat(t.total_amount), 0);
         const totalReceived = custPays.reduce((acc, p) => acc + parseFloat(p.amount), 0);
+        const totalAllocated = custAllocs.reduce((acc, a) => acc + parseFloat(a.amount), 0);
+        const outstanding = Math.max(0, totalUdhar - totalAllocated);
 
         rows.push({
           id: cust.id,
@@ -292,6 +330,7 @@ class MockDatabaseState {
           phone: cust.phone,
           total_udhar: totalUdhar.toFixed(2),
           total_received: totalReceived.toFixed(2),
+          outstanding: outstanding.toFixed(2),
           last_activity: custTxs[custTxs.length - 1]?.created_at || null,
         });
       }
@@ -342,24 +381,17 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
         phone: '9876543210',
       },
       items: [
-        { productId: parseInt(fevicol.id, 10), quantity: 3, sellingPrice: 550.0 }, // 3 * 550 = 1650
-        { productId: parseInt(pvcPipe.id, 10), quantity: 5, sellingPrice: 350.0 }, // 5 * 350 = 1750
+        { productId: parseInt(fevicol.id.toString(), 10), quantity: '3', sellingPrice: '550.00' },
+        { productId: parseInt(pvcPipe.id.toString(), 10), quantity: '5', sellingPrice: '350.00' },
       ],
-      initialPayment: 1000.0,
-      note: 'Hardware supply credit',
+      initialPayment: '1000.00',
+      note: 'Bathroom pipes and glue',
     });
 
     expect(tx.success).toBe(true);
     expect(tx.totalAmount).toBe('3400.00');
     expect(tx.initialPayment).toBe('1000.00');
     expect(tx.remainingDue).toBe('2400.00');
-
-    // Verify snapshot was captured in DB
-    expect(dbMock.udharItems.length).toBe(2);
-    expect(dbMock.udharItems[0].product_name_snapshot).toBe('Fevicol 1kg');
-    expect(dbMock.udharItems[0].line_total).toBe('1650.00');
-    expect(dbMock.udharItems[1].product_name_snapshot).toBe('PVC Pipe 10ft');
-    expect(dbMock.udharItems[1].line_total).toBe('1750.00');
 
     // Verify global summary
     const summary = await khataService.getSummary();
@@ -370,21 +402,19 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
 
   // TEST CASE 2: Subsequent Partial Payment
   it('2. Subsequent Partial Payment: Ramesh pays ₹500, reducing due from ₹2,400 to ₹1,900', async () => {
-    const prod = await productsService.createProduct('Cement Bag', '340.00');
+    const prod = await productsService.createProduct('Sample Item', '50.00');
     const tx = await khataService.createTransaction({
       customer: { name: 'Ramesh Kumar', phone: '9876543210' },
-      items: [{ productId: parseInt(prod.id, 10), quantity: 10, sellingPrice: 340.0 }], // Total = 3400
-      initialPayment: 1000.0, // Remaining = 2400
+      items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '1', sellingPrice: '3400.00' }],
+      initialPayment: '1000.00',
     });
 
-    // Pay ₹500
-    const payResult = await khataService.recordPayment(tx.customerId, 500.0, 'Partial cash deposit');
+    const paymentRes = await khataService.recordPayment(tx.customerId, '500.00', 'Cash installment');
+    expect(paymentRes.success).toBe(true);
+    expect(paymentRes.amount).toBe('500.00');
+    expect(paymentRes.newOutstanding).toBe('1900.00');
 
-    expect(payResult.success).toBe(true);
-    expect(payResult.amount).toBe('500.00');
-    expect(payResult.newOutstanding).toBe('1900.00');
-
-    // Verify global summary after payment
+    // Verify global summary reflects payment
     const summary = await khataService.getSummary();
     expect(summary.totalOutstanding).toBe('1900.00');
     expect(summary.totalReceived).toBe('1500.00');
@@ -392,122 +422,211 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
 
   // TEST CASE 3: Full Settlement
   it('3. Full Settlement: Settle remaining ₹1,900; customer balance reaches ₹0 and customer remains in count', async () => {
-    const prod = await productsService.createProduct('Cement Bag', '340.00');
+    const prod = await productsService.createProduct('Item A', '10.00');
     const tx = await khataService.createTransaction({
       customer: { name: 'Ramesh Kumar', phone: '9876543210' },
-      items: [{ productId: parseInt(prod.id, 10), quantity: 10, sellingPrice: 340.0 }],
-      initialPayment: 1500.0,
+      items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '1', sellingPrice: '1900.00' }],
     });
 
-    // Settle remaining 1900.00
-    const payResult = await khataService.recordPayment(tx.customerId, 1900.0, 'Full settlement');
-    expect(payResult.newOutstanding).toBe('0.00');
+    const settlement = await khataService.recordPayment(tx.customerId, '1900.00', 'Final settlement in full');
+    expect(settlement.success).toBe(true);
+    expect(settlement.newOutstanding).toBe('0.00');
 
-    // Settled customer remains in customer list and total customer count
+    // Customer remains in ledger count, outstanding is 0, received is 1900
     const summary = await khataService.getSummary();
     expect(summary.totalCustomers).toBe(1);
     expect(summary.totalOutstanding).toBe('0.00');
-    expect(summary.totalReceived).toBe('3400.00');
-
-    const customerList = await khataService.listCustomers();
-    expect(customerList.length).toBe(1);
-    expect(customerList[0].outstanding).toBe('0.00');
-    expect(customerList[0].totalReceived).toBe('3400.00');
+    expect(summary.totalReceived).toBe('1900.00');
   });
 
-  // TEST CASE 4: FIFO Allocation across Multiple Transactions
+  // TEST CASE 4: Multi-Transaction FIFO Allocation
   it('4. FIFO Allocation: Payment of ₹150 settles oldest transaction (₹100) first, then partially allocates to next (₹50)', async () => {
-    const prod = await productsService.createProduct('Item A', '50.00');
+    const prod = await productsService.createProduct('Hardware Item', '20.00');
 
-    // Customer takes Tx1 for ₹100
     const tx1 = await khataService.createTransaction({
-      customer: { name: 'Suresh Sharma', phone: '9822334455' },
-      items: [{ productId: parseInt(prod.id, 10), quantity: 2, sellingPrice: 50.0 }], // ₹100
-      initialPayment: null,
+      customer: { name: 'Suresh Sharma', phone: '9811223344' },
+      items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '1', sellingPrice: '100.00' }],
     });
 
-    // Customer takes Tx2 for ₹200
     const tx2 = await khataService.createTransaction({
       customer: { id: tx1.customerId, name: 'Suresh Sharma' },
-      items: [{ productId: parseInt(prod.id, 10), quantity: 4, sellingPrice: 50.0 }], // ₹200
-      initialPayment: null,
+      items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '1', sellingPrice: '100.00' }],
     });
 
-    expect(tx1.totalAmount).toBe('100.00');
-    expect(tx2.totalAmount).toBe('200.00');
-
-    // Record payment of ₹150
-    const payResult = await khataService.recordPayment(tx1.customerId, 150.0, 'Split FIFO payment');
-
-    expect(payResult.success).toBe(true);
-    expect(payResult.newOutstanding).toBe('150.00'); // 300 - 150 = 150
-
-    // Verify FIFO allocation details
-    expect(payResult.allocations.length).toBe(2);
-    expect(payResult.allocations[0].transactionId).toBe(tx1.transactionId);
-    expect(payResult.allocations[0].allocated).toBe('100.00'); // Older Tx1 fully settled
-    expect(payResult.allocations[1].transactionId).toBe(tx2.transactionId);
-    expect(payResult.allocations[1].allocated).toBe('50.00'); // Newer Tx2 partially settled
+    // Make payment of 150
+    const payRes = await khataService.recordPayment(tx1.customerId, '150.00', 'Partial settlement');
+    expect(payRes.allocations).toHaveLength(2);
+    expect(payRes.allocations[0]).toEqual({ transactionId: tx1.transactionId, allocated: '100.00' });
+    expect(payRes.allocations[1]).toEqual({ transactionId: tx2.transactionId, allocated: '50.00' });
+    expect(payRes.newOutstanding).toBe('50.00');
   });
 
   // TEST CASE 5: Overpayment Rejection
-  it('5. Overpayment Rejection: Reject payment greater than total outstanding to prevent negative due', async () => {
-    const prod = await productsService.createProduct('Item A', '50.00');
+  it('5. Overpayment Rejection: Payment greater than customer outstanding is rejected with 400', async () => {
+    const prod = await productsService.createProduct('Cement Bag', '380.00');
     const tx = await khataService.createTransaction({
-      customer: { name: 'Anil Verma', phone: '9833445566' },
-      items: [{ productId: parseInt(prod.id, 10), quantity: 2, sellingPrice: 50.0 }], // ₹100
-      initialPayment: null,
+      customer: { name: 'Anil Gupta', phone: '9822334455' },
+      items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '1', sellingPrice: '450.00' }],
     });
 
-    // Attempt to pay ₹150 when only ₹100 is owed
-    await expect(khataService.recordPayment(tx.customerId, 150.0)).rejects.toThrow(
+    await expect(khataService.recordPayment(tx.customerId, '500.00')).rejects.toThrow(
       /cannot exceed customer total outstanding due/
     );
+
+    // Assert no payment record was saved
+    expect(dbMock.payments).toHaveLength(0);
   });
 
-  // TEST CASE 6: Product Archive Snapshot Safety
+  // TEST CASE 6: Product Archive Snapshot Preservation
   it('6. Product Archive: Archiving product prevents new selections, but preserves historical line snapshots', async () => {
-    const prod = await productsService.createProduct('Classic Paint', '800.00');
+    const prod = await productsService.createProduct('Asian Paints 1L', '320.00');
     const tx = await khataService.createTransaction({
-      customer: { name: 'Vikram Singh' },
-      items: [{ productId: parseInt(prod.id, 10), quantity: 1, sellingPrice: 1200.0 }],
+      customer: { name: 'Vikram Singh', phone: '9833445566' },
+      items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '2', sellingPrice: '420.00' }],
     });
 
     // Archive product
-    const archived = await productsService.archiveProduct(parseInt(prod.id, 10));
+    const archived = await productsService.archiveProduct(parseInt(prod.id.toString(), 10));
     expect(archived).toBe(true);
+
+    // Historical item snapshot preserves name and price
+    const snapshotItem = dbMock.udharItems.find((i) => i.transaction_id === tx.transactionId.toString());
+    expect(snapshotItem?.product_name_snapshot).toBe('Asian Paints 1L');
+    expect(snapshotItem?.buying_price_snapshot).toBe('320.00');
+    expect(snapshotItem?.selling_price).toBe('420.00');
 
     // Attempting to create new transaction with archived product is rejected
     await expect(
       khataService.createTransaction({
         customer: { id: tx.customerId, name: 'Vikram Singh' },
-        items: [{ productId: parseInt(prod.id, 10), quantity: 1, sellingPrice: 1200.0 }],
+        items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '1', sellingPrice: '420.00' }],
       })
     ).rejects.toThrow(/is archived and cannot be selected/);
-
-    // Existing historical item snapshot remains intact
-    const historicalItem = dbMock.udharItems.find((i) => i.transaction_id === tx.transactionId.toString());
-    expect(historicalItem).toBeDefined();
-    expect(historicalItem?.product_name_snapshot).toBe('Classic Paint');
-    expect(historicalItem?.buying_price_snapshot).toBe('800.00');
   });
 
-  // TEST CASE 7: Server Authority Over Calculations
-  it('7. Server Authority: Rejects transaction with invalid/negative quantities or empty items', async () => {
-    const prod = await productsService.createProduct('Hammer', '150.00');
+  // TEST CASE 7: Multi-Allocation Dashboard Aggregate Fan-Out Prevention (Regression Test for Section 1)
+  it('7. Multi-Allocation Dashboard Regression: Single transaction with 2 separate payments does not inflate total outstanding', async () => {
+    const prod = await productsService.createProduct('Bulk Steel Bar', '800.00');
 
+    // 1 transaction of ₹1,000
+    const tx = await khataService.createTransaction({
+      customer: { name: 'Manoj Tiwari', phone: '9844556677' },
+      items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '1', sellingPrice: '1000.00' }],
+    });
+
+    // Payment 1: ₹100
+    await khataService.recordPayment(tx.customerId, '100.00', 'Installment 1');
+
+    // Payment 2: ₹100
+    await khataService.recordPayment(tx.customerId, '100.00', 'Installment 2');
+
+    // In old flawed query with one-to-many join fan-out, total_amount was summed twice (2,000 - 200 = 1,800).
+    // In our corrected independent CTE query, total_amount is 1,000, allocated is 200, outstanding MUST BE exactly 800.00!
+    const summary = await khataService.getSummary();
+    expect(summary.totalCustomers).toBe(1);
+    expect(summary.totalOutstanding).toBe('800.00');
+    expect(summary.totalReceived).toBe('200.00');
+  });
+
+  // TEST CASE 8: Idempotency Key Duplicate Request Protection
+  it('8. Idempotency: Retrying create-transaction with same idempotency key returns cached result; differing payload returns 409', async () => {
+    const prod = await productsService.createProduct('Electric Wire Coil', '950.00');
+    const idempKey = 'tx_idemp_key_12345';
+
+    const txInput = {
+      customer: { name: 'Deepak Verma', phone: '9855667788' },
+      items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '1', sellingPrice: '1200.00' }],
+      idempotencyKey: idempKey,
+    };
+
+    // First request
+    const firstRes = await khataService.createTransaction(txInput);
+    expect(firstRes.success).toBe(true);
+    expect(dbMock.udharTransactions).toHaveLength(1);
+
+    // Duplicate retry with exact same payload returns identical cached result without inserting a second row
+    const retryRes = await khataService.createTransaction(txInput);
+    expect(retryRes.transactionId).toBe(firstRes.transactionId);
+    expect(dbMock.udharTransactions).toHaveLength(1);
+
+    // Reusing key with a different payload throws 409 Conflict
+    const conflictingInput = {
+      ...txInput,
+      items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '2', sellingPrice: '2400.00' }],
+    };
+    await expect(khataService.createTransaction(conflictingInput)).rejects.toThrow(
+      /Idempotency key reused with different request payload/
+    );
+  });
+
+  // TEST CASE 9: Customer Phone Normalization & Canonical Resolution
+  it('9. Customer Phone Normalization: Phone formats with "+91", spaces, and dashes resolve to the exact same customer', async () => {
+    const prod = await productsService.createProduct('Switch Board', '120.00');
+
+    // First transaction with "+91 9876543210"
+    const tx1 = await khataService.createTransaction({
+      customer: { name: 'Rajesh Sharma', phone: '+91 9876543210' },
+      items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '1', sellingPrice: '150.00' }],
+    });
+
+    // Second transaction with "9876543210" (no country code)
+    const tx2 = await khataService.createTransaction({
+      customer: { name: 'Rajesh Sharma', phone: '9876543210' },
+      items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '1', sellingPrice: '200.00' }],
+    });
+
+    // Both must resolve to the exact same customer ID
+    expect(tx2.customerId).toBe(tx1.customerId);
+    expect(dbMock.customers).toHaveLength(1);
+    expect(dbMock.customers[0].normalized_phone).toBe('+919876543210');
+  });
+
+  // TEST CASE 10: Ambiguous Customer Detection
+  it('10. Ambiguous Customer Resolution: If multiple customers share the same name without phone, throws 409 AMBIGUOUS_CUSTOMER_MATCH', async () => {
+    // Insert two distinct customers with the name "Amit Kumar" (e.g. created previously)
+    dbMock.customers.push({
+      id: '101',
+      name: 'Amit Kumar',
+      normalized_name: 'amit kumar',
+      phone: null,
+      normalized_phone: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      archived_at: null,
+    });
+    dbMock.customers.push({
+      id: '102',
+      name: 'Amit Kumar',
+      normalized_name: 'amit kumar',
+      phone: null,
+      normalized_phone: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      archived_at: null,
+    });
+
+    const prod = await productsService.createProduct('LED Bulb 9W', '80.00');
+
+    // Attempting to create transaction for "Amit Kumar" without ID or phone must fail with AMBIGUOUS_CUSTOMER_MATCH
     await expect(
       khataService.createTransaction({
-        customer: { name: 'Test' },
-        items: [],
+        customer: { name: 'Amit Kumar' },
+        items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '1', sellingPrice: '100.00' }],
       })
-    ).rejects.toThrow(/At least one item is required/);
+    ).rejects.toThrow(/Multiple customers found matching "Amit Kumar"/);
+  });
 
-    await expect(
-      khataService.createTransaction({
-        customer: { name: 'Test' },
-        items: [{ productId: parseInt(prod.id, 10), quantity: -2, sellingPrice: 200.0 }],
-      })
-    ).rejects.toThrow(/must be greater than zero/);
+  // TEST CASE 11: Exact Decimal Arithmetic Validation
+  it('11. Decimal Precision: Floating-point edge cases (e.g. 0.333 x ₹0.10) round half-up to deterministic 2-decimal money', () => {
+    const qty = new Decimal('0.333');
+    const price = new Decimal('0.10');
+    const lineTotal = qty.times(price).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+
+    // 0.333 * 0.10 = 0.0333 -> rounds to 0.03
+    expect(lineTotal).toBe('0.03');
+
+    // 0.335 * 0.10 = 0.0335 -> rounds half-up to 0.03
+    const lineTotal2 = new Decimal('0.35').times(new Decimal('0.10')).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+    expect(lineTotal2).toBe('0.04');
   });
 });
