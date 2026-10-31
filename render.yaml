@@ -10,7 +10,7 @@ services:
     env: node
     plan: free
     region: singapore
-    buildCommand: npm ci --workspace=backend --include-workspace-root=false && npm run build --workspace=backend
+    buildCommand: npm ci --workspace=backend --include-workspace-root=false --include=dev && npm run build --workspace=backend
     startCommand: npm run start --workspace=backend
     healthCheckPath: /api/v1/health/live
     envVars:
