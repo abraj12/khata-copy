@@ -28,6 +28,7 @@ export interface GstInvoicePdfData {
     gstin?: string | null;
     state?: string | null;
     stateCode?: string | null;
+    phone?: string | null;
   };
   items: GstInvoicePdfItem[];
   totals: {
@@ -42,6 +43,8 @@ export interface GstInvoicePdfData {
     grandTotal: number | string;
   };
   amountInWords?: string;
+  isNormalBill?: boolean;
+  billTitle?: string;
 }
 
 export function numberToIndianWords(value: number | string): string {
@@ -108,11 +111,14 @@ export function formatDateToIndian(val?: any): string {
 export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     try {
+      const isNormalBill = Boolean(data.isNormalBill);
+      const invoiceTitle = data.billTitle || (isNormalBill ? 'NORMAL BILL' : 'TAX INVOICE');
+
       const doc = new PDFDocument({
         size: 'A4',
         margin: 18,
         info: {
-          Title: `Tax Invoice ${data.invoiceNumber} - M/s Mannat Hardware Store`,
+          Title: `${invoiceTitle} ${data.invoiceNumber} - M/s Mannat Hardware Store`,
           Author: 'M/s Mannat Hardware Store',
         },
       });
@@ -134,7 +140,7 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       // Top Header
       doc.font('Helvetica-Bold').fontSize(9).fillColor('#000000');
       doc.text('GSTIN : 09DFEPN5357D1ZB', left + 6, top + 6);
-      doc.fontSize(14).text('TAX INVOICE', left, top + 5, { align: 'center', underline: true });
+      doc.fontSize(14).text(invoiceTitle, left, top + 5, { align: 'center', underline: true });
       doc.fontSize(9).text('Mob.: 94938 40000', left, top + 6, { align: 'right', width: width - 6 });
 
       // Shop Name & Address
@@ -159,43 +165,47 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       doc.font('Helvetica').fontSize(8).text('State : ', left + 6, y + 26, { continued: true });
       doc.font('Helvetica-Bold').fontSize(9).text('Uttar Pradesh   ', { continued: true });
       doc.font('Helvetica').fontSize(8).text('State Code : ', { continued: true });
-      doc.font('Helvetica-Bold').fontSize(9).text('09');
+      doc.font('Helvetica-Bold').fontSize(9).text(data.stateCode || '09');
 
       // Right meta
-      doc.font('Helvetica').fontSize(8).text('Transportation Mode : ', metaMidX + 6, y + 8, { continued: true });
-      doc.font('Helvetica-Bold').fontSize(8).text(`${data.transportationMode || ''}   `, { continued: true });
-      doc.font('Helvetica').fontSize(8).text('Vehicle No. : ', { continued: true });
-      doc.font('Helvetica-Bold').fontSize(8).text(data.vehicleNumber || '');
+      const rightColLeft = metaMidX + 6;
+      doc.font('Helvetica').fontSize(7.5).text('Transportation Mode : ', rightColLeft, y + 8, { continued: true });
+      doc.font('Helvetica-Bold').fontSize(8.5).text(`${data.transportationMode || ''}   `, { continued: true });
+      doc.font('Helvetica').fontSize(7.5).text('Vehicle No. : ', { continued: true });
+      doc.font('Helvetica-Bold').fontSize(8.5).text(data.vehicleNumber || '');
 
-      doc.font('Helvetica').fontSize(8).text('Dt. of Supply : ', metaMidX + 6, y + 26, { continued: true });
-      doc.font('Helvetica-Bold').fontSize(8).text(`${formatDateToIndian(data.dateOfSupply)}   `, { continued: true });
-      doc.font('Helvetica').fontSize(8).text('Place of Supply : ', { continued: true });
-      doc.font('Helvetica-Bold').fontSize(8).text(data.placeOfSupply || '');
+      doc.font('Helvetica').fontSize(7.5).text('Dt. of Supply : ', rightColLeft, y + 26, { continued: true });
+      doc.font('Helvetica-Bold').fontSize(8.5).text(`${formatDateToIndian(data.dateOfSupply)}   `, { continued: true });
+      doc.font('Helvetica').fontSize(7.5).text('Place of Supply : ', { continued: true });
+      doc.font('Helvetica-Bold').fontSize(8.5).text(data.placeOfSupply || '');
 
-      // Line below meta
       y += 45;
+      // Line below meta
       doc.lineWidth(1).moveTo(left, y).lineTo(left + width, y).stroke();
 
-      // Receiver details
-      doc.font('Helvetica-Bold').fontSize(9).text('Details of Receiver (Bill to Party)', left + 6, y + 5);
-      doc.font('Helvetica-Bold').fontSize(8.5).text('Name : ', left + 6, y + 20, { continued: true });
-      doc.font('Helvetica').text(data.customer?.name || '');
+      // Bill to Party Section
+      const billToHeight = 65;
+      doc.font('Helvetica-Bold').fontSize(9).text('Details of Receiver (Bill to Party)', left + 6, y + 6);
+      doc.font('Helvetica-Bold').fontSize(8.5).text('Name : ', left + 6, y + 22, { continued: true });
+      doc.font('Helvetica').fontSize(9).text(data.customer?.name || '');
 
-      doc.font('Helvetica-Bold').fontSize(8.5).text('Address : ', left + 6, y + 35, { continued: true });
-      doc.font('Helvetica').text(data.customer?.address || '');
+      doc.font('Helvetica-Bold').fontSize(8.5).text('Address : ', left + 6, y + 36, { continued: true });
+      doc.font('Helvetica').fontSize(8.5).text(data.customer?.address || '', { width: width - 20 });
 
-      doc.font('Helvetica-Bold').fontSize(8.5).text('GSTIN : ', left + 6, y + 50, { continued: true });
-      doc.font('Helvetica').text(`${data.customer?.gstin || ''}   `, { continued: true });
-      doc.font('Helvetica-Bold').text('State : ', { continued: true });
-      doc.font('Helvetica').text(`${data.customer?.state || 'Uttar Pradesh'}   `, { continued: true });
-      doc.font('Helvetica-Bold').text('State Code : ', { continued: true });
-      doc.font('Helvetica').text(data.customer?.stateCode || '09');
+      const bottomLineY = y + 50;
+      doc.font('Helvetica-Bold').fontSize(8.5).text('GSTIN : ', left + 6, bottomLineY, { continued: true });
+      doc.font('Helvetica').fontSize(8.5).text(`${data.customer?.gstin || ''}              `, { continued: true });
+      doc.font('Helvetica-Bold').fontSize(8.5).text('State : ', { continued: true });
+      doc.font('Helvetica').fontSize(8.5).text(`${data.customer?.state || 'Uttar Pradesh'}           `, { continued: true });
+      doc.font('Helvetica-Bold').fontSize(8.5).text('State Code : ', { continued: true });
+      doc.font('Helvetica').fontSize(8.5).text(data.customer?.stateCode || '09');
 
-      // Line below Receiver
-      y += 66;
+      y += billToHeight;
+      // Line below Bill to
       doc.lineWidth(1).moveTo(left, y).lineTo(left + width, y).stroke();
 
-      // Table Columns definition: 6%, 39%, 13%, 9%, 16%, 17%
+      // Table Header
+      const tableHeaderHeight = 26;
       const colWidths = [
         width * 0.06,  // S.No
         width * 0.39,  // Description
@@ -204,7 +214,6 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
         width * 0.16,  // Rate
         width * 0.17,  // Amount
       ];
-
       const colX = [
         left,
         left + colWidths[0],
@@ -212,31 +221,33 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
         left + colWidths[0] + colWidths[1] + colWidths[2],
         left + colWidths[0] + colWidths[1] + colWidths[2] + colWidths[3],
         left + colWidths[0] + colWidths[1] + colWidths[2] + colWidths[3] + colWidths[4],
-        left + width,
       ];
 
-      const tableHeaderHeight = 24;
-      // Header labels
       doc.font('Helvetica-Bold').fontSize(8.5);
-      doc.text('S.\nNo.', colX[0], y + 3, { width: colWidths[0], align: 'center' });
-      doc.text('Description of goods', colX[1], y + 8, { width: colWidths[1], align: 'center' });
+      doc.text('S.\nNo.', colX[0], y + 4, { width: colWidths[0], align: 'center' });
+      doc.text('Description of goods', colX[1] + 4, y + 8, { width: colWidths[1] - 8, align: 'left' });
       doc.text('HSN', colX[2], y + 8, { width: colWidths[2], align: 'center' });
       doc.text('Qty.', colX[3], y + 8, { width: colWidths[3], align: 'center' });
-      doc.text('Rate\n(Rs.)', colX[4], y + 3, { width: colWidths[4], align: 'center' });
-      doc.text('Amount\n(Rs.)', colX[5], y + 3, { width: colWidths[5], align: 'center' });
+      doc.text('Rate\n(Rs.)', colX[4], y + 4, { width: colWidths[4], align: 'center' });
+      doc.text('Amount\n(Rs.)', colX[5], y + 4, { width: colWidths[5], align: 'center' });
 
-      // Table line below headers
-      const tableContentTop = y + tableHeaderHeight;
-      doc.lineWidth(1).moveTo(left, tableContentTop).lineTo(left + width, tableContentTop).stroke();
+      // Draw vertical lines in header
+      colX.slice(1).forEach((x) => {
+        doc.lineWidth(0.5).moveTo(x, y).lineTo(x, y + tableHeaderHeight).stroke();
+      });
 
-      // Table Body area
-      const tableHeight = 350;
-      const tableBottom = tableContentTop + tableHeight;
+      y += tableHeaderHeight;
+      doc.lineWidth(1).moveTo(left, y).lineTo(left + width, y).stroke();
 
-      // Draw vertical column dividers across table
-      for (let i = 1; i < colX.length - 1; i++) {
-        doc.lineWidth(0.8).moveTo(colX[i], y).lineTo(colX[i], tableBottom).stroke();
-      }
+      // Table Content Area
+      const tableContentTop = y;
+      const tableBottom = top + height - 120; // Reserve footer space
+      const tableContentHeight = tableBottom - tableContentTop;
+
+      // Draw table column vertical lines down to tableBottom
+      colX.slice(1).forEach((x) => {
+        doc.lineWidth(0.5).moveTo(x, tableContentTop).lineTo(x, tableBottom).stroke();
+      });
 
       // Draw items
       let itemY = tableContentTop + 5;
@@ -251,11 +262,31 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
         itemY += 18;
       });
 
-      // Tax summary box at bottom right (width 42% = covers col 4 and col 5)
+      // Tax/Bill summary box at bottom right (width 42% = covers col 4 and col 5)
       const taxBoxWidth = width * 0.42;
       const taxBoxLeft = left + width - taxBoxWidth;
-      const taxBoxRowHeight = 16.5;
-      const taxBoxRows = 6;
+      const totals = data.totals || {};
+
+      const cgstDisplay = totals.cgstRate ? `CGST @ ${totals.cgstRate}%` : 'CGST @';
+      const sgstDisplay = totals.sgstRate ? `SGST @ ${totals.sgstRate}%` : 'SGST @';
+      const igstDisplay = totals.igstRate ? `IGST @ ${totals.igstRate}%` : 'IGST @';
+
+      const taxRows: Array<[string, string]> = isNormalBill
+        ? [
+            ['Total Amount', Number(totals.taxableAmount || totals.grandTotal || 0).toFixed(2)],
+            ['Grand Total', Number(totals.grandTotal || 0).toFixed(2)],
+          ]
+        : [
+            ['T. Amt. Before Tax', Number(totals.taxableAmount || 0).toFixed(2)],
+            [cgstDisplay, Number(totals.cgstAmount || 0).toFixed(2)],
+            [sgstDisplay, Number(totals.sgstAmount || 0).toFixed(2)],
+            [igstDisplay, Number(totals.igstAmount || 0).toFixed(2)],
+            ['Tax Amount GST', Number(totals.taxAmount || 0).toFixed(2)],
+            ['T. Amount After Tax', Number(totals.grandTotal || 0).toFixed(2)],
+          ];
+
+      const taxBoxRowHeight = isNormalBill ? 22 : 16.5;
+      const taxBoxRows = taxRows.length;
       const taxBoxHeight = taxBoxRowHeight * taxBoxRows;
       const taxBoxTop = tableBottom - taxBoxHeight;
 
@@ -265,29 +296,15 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       const taxSplitX = taxBoxLeft + taxBoxWidth * 0.58;
       doc.moveTo(taxSplitX, taxBoxTop).lineTo(taxSplitX, tableBottom).stroke();
 
-      const totals = data.totals || {};
-      const cgstDisplay = totals.cgstRate ? `CGST @ ${totals.cgstRate}%` : 'CGST @';
-      const sgstDisplay = totals.sgstRate ? `SGST @ ${totals.sgstRate}%` : 'SGST @';
-      const igstDisplay = totals.igstRate ? `IGST @ ${totals.igstRate}%` : 'IGST @';
-
-      const taxRows = [
-        ['T. Amt. Before Tax', Number(totals.taxableAmount || 0).toFixed(2)],
-        [cgstDisplay, Number(totals.cgstAmount || 0).toFixed(2)],
-        [sgstDisplay, Number(totals.sgstAmount || 0).toFixed(2)],
-        [igstDisplay, Number(totals.igstAmount || 0).toFixed(2)],
-        ['Tax Amount GST', Number(totals.taxAmount || 0).toFixed(2)],
-        ['T. Amount After Tax', Number(totals.grandTotal || 0).toFixed(2)],
-      ];
-
       taxRows.forEach((r, idx) => {
         const ry = taxBoxTop + idx * taxBoxRowHeight;
         if (idx > 0) {
           doc.lineWidth(0.5).moveTo(taxBoxLeft, ry).lineTo(taxBoxLeft + taxBoxWidth, ry).stroke();
         }
         const isTotal = idx === taxRows.length - 1;
-        doc.font(isTotal ? 'Helvetica-Bold' : 'Helvetica-Bold').fontSize(isTotal ? 8.5 : 7.5);
-        doc.fillColor('#000000').text(r[0], taxBoxLeft + 4, ry + 4, { width: taxBoxWidth * 0.55 });
-        doc.text(r[1], taxSplitX, ry + 4, { width: taxBoxWidth * 0.42 - 4, align: 'right' });
+        doc.font(isTotal ? 'Helvetica-Bold' : 'Helvetica-Bold').fontSize(isNormalBill ? 9 : isTotal ? 8.5 : 7.5);
+        doc.fillColor('#000000').text(r[0], taxBoxLeft + 4, ry + (taxBoxRowHeight - (isNormalBill ? 10 : 8)) / 2, { width: taxBoxWidth * 0.55 });
+        doc.text(r[1], taxSplitX, ry + (taxBoxRowHeight - (isNormalBill ? 10 : 8)) / 2, { width: taxBoxWidth * 0.42 - 4, align: 'right' });
       });
 
       // Line below table
@@ -338,12 +355,10 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
           doc.image(sigBuffer, left + width - 110, footerY + 28, { width: 90, height: 26 });
         }
       } catch (sigErr) {
-        console.warn('[PDF] Could not embed signature image:', sigErr);
+        console.warn('[PDF] Nasreen signature image failed to load:', (sigErr as Error).message);
       }
 
-      // Signature line & label
-      doc.lineWidth(0.8).moveTo(left + width - 120, footerY + 58).lineTo(left + width - 10, footerY + 58).stroke();
-      doc.font('Helvetica-Bold').fontSize(8.5).text('Authorised Signatory', left + width - 120, footerY + 62, { width: 110, align: 'center' });
+      doc.font('Helvetica-Bold').fontSize(8.5).text('Authorised Signatory', footerMidX, footerY + 58, { align: 'right', width: rightW - 8 });
 
       doc.end();
     } catch (err) {

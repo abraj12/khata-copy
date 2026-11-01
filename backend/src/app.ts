@@ -13,6 +13,7 @@ import { khataRoutes } from './modules/khata/khata.routes.js';
 import { realtimeRoutes } from './modules/realtime/realtime.service.js';
 import { offlineBillsRoutes } from './modules/offlineBills/offlineBills.routes.js';
 import gstInvoicesRoutes from './modules/gstInvoices/gstInvoices.routes.js';
+import normalBillsRoutes from './modules/normalBills/normalBills.routes.js';
 
 export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
   const app = express();
@@ -124,6 +125,7 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
   app.use('/api/v1/realtime', realtimeRoutes);
   app.use('/api/v1/offline-bills', offlineBillsRoutes);
   app.use('/api/v1/gst-invoices', gstInvoicesRoutes);
+  app.use('/api/v1/normal-bills', normalBillsRoutes);
 
   // 9. Centralized Error Handler
   app.use(errorHandler);

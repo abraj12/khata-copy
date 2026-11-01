@@ -12,7 +12,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 
-export type NavTab = 'khata' | 'products' | 'gst-bill';
+export type NavTab = 'khata' | 'products' | 'gst-bill' | 'normal-bill';
 
 interface NavbarProps {
   currentTab: NavTab;
@@ -50,7 +50,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
     }
   };
 
-  const isBillActive = currentTab === 'gst-bill';
+  const isBillActive = currentTab === 'gst-bill' || currentTab === 'normal-bill';
 
   return (
     <header
@@ -68,25 +68,23 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             type="button"
             onClick={handleLogout}
             disabled={isLoggingOut}
-            className="underline font-bold hover:text-rose-600 transition ml-2 cursor-pointer"
+            className="underline hover:no-underline font-semibold ml-2 focus:outline-none"
           >
-            {isLoggingOut ? 'Retrying...' : 'Retry Logout'}
+            Retry
           </button>
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
-        <div className="flex flex-wrap items-center justify-between py-2 sm:py-0 sm:h-16 gap-2">
-          {/* Brand Identity */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex flex-wrap items-center justify-between min-h-[64px] sm:h-16 py-2 sm:py-0 gap-y-2">
+          {/* Brand Identity / Store Badge */}
           <div className="flex items-center gap-2.5">
             <div
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center border border-[var(--khata-border)] shadow-sm flex-shrink-0"
-              style={{
-                background: 'var(--khata-surface-inset)',
-                color: 'var(--khata-accent)',
-              }}
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-inner border border-[var(--khata-border)]"
+              style={{ background: 'var(--khata-surface-inset)' }}
+              aria-hidden="true"
             >
-              <Store className="w-5 h-5" />
+              <Store className="w-5 h-5 text-[var(--khata-accent)]" />
             </div>
             <div>
               <h1 className="text-sm sm:text-base md:text-lg font-black tracking-tight text-[var(--khata-text)] leading-none">
@@ -98,7 +96,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             </div>
           </div>
 
-          {/* Navigation Tabs (Khata, Products, Bill -> GST Bill) */}
+          {/* Navigation Tabs (Khata, Products, Bill -> GST Bill / Normal Bill) */}
           <nav
             className="flex items-center gap-1.5 sm:gap-2 order-3 sm:order-2 w-full sm:w-auto justify-center sm:justify-start pt-1 sm:pt-0"
             aria-label="Main Navigation"
@@ -137,7 +135,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               <span>Products</span>
             </button>
 
-            {/* 3. Bill Dropdown Menu (Contains GST Bill) */}
+            {/* 3. Bill Dropdown Menu (Contains GST Bill & Normal Bill) */}
             <div className="relative flex-1 sm:flex-initial" ref={billMenuRef}>
               <button
                 type="button"
@@ -159,10 +157,11 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               {/* Submenu Dropdown */}
               {isBillMenuOpen && (
                 <div
-                  className="absolute left-0 sm:left-auto sm:right-0 top-full mt-1.5 w-48 p-1.5 rounded-xl border border-[var(--khata-border)] shadow-xl z-50 animate-in fade-in slide-in-from-top-1"
+                  className="absolute left-0 sm:left-auto sm:right-0 top-full mt-1.5 w-52 p-1.5 rounded-xl border border-[var(--khata-border)] shadow-xl z-50 animate-in fade-in slide-in-from-top-1"
                   style={{ background: 'var(--khata-surface)' }}
                   role="menu"
                 >
+                  {/* GST Bill Option */}
                   <button
                     type="button"
                     role="menuitem"
@@ -180,6 +179,27 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                     <div>
                       <div>GST Bill</div>
                       <div className="text-[10px] opacity-75 font-normal">Mannat Tax Invoice</div>
+                    </div>
+                  </button>
+
+                  {/* Normal Bill Option */}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setIsBillMenuOpen(false);
+                      onTabChange('normal-bill');
+                    }}
+                    className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs font-bold text-left transition mt-1 ${
+                      currentTab === 'normal-bill'
+                        ? 'bg-[var(--khata-accent)] text-white'
+                        : 'text-[var(--khata-text)] hover:bg-[var(--khata-surface-inset)] hover:text-[var(--khata-accent)]'
+                    }`}
+                  >
+                    <FileText className="w-4 h-4 text-emerald-500" />
+                    <div>
+                      <div>Normal Bill</div>
+                      <div className="text-[10px] opacity-75 font-normal">Standard / Non-GST</div>
                     </div>
                   </button>
                 </div>
@@ -203,8 +223,8 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             {/* Owner Mobile Badge */}
             <div className="hidden lg:block text-right">
               <span className="block text-[11px] font-bold text-[var(--khata-text)]">Owner</span>
-              <span className="block text-[10px] font-mono text-[var(--khata-text-muted)]">
-                {owner?.phone || 'Authorized'}
+              <span className="block text-[10px] text-[var(--khata-text-muted)] font-mono">
+                {owner?.phone || 'Logged In'}
               </span>
             </div>
 
@@ -212,16 +232,15 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             <button
               onClick={handleLogout}
               disabled={isLoggingOut}
-              title="Logout"
-              aria-label="Logout"
-              className="neu-btn-danger text-xs px-2.5 sm:px-3 py-1.5 sm:py-2 flex items-center gap-1.5 min-h-[38px] sm:min-h-[44px]"
+              className="neu-btn-secondary text-rose-500 hover:text-rose-600 text-xs px-3 sm:px-3.5 py-1.5 sm:py-2 flex items-center gap-1.5 min-h-[38px] sm:min-h-[44px]"
+              aria-label="Log out of Khata"
             >
               {isLoggingOut ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <LogOut className="w-4 h-4" />
               )}
-              <span className="hidden sm:inline">Logout</span>
+              <span className="hidden sm:inline">{isLoggingOut ? 'Logging out...' : 'Logout'}</span>
             </button>
           </div>
         </div>

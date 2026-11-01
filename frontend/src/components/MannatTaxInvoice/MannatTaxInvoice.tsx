@@ -98,6 +98,7 @@ export interface MannatInvoiceCustomer {
   gstin?: string | null;
   state?: string;
   stateCode?: string;
+  phone?: string | null;
 }
 
 export interface MannatInvoiceTotals {
@@ -132,17 +133,22 @@ export interface MannatTaxInvoiceComponentProps {
   showPrintButton?: boolean;
   onDownloadPdf?: () => void;
   isDownloadingPdf?: boolean;
+  isNormalBill?: boolean;
+  billTitle?: string;
 }
 
 /**
- * Print-ready Mannat Hardware Store GST invoice component.
+ * Print-ready Mannat Hardware Store invoice & bill component.
  * Reproduces the exact A4 portrait black-and-white physical invoice.
+ * Supports both GST Tax Invoices and Non-GST Normal Bills.
  */
 export default function MannatTaxInvoice({
   invoice = {},
   showPrintButton = true,
   onDownloadPdf,
   isDownloadingPdf,
+  isNormalBill = false,
+  billTitle,
 }: MannatTaxInvoiceComponentProps) {
   const customer = invoice.customer || {};
   const items = Array.isArray(invoice.items) ? invoice.items : [];
@@ -194,14 +200,15 @@ export default function MannatTaxInvoice({
     suppliedTotals.subtotal ??
     lineAmounts.reduce((sum, amount) => sum + amount, 0)
   );
-  const cgstAmount = Number(suppliedTotals.cgstAmount || 0);
-  const sgstAmount = Number(suppliedTotals.sgstAmount || 0);
-  const igstAmount = Number(suppliedTotals.igstAmount || 0);
-  const taxAmount = Number(suppliedTotals.taxAmount ?? (cgstAmount + sgstAmount + igstAmount));
+  const cgstAmount = isNormalBill ? 0 : Number(suppliedTotals.cgstAmount || 0);
+  const sgstAmount = isNormalBill ? 0 : Number(suppliedTotals.sgstAmount || 0);
+  const igstAmount = isNormalBill ? 0 : Number(suppliedTotals.igstAmount || 0);
+  const taxAmount = isNormalBill ? 0 : Number(suppliedTotals.taxAmount ?? (cgstAmount + sgstAmount + igstAmount));
   const grandTotal = Number(suppliedTotals.grandTotal ?? (taxableAmount + taxAmount));
   const amountWords = invoice.amountInWords || numberWords(grandTotal);
 
   const printInvoice = () => window.print();
+  const displayTitle = billTitle || (isNormalBill ? 'NORMAL BILL' : 'TAX INVOICE');
 
   return (
     <div className="mhi-root">
@@ -209,7 +216,7 @@ export default function MannatTaxInvoice({
         <div className="mhi-toolbar mhi-no-print">
           <div className="flex items-center gap-2">
             <span className="font-bold text-neutral-800 text-xs sm:text-sm">
-              Official Tax Invoice · A4
+              {isNormalBill ? 'Official Bill · A4' : 'Official Tax Invoice · A4'}
             </span>
             {isMobileScreen && (
               <span className="text-[10px] px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-semibold">
@@ -264,11 +271,11 @@ export default function MannatTaxInvoice({
               : undefined
           }
         >
-          <article className="mhi-invoice" aria-label="Mannat Hardware Store GST tax invoice">
+          <article className="mhi-invoice" aria-label={`Mannat Hardware Store ${displayTitle}`}>
           <header className="mhi-shop-header">
             <div className="mhi-topline">
               <strong>GSTIN : {SHOP.gstin}</strong>
-              <strong className="mhi-tax-title">TAX INVOICE</strong>
+              <strong className="mhi-tax-title">{displayTitle}</strong>
               <strong>Mob.: {SHOP.mobile}</strong>
             </div>
             <div className="mhi-shop-name">{SHOP.name}</div>
@@ -304,8 +311,8 @@ export default function MannatTaxInvoice({
             <div className="mhi-customer-line"><strong>Address :</strong><span>{customer.address || ''}</span></div>
             <div className="mhi-customer-bottom">
               <div className="mhi-customer-gstin"><strong>GSTIN :</strong><span>{customer.gstin || ''}</span></div>
-              <div><strong>State :</strong><span>{customer.state || ''}</span></div>
-              <div><strong>State Code :</strong><span>{customer.stateCode || ''}</span></div>
+              <div><strong>State :</strong><span>{customer.state || 'Uttar Pradesh'}</span></div>
+              <div><strong>State Code :</strong><span>{customer.stateCode || '09'}</span></div>
             </div>
           </section>
 
@@ -334,12 +341,27 @@ export default function MannatTaxInvoice({
               </div>
 
               <div className="mhi-tax-summary">
-                <div><strong>T. Amt. Before Tax</strong><span>{money(taxableAmount)}</span></div>
-                <div><strong>CGST @ {suppliedTotals.cgstRate ?? ''}{suppliedTotals.cgstRate !== undefined && suppliedTotals.cgstRate !== '' ? '%' : ''}</strong><span>{money(cgstAmount)}</span></div>
-                <div><strong>SGST @ {suppliedTotals.sgstRate ?? ''}{suppliedTotals.sgstRate !== undefined && suppliedTotals.sgstRate !== '' ? '%' : ''}</strong><span>{money(sgstAmount)}</span></div>
-                <div><strong>IGST @ {suppliedTotals.igstRate ?? ''}{suppliedTotals.igstRate !== undefined && suppliedTotals.igstRate !== '' ? '%' : ''}</strong><span>{money(igstAmount)}</span></div>
-                <div><strong>Tax Amount GST</strong><span>{money(taxAmount)}</span></div>
-                <div className="mhi-grand-total"><strong>T. Amount After Tax</strong><span>{money(grandTotal)}</span></div>
+                {isNormalBill ? (
+                  <>
+                    <div>
+                      <strong>Total Amount</strong>
+                      <span>{money(taxableAmount || grandTotal)}</span>
+                    </div>
+                    <div className="mhi-grand-total">
+                      <strong>Grand Total</strong>
+                      <span>{money(grandTotal)}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div><strong>T. Amt. Before Tax</strong><span>{money(taxableAmount)}</span></div>
+                    <div><strong>CGST @ {suppliedTotals.cgstRate ?? ''}{suppliedTotals.cgstRate !== undefined && suppliedTotals.cgstRate !== '' ? '%' : ''}</strong><span>{money(cgstAmount)}</span></div>
+                    <div><strong>SGST @ {suppliedTotals.sgstRate ?? ''}{suppliedTotals.sgstRate !== undefined && suppliedTotals.sgstRate !== '' ? '%' : ''}</strong><span>{money(sgstAmount)}</span></div>
+                    <div><strong>IGST @ {suppliedTotals.igstRate ?? ''}{suppliedTotals.igstRate !== undefined && suppliedTotals.igstRate !== '' ? '%' : ''}</strong><span>{money(igstAmount)}</span></div>
+                    <div><strong>Tax Amount GST</strong><span>{money(taxAmount)}</span></div>
+                    <div className="mhi-grand-total"><strong>T. Amount After Tax</strong><span>{money(grandTotal)}</span></div>
+                  </>
+                )}
               </div>
             </div>
           </section>

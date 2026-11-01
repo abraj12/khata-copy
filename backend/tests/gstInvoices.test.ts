@@ -48,7 +48,12 @@ describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
           rows: [
             { version: '001_auth_tables.sql' },
             { version: '010_product_hsn_code.sql' },
-            { version: '011_gst_invoices.sql' },
+            {
+            version: '011_gst_invoices.sql',
+          },
+          {
+            version: '012_normal_bills.sql',
+          },
           ],
           rowCount: 3,
         } as any;

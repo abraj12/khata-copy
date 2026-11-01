@@ -40,6 +40,7 @@ export const EXPECTED_MIGRATIONS = [
   '009_product_images_and_offline_bills.sql',
   '010_product_hsn_code.sql',
   '011_gst_invoices.sql',
+  '012_normal_bills.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [

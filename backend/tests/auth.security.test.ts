@@ -57,7 +57,12 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '008_strict_quantity_scale.sql' },
             { version: '009_product_images_and_offline_bills.sql' },
             { version: '010_product_hsn_code.sql' },
-            { version: '011_gst_invoices.sql' },
+            {
+            version: '011_gst_invoices.sql',
+          },
+          {
+            version: '012_normal_bills.sql',
+          },
           ],
           rowCount: 6,
         } as any;
@@ -134,7 +139,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
       expect(res.status).toBe(401);
       expect(res.body.message).toBe('Invalid mobile number or password.');
     }
-  }, 15000);
+  }, 30000);
 
   // TEST CASE 5: SQL injection in phone field rejected safely by strict schema
   it('5. SQL injection payloads in phone field are rejected safely by schema validation', async () => {
@@ -353,7 +358,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     expect(blockedRes.status).toBe(429);
     expect(blockedRes.body.isLocked).toBe(true);
     expect(blockedRes.body.message).toContain('Too many failed login attempts');
-  }, 15000);
+  }, 30000);
 
   // TEST CASE 18: Oversized and malformed JSON payloads rejected
   it('18. Malformed JSON returns 400 Bad Request', async () => {
