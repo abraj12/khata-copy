@@ -105,7 +105,7 @@ export const LoginPage: React.FC = () => {
           </div>
           <h1 className="text-2xl font-black tracking-tight text-[var(--khata-text)]">Khata</h1>
           <p className="text-xs text-[var(--khata-text-muted)] mt-1 font-medium">
-            Single-Shopkeeper Ledger Book
+            Single-Shopkeeper Digital Ledger
           </p>
           <div className="mt-2.5 inline-block text-[11px] font-semibold px-3 py-0.5 rounded-full bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] text-[var(--khata-text)]">
             Owner Authentication
@@ -241,14 +241,19 @@ export const LoginPage: React.FC = () => {
           </form>
 
           {/* Security footnote */}
-          <footer className="mt-6 pt-4 border-t border-[var(--khata-border)] text-center">
+          <div className="mt-6 pt-4 border-t border-[var(--khata-border)] text-center">
             <p className="text-[11px] text-[var(--khata-text-muted)] flex items-center justify-center gap-1.5">
               <Lock className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
               <span>Protected by Argon2id & Host-Only Sessions</span>
             </p>
-          </footer>
+          </div>
         </div>
       </main>
+
+      {/* Global Brand Footer */}
+      <footer className="mt-6 pb-4 text-center text-xs font-medium text-[var(--khata-text-muted)]">
+        Designed and managed by Algions AI Labs Pvt. Ltd.
+      </footer>
 
       {/* Appearance Modal */}
       <AppearanceAccessibilityModal

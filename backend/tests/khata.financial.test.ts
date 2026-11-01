@@ -155,19 +155,37 @@ class MockDatabaseState {
     }
 
     // 4. Customers Queries
+    if (s.includes('FROM CUSTOMERS') && s.includes('WHERE NORMALIZED_PHONE = $1 AND ID !=')) {
+      const cust = this.customers.find(
+        (c) => c.normalized_phone === params[0]?.toString() && c.id !== params[1]?.toString()
+      );
+      return { rows: cust ? [cust] : [], rowCount: cust ? 1 : 0 };
+    }
+
     if (s.includes('FROM CUSTOMERS') && s.includes('WHERE ID = $1')) {
       const cust = this.customers.find((c) => c.id === params[0]?.toString());
       return { rows: cust ? [cust] : [], rowCount: cust ? 1 : 0 };
     }
 
     if (s.includes('FROM CUSTOMERS') && s.includes('WHERE NORMALIZED_PHONE = $1')) {
-      const cust = this.customers.find((c) => c.normalized_phone === params[0]?.toString());
-      return { rows: cust ? [cust] : [], rowCount: cust ? 1 : 0 };
+      const matches = this.customers.filter((c) => c.normalized_phone === params[0]?.toString());
+      return { rows: matches, rowCount: matches.length };
     }
 
     if (s.includes('FROM CUSTOMERS') && s.includes('WHERE NORMALIZED_NAME = $1')) {
       const matches = this.customers.filter((c) => c.normalized_name === params[0]?.toString());
       return { rows: matches, rowCount: matches.length };
+    }
+
+    if (s.startsWith('UPDATE CUSTOMERS') && s.includes('SET PHONE = $1')) {
+      const cust = this.customers.find((c) => c.id === params[2]?.toString());
+      if (cust) {
+        cust.phone = params[0] as string;
+        cust.normalized_phone = params[1] as string;
+        cust.updated_at = new Date().toISOString();
+        return { rows: [cust], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
     }
 
     if (s.startsWith('INSERT INTO CUSTOMERS')) {
@@ -738,5 +756,141 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
     const payRes = await khataService.recordPayment(tx.customerId, '50.50');
     expect(payRes.success).toBe(true);
     expect(payRes.amount).toBe('50.50');
+  });
+
+  // TEST CASE 14: Customer Identity: Phone normalization and strict rejection of invalid phone
+  it('14. Customer Identity: Phone normalization rejects invalid non-empty phone with HTTP 400', async () => {
+    // Null, undefined, empty, or whitespace-only return null (valid optional phone)
+    expect(khataService.normalizeCustomerPhone(null)).toBe(null);
+    expect(khataService.normalizeCustomerPhone(undefined)).toBe(null);
+    expect(khataService.normalizeCustomerPhone('')).toBe(null);
+    expect(khataService.normalizeCustomerPhone('   ')).toBe(null);
+
+    // Malformed non-empty strings throw 400 INVALID_PHONE_FORMAT
+    expect(() => khataService.normalizeCustomerPhone('12345')).toThrow(
+      'Invalid phone number format. Must be a valid 10-digit Indian mobile number.'
+    );
+    expect(() => khataService.normalizeCustomerPhone('abcdefghij')).toThrow(
+      'Invalid phone number format. Must be a valid 10-digit Indian mobile number.'
+    );
+    expect(() => khataService.normalizeCustomerPhone('1234567890')).toThrow(
+      'Invalid phone number format. Must be a valid 10-digit Indian mobile number.'
+    ); // Starts with 1, not 6-9
+  });
+
+  // TEST CASE 15: Customer Identity: Phone formats resolve to identical +91 format and same customer
+  it('15. Customer Identity: Varied phone formats resolve to identical +91 format and same customer', async () => {
+    const p1 = khataService.normalizeCustomerPhone('9876543210');
+    const p2 = khataService.normalizeCustomerPhone('+91 98765 43210');
+    const p3 = khataService.normalizeCustomerPhone('+91-98765-43210');
+    const p4 = khataService.normalizeCustomerPhone('09876543210');
+
+    expect(p1).toBe('+919876543210');
+    expect(p2).toBe('+919876543210');
+    expect(p3).toBe('+919876543210');
+    expect(p4).toBe('+919876543210');
+
+    const prod = await productsService.createProduct('Hammer 500g', '250.00');
+    const prodId = parseInt(prod.id.toString(), 10);
+
+    // Create customer with 10-digit format
+    const tx1 = await khataService.createTransaction({
+      customer: { name: 'Aakash Verma', phone: '9876543210' },
+      items: [{ productId: prodId, quantity: 1, sellingPrice: '300.00' }],
+    });
+
+    // Reuse customer with +91 separated format
+    const tx2 = await khataService.createTransaction({
+      customer: { name: 'Aakash Verma', phone: '+91 98765 43210' },
+      items: [{ productId: prodId, quantity: 1, sellingPrice: '300.00' }],
+    });
+
+    expect(tx1.customerId).toBe(tx2.customerId);
+  });
+
+  // TEST CASE 16: Customer Identity: Existing no-phone customer receives phone safely without duplicate
+  it('16. Customer Identity: Safe phone attachment to existing no-phone customer without creating duplicate', async () => {
+    const prod = await productsService.createProduct('Wrench 10in', '150.00');
+    const prodId = parseInt(prod.id.toString(), 10);
+
+    // 1. Create customer without phone
+    const tx1 = await khataService.createTransaction({
+      customer: { name: 'Vijay Kumar' },
+      items: [{ productId: prodId, quantity: 1, sellingPrice: '200.00' }],
+    });
+    const origCustId = tx1.customerId;
+
+    // Verify customer has no phone initially
+    const cust1 = dbMock.customers.find((c) => c.id === origCustId.toString());
+    expect(cust1?.phone).toBe(null);
+
+    // 2. Later transaction supplies a valid phone for the same name
+    const tx2 = await khataService.createTransaction({
+      customer: { name: 'Vijay Kumar', phone: '9811223344' },
+      items: [{ productId: prodId, quantity: 2, sellingPrice: '200.00' }],
+    });
+
+    // Must safely attach phone to existing customer instead of creating a duplicate row!
+    expect(tx2.customerId).toBe(origCustId);
+    const updatedCust = dbMock.customers.find((c) => c.id === origCustId.toString());
+    expect(updatedCust?.phone).toBe('9811223344');
+    expect(updatedCust?.normalized_phone).toBe('+919811223344');
+    expect(dbMock.customers.filter((c) => c.normalized_name === 'vijay kumar').length).toBe(1);
+  });
+
+  // TEST CASE 17: Customer Identity: Rejects merge when same customer name exists with different phone
+  it('17. Customer Identity: Rejects merge with HTTP 409 when same name exists with different phone', async () => {
+    const prod = await productsService.createProduct('Pliers 8in', '120.00');
+    const prodId = parseInt(prod.id.toString(), 10);
+
+    // Customer 1 with phone A
+    await khataService.createTransaction({
+      customer: { name: 'Rajesh Sharma', phone: '9876500001' },
+      items: [{ productId: prodId, quantity: 1, sellingPrice: '150.00' }],
+    });
+
+    // Transaction with same name but phone B must throw 409 to prevent silent data corruption
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Rajesh Sharma', phone: '9876500002' },
+        items: [{ productId: prodId, quantity: 1, sellingPrice: '150.00' }],
+      })
+    ).rejects.toThrow(/already exists with a different phone number/);
+  });
+
+  // TEST CASE 18: Customer Identity: Rejects ambiguity when multiple customers match same name
+  it('18. Customer Identity: Rejects ambiguity with HTTP 409 when multiple customers share same name', async () => {
+    const prod = await productsService.createProduct('Tape 5m', '50.00');
+    const prodId = parseInt(prod.id.toString(), 10);
+
+    // Seed two customers with same name manually (legacy data)
+    dbMock.customers.push({
+      id: '901',
+      name: 'Mohan Lal',
+      normalized_name: 'mohan lal',
+      phone: null,
+      normalized_phone: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      archived_at: null,
+    });
+    dbMock.customers.push({
+      id: '902',
+      name: 'Mohan Lal',
+      normalized_name: 'mohan lal',
+      phone: null,
+      normalized_phone: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      archived_at: null,
+    });
+
+    // Creating transaction without explicit ID or phone must fail with AMBIGUOUS_CUSTOMER_MATCH (409)
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Mohan Lal' },
+        items: [{ productId: prodId, quantity: 1, sellingPrice: '60.00' }],
+      })
+    ).rejects.toThrow(/Multiple customers found matching "Mohan Lal"/);
   });
 });

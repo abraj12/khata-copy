@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 2. **`002_khata_transactions.sql`**: Configures product catalog, customer directory, Udhar credit transactions, payments, and FIFO payment allocations.
 3. **`003_idempotency_and_hardening.sql`**: Adds idempotency store, performance indexes, and strict financial constraints.
 4. **`004_integer_quantity_and_money_constraints.sql`**: Converts `udhar_items.quantity` to `INTEGER` [1, 1000000] and enforces strict 2-decimal scale checks across all money columns.
-5. **`005_search_indexes_and_identity_constraints.sql`**: Adds composite search indexes for customers (`normalized_name, id`, `normalized_phone`), active products (`name, id`), and Udhar transactions (`customer_id, transaction_date DESC, id DESC`).
+5. **`005_search_indexes_and_identity_constraints.sql`**: Adds composite search indexes for customers (`normalized_name, id`, `normalized_phone`), active products (`name, id`), and Udhar transactions (`customer_id, transaction_date DESC, id DESC`). Also widens `products.buying_price` to `NUMERIC(12, 2)` ensuring uniform financial precision across all tables.
 
 ### Preflight Safety Audit & How to Run Migrations
 

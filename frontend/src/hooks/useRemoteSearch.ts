@@ -8,7 +8,7 @@ export interface RemoteSearchResult<T> {
 }
 
 export interface UseRemoteSearchOptions<T> {
-  fetcher: (query: string, offset: number, signal: AbortSignal) => Promise<RemoteSearchResult<T>>;
+  fetcher: (query: string, offset: number, limit: number, signal: AbortSignal) => Promise<RemoteSearchResult<T>>;
   pageSize?: number;
   debounceMs?: number;
   enabled?: boolean;
@@ -16,7 +16,7 @@ export interface UseRemoteSearchOptions<T> {
 
 export function useRemoteSearch<T>({
   fetcher,
-  pageSize: _pageSize = 25,
+  pageSize = 25,
   debounceMs = 280,
   enabled = true,
 }: UseRemoteSearchOptions<T>) {
@@ -33,6 +33,15 @@ export function useRemoteSearch<T>({
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const requestIdRef = useRef(0);
+
+  // Unmount cleanup: abort any in-flight request
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
 
   const executeFetch = useCallback(
     async (searchQuery: string, offset = 0, isInitialOrSearchChange = true) => {
@@ -55,7 +64,7 @@ export function useRemoteSearch<T>({
       }
 
       try {
-        const result = await fetcher(searchQuery, offset, controller.signal);
+        const result = await fetcher(searchQuery, offset, pageSize, controller.signal);
 
         // Guard against race conditions and stale responses
         if (currentRequestId !== requestIdRef.current) return;
@@ -78,7 +87,7 @@ export function useRemoteSearch<T>({
         }
       }
     },
-    [enabled, fetcher]
+    [enabled, fetcher, pageSize]
   );
 
   // Trigger search when debounced query changes
@@ -97,10 +106,18 @@ export function useRemoteSearch<T>({
   }, [executeFetch, debouncedQuery]);
 
   const reset = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     setQuery('');
     setItems([]);
     setHasMore(false);
     setNextOffset(null);
+    setIsLoading(false);
+    setIsLoadingMore(false);
+    setIsError(false);
+    setErrorMessage(null);
   }, []);
 
   return {

@@ -8,7 +8,8 @@ export interface SearchablePickerProps<T> {
   selectedOption: T | null;
   placeholder: string;
   searchPlaceholder: string;
-  onSearch: (query: string, offset: number, signal: AbortSignal) => Promise<RemoteSearchResult<T>>;
+  pageSize?: number;
+  onSearch: (query: string, offset: number, limit: number, signal: AbortSignal) => Promise<RemoteSearchResult<T>>;
   onSelect: (item: T) => void;
   onClear?: () => void;
   getOptionKey: (item: T) => string | number;
@@ -28,6 +29,7 @@ export function SearchablePicker<T>({
   selectedOption,
   placeholder,
   searchPlaceholder,
+  pageSize = 25,
   onSearch,
   onSelect,
   onClear,
@@ -78,7 +80,7 @@ export function SearchablePicker<T>({
   } = useRemoteSearch<T>({
     fetcher: onSearch,
     enabled: isOpen,
-    pageSize: 25,
+    pageSize,
     debounceMs: 280,
   });
 
@@ -212,42 +214,41 @@ export function SearchablePicker<T>({
         aria-label={ariaLabel || placeholder}
         aria-required={required}
         className={`neu-input w-full text-left flex items-center justify-between text-sm font-medium transition cursor-pointer min-h-[44px] px-3.5 py-2.5 ${
-          disabled ? 'opacity-60 cursor-not-allowed' : 'hover:border-[var(--khata-accent)]'
-        }`}
+          value && onClear && !disabled ? 'pr-16' : 'pr-9'
+        } ${disabled ? 'opacity-60 cursor-not-allowed' : 'hover:border-[var(--khata-accent)]'}`}
         style={{
           backgroundColor: 'var(--khata-surface)',
           color: value ? 'var(--khata-text)' : 'var(--khata-text-muted)',
         }}
       >
-        <span className="truncate flex-1 mr-2">
+        <span className="truncate flex-1">
           {displayLabel || placeholder}
         </span>
-
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {value && onClear && !disabled && (
-            <span
-              role="button"
-              tabIndex={0}
-              onClick={handleClearClick}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  handleClearClick(e as unknown as React.MouseEvent);
-                }
-              }}
-              title="Clear selection"
-              aria-label="Clear selection"
-              className="p-1 rounded-lg text-[var(--khata-text-muted)] hover:text-rose-500 hover:bg-rose-500/10 transition cursor-pointer min-h-[28px] min-w-[28px] flex items-center justify-center"
-            >
-              <X className="w-3.5 h-3.5" />
-            </span>
-          )}
-          <ChevronDown
-            className={`w-4 h-4 text-[var(--khata-text-muted)] transition-transform duration-200 ${
-              isOpen ? 'rotate-180 text-[var(--khata-accent)]' : ''
-            }`}
-          />
-        </div>
       </button>
+
+      {/* Sibling action controls: Non-nested Clear button and Chevron indicator */}
+      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+        {value && onClear && !disabled && (
+          <button
+            type="button"
+            onClick={handleClearClick}
+            title="Clear selection"
+            aria-label="Clear selection"
+            className="p-1 rounded-lg text-[var(--khata-text-muted)] hover:text-rose-500 hover:bg-rose-500/10 transition cursor-pointer min-h-[28px] min-w-[28px] flex items-center justify-center pointer-events-auto"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
+        <span
+          onClick={disabled ? undefined : handleOpen}
+          aria-hidden="true"
+          className={`p-1 flex items-center justify-center text-[var(--khata-text-muted)] transition-transform duration-200 ${
+            disabled ? 'pointer-events-none' : 'cursor-pointer'
+          } ${isOpen ? 'rotate-180 text-[var(--khata-accent)]' : ''}`}
+        >
+          <ChevronDown className="w-4 h-4" />
+        </span>
+      </div>
 
       {/* Picker Body — Desktop Popover or Mobile Bottom Sheet */}
       {isOpen && (

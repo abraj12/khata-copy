@@ -4,6 +4,19 @@ All notable changes to the Khata project are documented in this file.
 
 ---
 
+## [1.5.0] - 2026-11-01
+
+### Fixed
+- **PostgreSQL 08P01 Bind Message Error in Customer Search:** Fixed missing parameter `$` prefix in `KhataService.listCustomers` pagination clause (`$${params.length + 1}` and `$${params.length + 2}`), resolving production 500 error on Render where literal integers were interpolated into SQL string with prepared arguments.
+- **Accessible Sibling Controls in SearchablePicker:** Eliminated nested interactive element violations (`role="button"` inside `<button>`) by rendering the clear button as a sibling element positioned over the relative container, with proper padding and ARIA combobox semantics.
+- **Customer Phone Validation Hardening:** Server strictly rejects malformed non-empty phone strings with HTTP 400 (`INVALID_PHONE_FORMAT`), while safely treating `null`, `undefined`, and whitespace-only as optional phone.
+- **Safe Customer Phone Attachment:** When creating an Udhar entry with a valid phone and name that matches an existing customer with `phone IS NULL`, the system safely updates and attaches the phone to that customer under transaction row locks (`FOR UPDATE`) rather than creating a duplicate customer record.
+- **Remote Search Hook Enhancements:** `useRemoteSearch` now dynamically passes configured `pageSize` to fetchers, cleans up and aborts in-flight requests on component unmount, and cancels in-flight fetches on `reset()`.
+- **Branding & Subtitle Cleanliness:** Replaced old subtitle `"Single-Shopkeeper Ledger Book"` with `"Single-Shopkeeper Digital Ledger"` in `LoginPage.tsx` and ensured exact global footer text `"Designed and managed by Algions AI Labs Pvt. Ltd."`.
+- **Uniform Financial Column Precision:** Updated Migration 005 with `ALTER TABLE "products" ALTER COLUMN "buying_price" TYPE NUMERIC(12, 2);` to unify all monetary columns across the entire database at `NUMERIC(12, 2)`.
+
+---
+
 ## [1.4.0] - 2026-11-01
 
 ### Added

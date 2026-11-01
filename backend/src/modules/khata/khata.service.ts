@@ -70,10 +70,21 @@ export class KhataService {
 
   /**
    * Normalizes an Indian customer phone number to canonical +91XXXXXXXXXX
+   * Rejects malformed non-empty phone input with HTTP 400 (INVALID_PHONE_FORMAT).
+   * Missing/empty/whitespace-only input safely returns null (optional phone).
    */
   public normalizeCustomerPhone(phone?: string | null): string | null {
-    if (!phone || typeof phone !== 'string') return null;
-    let cleaned = phone.replace(/[\s\-()]/g, '');
+    if (phone === null || phone === undefined) return null;
+    if (typeof phone !== 'string') {
+      const err = new Error('Customer phone must be a string.');
+      (err as unknown as { status: number; code: string }).status = 400;
+      (err as unknown as { status: number; code: string }).code = 'INVALID_PHONE_FORMAT';
+      throw err;
+    }
+    const trimmed = phone.trim();
+    if (trimmed === '') return null;
+
+    let cleaned = trimmed.replace(/[\s\-()]/g, '');
     if (cleaned.startsWith('+91')) {
       cleaned = cleaned.slice(3);
     } else if (cleaned.startsWith('91') && cleaned.length === 12) {
@@ -85,7 +96,11 @@ export class KhataService {
     if (/^[6-9]\d{9}$/.test(cleaned)) {
       return `+91${cleaned}`;
     }
-    return null;
+
+    const err = new Error('Invalid phone number format. Must be a valid 10-digit Indian mobile number.');
+    (err as unknown as { status: number; code: string }).status = 400;
+    (err as unknown as { status: number; code: string }).code = 'INVALID_PHONE_FORMAT';
+    throw err;
   }
 
   /**
@@ -458,53 +473,110 @@ export class KhataService {
           [input.customer.id]
         );
         if (custRes.rows.length === 0) {
-          throw new Error('Selected customer not found.');
+          const notFoundErr = new Error('Selected customer not found.');
+          (notFoundErr as unknown as { status: number; code: string }).status = 404;
+          (notFoundErr as unknown as { status: number; code: string }).code = 'CUSTOMER_NOT_FOUND';
+          throw notFoundErr;
         }
         const existing = custRes.rows[0];
         if (normPhone && existing.normalized_phone && existing.normalized_phone !== normPhone) {
           const conflictErr = new Error(
             `Customer #${existing.id} already has phone ${existing.phone}. Cannot overwrite with ${input.customer.phone}.`
           );
-          (conflictErr as unknown as { status: number }).status = 409;
+          (conflictErr as unknown as { status: number; code: string }).status = 409;
+          (conflictErr as unknown as { status: number; code: string }).code = 'PHONE_CONFLICT';
           throw conflictErr;
+        }
+
+        // If existing customer had no phone and new valid phone is supplied, attach it safely under row lock
+        if (normPhone && !existing.normalized_phone) {
+          const phoneConflict = await client.query(
+            'SELECT id, name FROM customers WHERE normalized_phone = $1 AND id != $2 FOR UPDATE',
+            [normPhone, existing.id]
+          );
+          if (phoneConflict.rows.length > 0) {
+            const conflictErr = new Error(
+              `Phone number ${input.customer.phone} is already attached to customer #${phoneConflict.rows[0].id} (${phoneConflict.rows[0].name}).`
+            );
+            (conflictErr as unknown as { status: number; code: string }).status = 409;
+            (conflictErr as unknown as { status: number; code: string }).code = 'PHONE_ALREADY_ATTACHED';
+            throw conflictErr;
+          }
+          await client.query(
+            'UPDATE customers SET phone = $1, normalized_phone = $2, updated_at = NOW() WHERE id = $3',
+            [input.customer.phone ? input.customer.phone.trim() : normPhone, normPhone, existing.id]
+          );
         }
         customerId = parseInt(existing.id, 10);
       } else {
-        // Customer resolution by phone or exact normalized name
+        // Customer resolution without explicit ID: match by phone or exact normalized name
         let matchedCustomer = null;
         if (normPhone) {
           const phoneRes = await client.query(
             'SELECT id, name, phone, normalized_name FROM customers WHERE normalized_phone = $1 FOR UPDATE',
             [normPhone]
           );
-          if (phoneRes.rows.length > 0) {
+          if (phoneRes.rows.length === 1) {
             matchedCustomer = phoneRes.rows[0];
+          } else if (phoneRes.rows.length > 1) {
+            const conflictErr = new Error(
+              `Multiple customer records found with phone ${input.customer.phone}. Please resolve duplicate customer records.`
+            );
+            (conflictErr as unknown as { status: number; code: string }).status = 409;
+            (conflictErr as unknown as { status: number; code: string }).code = 'AMBIGUOUS_CUSTOMER_MATCH';
+            throw conflictErr;
           }
         }
 
         if (matchedCustomer) {
           customerId = parseInt(matchedCustomer.id, 10);
         } else if (normPhone) {
-          // Phone provided but no phone match. Check if name matches someone with another phone
+          // Phone provided, but no customer found with this phone yet.
+          // Check if exactly one customer with matching normalized name exists and currently has NO phone
           const nameMatches = await client.query(
-            'SELECT id, name, phone FROM customers WHERE normalized_name = $1 FOR UPDATE',
+            'SELECT id, name, phone, normalized_phone FROM customers WHERE normalized_name = $1 FOR UPDATE',
             [normName]
           );
-          if (nameMatches.rows.length > 0 && nameMatches.rows.some((c) => c.phone !== null)) {
+
+          if (nameMatches.rows.length === 1 && !nameMatches.rows[0].phone) {
+            // Exactly one existing customer with no phone: safely attach phone under row lock!
+            const existingCust = nameMatches.rows[0];
+            await client.query(
+              'UPDATE customers SET phone = $1, normalized_phone = $2, updated_at = NOW() WHERE id = $3',
+              [input.customer.phone ? input.customer.phone.trim() : normPhone, normPhone, existingCust.id]
+            );
+            customerId = parseInt(existingCust.id, 10);
+          } else if (nameMatches.rows.length > 0 && nameMatches.rows.some((c) => c.phone !== null)) {
+            // Name matches someone with a different phone -> reject to prevent accidental merge
             const conflictErr = new Error(
               `A customer named "${rawName}" already exists with a different phone number. Please select the customer explicitly or verify identity.`
             );
-            (conflictErr as unknown as { status: number }).status = 409;
+            (conflictErr as unknown as { status: number; code: string }).status = 409;
+            (conflictErr as unknown as { status: number; code: string }).code = 'CUSTOMER_NAME_CONFLICT';
             throw conflictErr;
+          } else if (nameMatches.rows.length > 1) {
+            // Multiple customers with the same name -> ambiguous
+            const conflictErr = new Error(
+              `Multiple customers found matching "${rawName}". Please specify customer ID or phone to disambiguate.`
+            );
+            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).status = 409;
+            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).code = 'AMBIGUOUS_CUSTOMER_MATCH';
+            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).candidates = nameMatches.rows.map((r) => ({
+              id: parseInt(r.id, 10),
+              name: r.name,
+              phone: r.phone,
+            }));
+            throw conflictErr;
+          } else {
+            // 0 matches: safe to insert new customer with the phone
+            const newCust = await client.query(
+              `INSERT INTO customers (name, normalized_name, phone, normalized_phone, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, NOW(), NOW())
+               RETURNING id`,
+              [rawName, normName, input.customer.phone ? input.customer.phone.trim() : null, normPhone]
+            );
+            customerId = parseInt(newCust.rows[0].id, 10);
           }
-
-          const newCust = await client.query(
-            `INSERT INTO customers (name, normalized_name, phone, normalized_phone, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, NOW(), NOW())
-             RETURNING id`,
-            [rawName, normName, input.customer.phone ? input.customer.phone.trim() : null, normPhone]
-          );
-          customerId = parseInt(newCust.rows[0].id, 10);
         } else {
           // No phone provided. Search by exact normalized name
           const nameMatches = await client.query(
@@ -521,10 +593,14 @@ export class KhataService {
             );
             (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).status = 409;
             (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).code = 'AMBIGUOUS_CUSTOMER_MATCH';
-            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).candidates = nameMatches.rows;
+            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).candidates = nameMatches.rows.map((r) => ({
+              id: parseInt(r.id, 10),
+              name: r.name,
+              phone: r.phone,
+            }));
             throw conflictErr;
           } else {
-            // 0 matches: create new customer
+            // 0 matches: create new customer without phone
             const newCust = await client.query(
               `INSERT INTO customers (name, normalized_name, phone, normalized_phone, created_at, updated_at)
                VALUES ($1, $2, NULL, NULL, NOW(), NOW())

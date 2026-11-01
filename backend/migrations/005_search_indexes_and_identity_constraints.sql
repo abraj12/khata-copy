@@ -23,3 +23,7 @@ CREATE INDEX IF NOT EXISTS "idx_udhar_tx_activity_composite"
 -- 4. Payment allocations customer integrity check support index
 CREATE INDEX IF NOT EXISTS "idx_payment_alloc_lookup"
   ON "payment_allocations" ("transaction_id", "payment_id");
+
+-- 5. Uniform financial column precision: widen products.buying_price to NUMERIC(12, 2)
+ALTER TABLE "products" ALTER COLUMN "buying_price" TYPE NUMERIC(12, 2);
+

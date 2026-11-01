@@ -257,14 +257,14 @@ export const KhataLedgerView: React.FC = () => {
 
   // Search fetchers for SearchablePicker components
   const handleSearchCustomerPicker = useCallback(
-    async (queryText: string, offset: number, signal: AbortSignal) => {
+    async (queryText: string, offset: number, limit: number, signal: AbortSignal) => {
       const res = await apiClient<{
         success: boolean;
         customers?: CustomerListItem[];
         data?: CustomerListItem[];
         pagination?: { limit: number; offset: number; hasMore: boolean; nextOffset: number | null };
       }>(
-        `/api/v1/khata/customers?search=${encodeURIComponent(queryText)}&limit=25&offset=${offset}`,
+        `/api/v1/khata/customers?search=${encodeURIComponent(queryText)}&limit=${limit}&offset=${offset}`,
         { signal }
       );
       const items = res.data.customers || res.data.data || [];
@@ -276,14 +276,14 @@ export const KhataLedgerView: React.FC = () => {
   );
 
   const handleSearchProductPicker = useCallback(
-    async (queryText: string, offset: number, signal: AbortSignal) => {
+    async (queryText: string, offset: number, limit: number, signal: AbortSignal) => {
       const res = await apiClient<{
         success: boolean;
         products?: ProductReference[];
         data?: ProductReference[];
         pagination?: { limit: number; offset: number; hasMore: boolean; nextOffset: number | null };
       }>(
-        `/api/v1/products?search=${encodeURIComponent(queryText)}&limit=25&offset=${offset}`,
+        `/api/v1/products?search=${encodeURIComponent(queryText)}&limit=${limit}&offset=${offset}`,
         { signal }
       );
       const items = res.data.products || res.data.data || [];
