@@ -486,4 +486,29 @@ describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
     expect(res.headers['content-disposition']).toContain('Invoice_001.pdf');
     expect(res.body.subarray(0, 5).toString('ascii')).toBe('%PDF-');
   });
+
+  it('11. Generates and streams on-the-fly draft PDF via POST /api/v1/gst-invoices/preview-pdf without saving', async () => {
+    const res = await request(app)
+      .post('/api/v1/gst-invoices/preview-pdf')
+      .set('Cookie', authCookie)
+      .set('X-CSRF-Token', csrfToken)
+      .send({
+        invoiceNumber: 'DRAFT-099',
+        customerName: 'Mobile User Preview',
+        gstRate: 18,
+        items: [
+          {
+            description: 'Sample Fitting Screws',
+            hsnCode: '7318',
+            quantity: 2,
+            rate: 150,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(res.headers['content-disposition']).toContain('Invoice_DRAFT-099.pdf');
+    expect(res.body.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+  });
 });

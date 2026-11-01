@@ -350,41 +350,271 @@
 }
 .mhi-signature-wrap strong { font-size: 9pt; }
 
-@media screen and (max-width: 760px) {
-  .mhi-page {
-    transform-origin: top left;
-    margin-left: 0;
+.mhi-preview-container {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  justify-content: center;
+  padding: 8px;
+}
+
+@media screen and (max-width: 768px) {
+  .mhi-preview-container {
+    padding: 2px;
+    justify-content: center;
+  }
+
+  .mhi-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 8px;
+    margin: 8px auto;
+  }
+
+  .mhi-toolbar-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    width: 100%;
+  }
+
+  .mhi-toolbar button {
+    flex: 1 1 auto;
+    padding: 8px 10px;
+    font-size: 11px;
+    min-height: 38px;
   }
 }
 
 @page {
   size: A4 portrait;
-  margin: 0;
+  margin: 0mm !important;
 }
 
 @media print {
-  html, body, #root {
+  /* 1. Global Reset: Hide whole web app except the invoice */
+  *, *::before, *::after {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  html, body {
     margin: 0 !important;
     padding: 0 !important;
     background: #fff !important;
     width: 210mm !important;
+    height: 100% !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    overflow: visible !important;
   }
-  .mhi-root { background: #fff !important; }
-  .mhi-no-print { display: none !important; }
-  .mhi-page {
-    width: 210mm !important;
-    height: 297mm !important;
-    min-height: 297mm !important;
+
+  /* Hide navigation, sidebar, app layout, search bars, buttons outside print container */
+  body > *:not(#root),
+  #root > div:not(.mhi-print-modal-container),
+  nav,
+  aside,
+  header,
+  .mhi-no-print,
+  .mhi-toolbar,
+  .mhi-modal-header,
+  button {
+    display: none !important;
+  }
+
+  /* 2. Neutralize the modal backdrop and overlay */
+  .mhi-print-modal-container {
+    position: static !important;
+    inset: auto !important;
+    background: #fff !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    padding: 0 !important;
     margin: 0 !important;
-    padding: 6mm !important;
-    box-shadow: none !important;
-    break-after: avoid;
-    page-break-after: avoid;
+    overflow: visible !important;
+    width: 210mm !important;
+    height: auto !important;
+    display: block !important;
   }
+
+  .mhi-root {
+    background: #fff !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 210mm !important;
+    height: auto !important;
+  }
+
+  /* 3. A4 Page Container: EXACTLY 288mm total height (4mm top + 280mm frame + 4mm bottom) */
+  /* Mathematical Guarantee: 288mm < 297mm A4 height -> Will NEVER spill onto Page 2 */
+  .mhi-page {
+    box-sizing: border-box !important;
+    width: 210mm !important;
+    height: 288mm !important;
+    max-height: 288mm !important;
+    margin: 0 !important;
+    padding: 4mm 4mm !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    border: none !important;
+    transform: none !important;
+    page-break-inside: avoid !important;
+    page-break-after: avoid !important;
+    break-inside: avoid !important;
+    break-after: avoid-page !important;
+    overflow: hidden !important;
+  }
+
+  /* 4. Invoice Outer Border Frame */
   .mhi-invoice {
-    height: 285mm !important;
-    min-height: 285mm !important;
-    print-color-adjust: exact;
-    -webkit-print-color-adjust: exact;
+    box-sizing: border-box !important;
+    width: 100% !important;
+    height: 280mm !important;
+    max-height: 280mm !important;
+    border: .4mm solid #000 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    background: #fff !important;
+    font-size: 8.5pt !important;
+    line-height: 1.15 !important;
+  }
+
+  /* 5. Shop Header */
+  .mhi-shop-header {
+    flex: 0 0 33mm !important;
+    box-sizing: border-box !important;
+    border-bottom: .35mm solid #000 !important;
+    padding: 1mm 2mm !important;
+  }
+  .mhi-shop-name {
+    font-size: 22pt !important;
+    line-height: 1.05 !important;
+  }
+  .mhi-shop-address {
+    font-size: 10pt !important;
+  }
+
+  /* 6. Invoice Metadata */
+  .mhi-invoice-meta {
+    flex: 0 0 20mm !important;
+    border-bottom: .35mm solid #000 !important;
+  }
+  .mhi-meta-line {
+    min-height: 6mm !important;
+    font-size: 7.5pt !important;
+  }
+  .mhi-meta-line strong {
+    font-size: 8.5pt !important;
+  }
+
+  /* 7. Receiver Details */
+  .mhi-bill-to {
+    flex: 0 0 27mm !important;
+    border-bottom: .35mm solid #000 !important;
+    padding: 1mm 2mm !important;
+  }
+
+  /* 8. Goods Section & Columns */
+  .mhi-goods-section {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+  .mhi-goods-heading {
+    flex: 0 0 11mm !important;
+    border-bottom: .35mm solid #000 !important;
+  }
+  .mhi-goods-heading > div {
+    font-size: 8pt !important;
+  }
+
+  /* Goods Area: Must not clip absolute children */
+  .mhi-goods-area {
+    position: relative !important;
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    border-bottom: .35mm solid #000 !important;
+  }
+  .mhi-items-list {
+    padding: 1mm 0 45mm !important;
+  }
+  .mhi-item-row {
+    min-height: 6mm !important;
+    font-size: 8pt !important;
+    line-height: 1.25 !important;
+  }
+
+  /* 9. Tax Summary Box: 100% Guaranteed to be printed and crisp */
+  .mhi-tax-summary {
+    position: absolute !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 42% !important;
+    background: #fff !important;
+    border-top: .35mm solid #000 !important;
+    border-left: .35mm solid #000 !important;
+    box-sizing: border-box !important;
+    display: block !important;
+    visibility: visible !important;
+    z-index: 10 !important;
+    font-size: 7.5pt !important;
+  }
+  .mhi-tax-summary > div {
+    min-height: 6.5mm !important;
+    border-bottom: .25mm solid #000 !important;
+  }
+  .mhi-tax-summary strong {
+    border-right: .25mm solid #000 !important;
+    font-weight: 700 !important;
+    color: #000 !important;
+  }
+  .mhi-tax-summary span {
+    font-weight: 700 !important;
+    color: #000 !important;
+  }
+  .mhi-grand-total {
+    background: #f0f0f0 !important;
+    font-weight: 800 !important;
+  }
+  .mhi-grand-total span {
+    font-size: 8.5pt !important;
+    font-weight: 800 !important;
+  }
+
+  /* 10. Amount in words */
+  .mhi-amount-words {
+    flex: 0 0 16mm !important;
+    width: 58% !important;
+    padding: 1.5mm 2mm !important;
+    border-bottom: .35mm solid #000 !important;
+    font-size: 7.5pt !important;
+  }
+
+  /* 11. Footer */
+  .mhi-invoice-footer {
+    flex: 0 0 31mm !important;
+  }
+  .mhi-footer-left {
+    padding: 2mm 2.5mm !important;
+    border-right: .35mm solid #000 !important;
+    font-size: 8pt !important;
+  }
+  .mhi-footer-right {
+    padding: 1.5mm 2.5mm !important;
+    font-size: 7.5pt !important;
+  }
+  .mhi-signature-wrap {
+    height: 14mm !important;
+  }
+  .mhi-signature-wrap img {
+    height: 9mm !important;
+    bottom: 4mm !important;
   }
 }

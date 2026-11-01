@@ -91,6 +91,32 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 });
 
 /**
+ * POST /api/v1/gst-invoices/preview-pdf - Generates and streams PDF on-the-fly without saving to database
+ */
+router.post('/preview-pdf', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = createGstInvoiceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        message: parsed.error.errors[0]?.message || 'Invalid GST invoice input.',
+      });
+      return;
+    }
+
+    const { buffer, filename } = await gstInvoicesService.generateDraftPdf(parsed.data);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * GET /api/v1/gst-invoices - List invoices with pagination, filtering & search
  */
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {

@@ -515,6 +515,101 @@ export class GstInvoicesService {
     const buffer = await generateMannatInvoicePdf(pdfData);
     return { buffer, filename };
   }
+
+  /**
+   * Generates a preview PDF in-memory without database mutation
+   */
+  public async generateDraftPdf(input: CreateGstInvoiceInput): Promise<{ buffer: Buffer; filename: string }> {
+    if (!input.items || input.items.length === 0) {
+      throw new AppError('At least one line item is required.', 400, 'ITEMS_REQUIRED');
+    }
+
+    let taxableAmountDec = new Decimal(0);
+    const pdfItems: GstInvoicePdfData['items'] = [];
+
+    for (const item of input.items) {
+      const qtyDec = new Decimal(item.quantity || 1);
+      const rateDec = new Decimal(item.rate || 0);
+      const lineAmountDec = qtyDec.times(rateDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      taxableAmountDec = taxableAmountDec.plus(lineAmountDec);
+
+      pdfItems.push({
+        name: item.description,
+        hsn: item.hsnCode || null,
+        quantity: qtyDec.toString(),
+        unit: item.unit || null,
+        rate: rateDec.toFixed(2),
+        rateUnit: item.rateUnit || null,
+        amount: lineAmountDec.toFixed(2),
+      });
+    }
+
+    const shopStateCode = (input.stateCode || '09').trim();
+    const customerStateCode = (input.customerStateCode || '09').trim();
+    const isIntraState = shopStateCode === customerStateCode;
+    const gstRateDec = new Decimal(input.gstRate || 0);
+
+    let cgstRateDec = new Decimal(0);
+    let cgstAmountDec = new Decimal(0);
+    let sgstRateDec = new Decimal(0);
+    let sgstAmountDec = new Decimal(0);
+    let igstRateDec = new Decimal(0);
+    let igstAmountDec = new Decimal(0);
+
+    if (isIntraState) {
+      cgstRateDec = gstRateDec.dividedBy(2);
+      sgstRateDec = gstRateDec.dividedBy(2);
+      cgstAmountDec = taxableAmountDec.times(cgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      sgstAmountDec = taxableAmountDec.times(sgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    } else {
+      igstRateDec = gstRateDec;
+      igstAmountDec = taxableAmountDec.times(igstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    }
+
+    const totalTaxDec = cgstAmountDec.plus(sgstAmountDec).plus(igstAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const grandTotalDec = taxableAmountDec.plus(totalTaxDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const amountInWords = numberToIndianWords(grandTotalDec.toFixed(2));
+
+    const invoiceNumber = input.invoiceNumber?.trim() || 'DRAFT';
+    const invoiceDate = input.invoiceDate || new Date().toISOString().slice(0, 10);
+
+    const pdfData: GstInvoicePdfData = {
+      invoiceNumber,
+      invoiceDate,
+      state: input.state || 'Uttar Pradesh',
+      stateCode: shopStateCode,
+      transportationMode: input.transportationMode || null,
+      vehicleNumber: input.vehicleNumber || null,
+      dateOfSupply: input.dateOfSupply || invoiceDate,
+      placeOfSupply: input.placeOfSupply || 'Uttar Pradesh',
+      customer: {
+        name: input.customerName || 'Customer / Receiver',
+        address: input.customerAddress || null,
+        gstin: input.customerGstin || null,
+        state: input.customerState || 'Uttar Pradesh',
+        stateCode: customerStateCode,
+      },
+      items: pdfItems,
+      totals: {
+        taxableAmount: taxableAmountDec.toFixed(2),
+        cgstRate: cgstRateDec.isPositive() ? cgstRateDec.toString() : '',
+        cgstAmount: cgstAmountDec.toFixed(2),
+        sgstRate: sgstRateDec.isPositive() ? sgstRateDec.toString() : '',
+        sgstAmount: sgstAmountDec.toFixed(2),
+        igstRate: igstRateDec.isPositive() ? igstRateDec.toString() : '',
+        igstAmount: igstAmountDec.toFixed(2),
+        taxAmount: totalTaxDec.toFixed(2),
+        grandTotal: grandTotalDec.toFixed(2),
+      },
+      amountInWords,
+    };
+
+    const buffer = await generateMannatInvoicePdf(pdfData);
+    return {
+      buffer,
+      filename: `Invoice_${invoiceNumber}.pdf`,
+    };
+  }
 }
 
 export const gstInvoicesService = new GstInvoicesService();

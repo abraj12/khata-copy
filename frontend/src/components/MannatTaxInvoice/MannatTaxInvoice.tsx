@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import './MannatTaxInvoice.css';
 import nasreenSignature from './assets/nasreen-signature.png';
 
@@ -132,6 +133,41 @@ export default function MannatTaxInvoice({
   const items = Array.isArray(invoice.items) ? invoice.items : [];
   const suppliedTotals = invoice.totals || {};
 
+  const [scale, setScale] = useState(1);
+  const [isMobileScreen, setIsMobileScreen] = useState(false);
+  const [fitScreen, setFitScreen] = useState(true);
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (typeof window !== 'undefined') {
+        const isMobile = window.innerWidth < 820;
+        setIsMobileScreen(isMobile);
+        if (isMobile && fitScreen) {
+          const availWidth = window.innerWidth - 20;
+          // 210mm @ 96dpi is ~794px
+          const s = Math.min(1, Math.max(0.38, availWidth / 794));
+          setScale(s);
+        } else {
+          setScale(1);
+        }
+      }
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [fitScreen]);
+
+  const toggleFitMode = () => {
+    if (fitScreen) {
+      setFitScreen(false);
+      setScale(1);
+    } else {
+      setFitScreen(true);
+      const availWidth = (typeof window !== 'undefined' ? window.innerWidth : 794) - 20;
+      setScale(Math.min(1, Math.max(0.38, availWidth / 794)));
+    }
+  };
+
   const lineAmounts = items.map((item) => {
     const explicitAmount = item.amount;
     const calculated = Number(item.quantity || 0) * Number(item.rate || 0);
@@ -156,31 +192,64 @@ export default function MannatTaxInvoice({
     <div className="mhi-root">
       {showPrintButton && (
         <div className="mhi-toolbar mhi-no-print">
-          <span className="font-semibold text-neutral-700">Invoice Preview · A4 Portrait</span>
           <div className="flex items-center gap-2">
+            <span className="font-bold text-neutral-800 text-xs sm:text-sm">
+              Official Tax Invoice · A4
+            </span>
+            {isMobileScreen && (
+              <span className="text-[10px] px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-semibold">
+                Mobile Preview
+              </span>
+            )}
+          </div>
+          <div className="mhi-toolbar-actions flex items-center gap-2">
+            {isMobileScreen && (
+              <button
+                type="button"
+                onClick={toggleFitMode}
+                className="bg-neutral-200 hover:bg-neutral-300 text-neutral-800 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition"
+                title={fitScreen ? 'Switch to 100% full size' : 'Fit full invoice to phone screen'}
+              >
+                {fitScreen ? '🔍 100% Zoom' : '📱 Fit Screen'}
+              </button>
+            )}
+
             {onDownloadPdf && (
               <button
                 type="button"
                 onClick={onDownloadPdf}
                 disabled={isDownloadingPdf}
-                className="bg-neutral-800 hover:bg-neutral-900 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold transition disabled:opacity-50"
+                className="bg-neutral-800 hover:bg-neutral-900 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold transition disabled:opacity-50 flex items-center justify-center gap-1.5"
               >
-                {isDownloadingPdf ? 'Generating PDF...' : 'Download PDF'}
+                {isDownloadingPdf ? 'Generating PDF...' : 'Download Official PDF'}
               </button>
             )}
+
             <button
               type="button"
               onClick={printInvoice}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold transition"
+              className="bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5"
             >
-              Print / Save PDF
+              Print / Save PDF (A4)
             </button>
           </div>
         </div>
       )}
 
-      <main className="mhi-page">
-        <article className="mhi-invoice" aria-label="Mannat Hardware Store GST tax invoice">
+      <div className="mhi-preview-container">
+        <main
+          className="mhi-page"
+          style={
+            scale < 1
+              ? {
+                  transform: `scale(${scale})`,
+                  transformOrigin: 'top center',
+                  marginBottom: `-${Math.round((1 - scale) * 1100)}px`,
+                }
+              : undefined
+          }
+        >
+          <article className="mhi-invoice" aria-label="Mannat Hardware Store GST tax invoice">
           <header className="mhi-shop-header">
             <div className="mhi-topline">
               <strong>GSTIN : {SHOP.gstin}</strong>
@@ -283,6 +352,7 @@ export default function MannatTaxInvoice({
           </footer>
         </article>
       </main>
+      </div>
     </div>
   );
 }

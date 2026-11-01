@@ -150,6 +150,33 @@ export async function downloadInvoicePdf(id: number, invoiceNumber: string): Pro
   window.URL.revokeObjectURL(blobUrl);
 }
 
+export async function downloadDraftPdf(payload: CreateGstInvoicePayload): Promise<void> {
+  const url = `${API_BASE_URL}/api/v1/gst-invoices/preview-pdf`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorJson = await response.json().catch(() => ({}));
+    throw new Error(errorJson.message || 'Failed to download draft PDF');
+  }
+
+  const blob = await response.blob();
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = `Invoice_${payload.invoiceNumber || 'Draft'}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(blobUrl);
+}
+
 export function mapRecordToInvoiceProps(record: GstInvoiceRecord): MannatInvoiceProps {
   return {
     invoiceNumber: record.invoice_number,

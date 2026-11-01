@@ -26,6 +26,7 @@ import {
   createGstInvoice,
   listGstInvoices,
   downloadInvoicePdf,
+  downloadDraftPdf,
   mapRecordToInvoiceProps,
   GstInvoiceRecord,
 } from './gstInvoicesApi.js';
@@ -440,6 +441,44 @@ export const GstBillingView: React.FC = () => {
     }
   };
 
+  // Download draft vector PDF helper
+  const handleDownloadDraftPdf = async () => {
+    try {
+      setIsDownloadingPdf(true);
+      await downloadDraftPdf({
+        invoiceNumber: invoiceNumber.trim() || undefined,
+        invoiceDate,
+        state,
+        stateCode,
+        transportationMode: transportationMode.trim() || null,
+        vehicleNumber: vehicleNumber.trim() || null,
+        dateOfSupply,
+        placeOfSupply,
+        customerId,
+        customerName: customerName.trim() || 'Customer / Receiver',
+        customerAddress: customerAddress.trim() || null,
+        customerGstin: customerGstin.trim() || null,
+        customerState,
+        customerStateCode,
+        gstRate,
+        items: items.map((i) => ({
+          productId: i.productId || null,
+          description: i.description.trim() || 'Item Description',
+          hsnCode: i.hsnCode.trim() || null,
+          quantity: i.quantity || '1',
+          unit: i.unit.trim() || null,
+          rate: i.rate || '0',
+          rateUnit: i.rateUnit.trim() || null,
+        })),
+        notes: notes.trim() || null,
+      });
+    } catch (err: any) {
+      alert(err.message || 'Unable to download draft PDF.');
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Banner & Tab Controls */}
@@ -471,11 +510,11 @@ export const GstBillingView: React.FC = () => {
         </div>
 
         {/* Sub-tab Navigation */}
-        <div className="flex items-center gap-2 bg-[var(--khata-surface-inset)] p-1 rounded-xl border border-[var(--khata-border)]">
+        <div className="w-full sm:w-auto grid grid-cols-2 sm:flex items-center gap-1.5 sm:gap-2 bg-[var(--khata-surface-inset)] p-1 rounded-xl border border-[var(--khata-border)]">
           <button
             type="button"
             onClick={() => setActiveSubTab('create')}
-            className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition flex items-center gap-1.5 ${
+            className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
               activeSubTab === 'create'
                 ? 'bg-[var(--khata-accent)] text-white shadow-sm'
                 : 'text-[var(--khata-text)] hover:text-[var(--khata-accent)]'
@@ -488,7 +527,7 @@ export const GstBillingView: React.FC = () => {
           <button
             type="button"
             onClick={() => setActiveSubTab('history')}
-            className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition flex items-center gap-1.5 ${
+            className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
               activeSubTab === 'history'
                 ? 'bg-[var(--khata-accent)] text-white shadow-sm'
                 : 'text-[var(--khata-text)] hover:text-[var(--khata-accent)]'
@@ -684,7 +723,7 @@ export const GstBillingView: React.FC = () => {
 
                     {isCustomerDropdownOpen && (
                       <div
-                        className="absolute right-0 top-full mt-2 w-64 p-2 rounded-xl border border-[var(--khata-border)] shadow-xl z-20 space-y-2"
+                        className="absolute right-0 top-full mt-2 w-72 max-w-[85vw] p-2 rounded-xl border border-[var(--khata-border)] shadow-xl z-20 space-y-2"
                         style={{ background: 'var(--khata-surface)' }}
                       >
                         <input
@@ -1148,80 +1187,150 @@ export const GstBillingView: React.FC = () => {
               No GST invoices found. Create your first GST bill using the "Create GST Bill" tab!
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-[var(--khata-border)]">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-[var(--khata-surface-inset)] text-[var(--khata-text-muted)] font-bold uppercase tracking-wider border-b border-[var(--khata-border)]">
-                  <tr>
-                    <th className="py-3 px-4">Invoice #</th>
-                    <th className="py-3 px-4">Date</th>
-                    <th className="py-3 px-4">Customer</th>
-                    <th className="py-3 px-4 text-right">Taxable (₹)</th>
-                    <th className="py-3 px-4 text-right">Tax (₹)</th>
-                    <th className="py-3 px-4 text-right">Total (₹)</th>
-                    <th className="py-3 px-4 text-center">PDF</th>
-                    <th className="py-3 px-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--khata-border)] font-medium">
-                  {historyInvoices.map((inv) => (
-                    <tr key={inv.id} className="hover:bg-[var(--khata-surface-inset)]/50 transition">
-                      <td className="py-3 px-4 font-mono font-bold text-[var(--khata-accent)]">
-                        {inv.invoice_number}
-                      </td>
-                      <td className="py-3 px-4 text-[var(--khata-text-muted)]">
-                        {inv.invoice_date}
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="font-bold text-[var(--khata-text)]">{inv.customer_name}</div>
-                        <div className="text-[10px] text-[var(--khata-text-muted)]">{inv.customer_state}</div>
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono">
-                        ₹{inv.taxable_amount}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono text-[var(--khata-text-muted)]">
-                        ₹{inv.tax_amount}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono font-bold text-[var(--khata-accent)]">
-                        ₹{inv.grand_total}
-                      </td>
-                      <td className="py-3 px-4 text-center">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            inv.pdf_status === 'uploaded'
-                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
-                              : 'bg-blue-100 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300'
-                          }`}
-                        >
-                          {inv.pdf_status === 'uploaded' ? 'R2 Synced' : 'Ready'}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => setPreviewInvoice(mapRecordToInvoiceProps(inv))}
-                            className="p-1.5 rounded-lg border border-[var(--khata-border)] hover:bg-[var(--khata-surface)] text-[var(--khata-text)]"
-                            title="Preview / Print A4"
-                          >
-                            <Eye className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleDownloadPdf(inv.id, inv.invoice_number)}
-                            disabled={isDownloadingPdf}
-                            className="p-1.5 rounded-lg border border-[var(--khata-border)] hover:bg-[var(--khata-surface)] text-[var(--khata-text)]"
-                            title="Download PDF"
-                          >
-                            <Download className="w-3.5 h-3.5 text-emerald-600" />
-                          </button>
-                        </div>
-                      </td>
+            <>
+              {/* Desktop Table View */}
+              <div className="hidden md:block overflow-x-auto rounded-xl border border-[var(--khata-border)]">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-[var(--khata-surface-inset)] text-[var(--khata-text-muted)] font-bold uppercase tracking-wider border-b border-[var(--khata-border)]">
+                    <tr>
+                      <th className="py-3 px-4">Invoice #</th>
+                      <th className="py-3 px-4">Date</th>
+                      <th className="py-3 px-4">Customer</th>
+                      <th className="py-3 px-4 text-right">Taxable (₹)</th>
+                      <th className="py-3 px-4 text-right">Tax (₹)</th>
+                      <th className="py-3 px-4 text-right">Total (₹)</th>
+                      <th className="py-3 px-4 text-center">PDF</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--khata-border)] font-medium">
+                    {historyInvoices.map((inv) => (
+                      <tr key={inv.id} className="hover:bg-[var(--khata-surface-inset)]/50 transition">
+                        <td className="py-3 px-4 font-mono font-bold text-[var(--khata-accent)]">
+                          {inv.invoice_number}
+                        </td>
+                        <td className="py-3 px-4 text-[var(--khata-text-muted)]">
+                          {inv.invoice_date}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-[var(--khata-text)]">{inv.customer_name}</div>
+                          <div className="text-[10px] text-[var(--khata-text-muted)]">{inv.customer_state}</div>
+                        </td>
+                        <td className="py-3 px-4 text-right font-mono">
+                          ₹{inv.taxable_amount}
+                        </td>
+                        <td className="py-3 px-4 text-right font-mono text-[var(--khata-text-muted)]">
+                          ₹{inv.tax_amount}
+                        </td>
+                        <td className="py-3 px-4 text-right font-mono font-bold text-[var(--khata-accent)]">
+                          ₹{inv.grand_total}
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              inv.pdf_status === 'uploaded'
+                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                                : 'bg-blue-100 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300'
+                            }`}
+                          >
+                            {inv.pdf_status === 'uploaded' ? 'R2 Synced' : 'Ready'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setPreviewInvoice(mapRecordToInvoiceProps(inv))}
+                              className="p-1.5 rounded-lg border border-[var(--khata-border)] hover:bg-[var(--khata-surface)] text-[var(--khata-text)] cursor-pointer"
+                              title="Preview / Print A4"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadPdf(inv.id, inv.invoice_number)}
+                              disabled={isDownloadingPdf}
+                              className="p-1.5 rounded-lg border border-[var(--khata-border)] hover:bg-[var(--khata-surface)] text-[var(--khata-text)] cursor-pointer"
+                              title="Download PDF"
+                            >
+                              <Download className="w-3.5 h-3.5 text-emerald-600" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile Card View */}
+              <div className="md:hidden space-y-3">
+                {historyInvoices.map((inv) => (
+                  <div
+                    key={inv.id}
+                    className="p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-2.5 text-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-sm text-[var(--khata-accent)]">
+                          #{inv.invoice_number}
+                        </span>
+                        <span className="text-[11px] text-[var(--khata-text-muted)]">
+                          {inv.invoice_date}
+                        </span>
+                      </div>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          inv.pdf_status === 'uploaded'
+                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                            : 'bg-blue-100 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300'
+                        }`}
+                      >
+                        {inv.pdf_status === 'uploaded' ? 'R2 Synced' : 'Ready'}
+                      </span>
+                    </div>
+
+                    <div className="pb-1 border-b border-[var(--khata-border)]/50">
+                      <div className="font-bold text-[var(--khata-text)] text-sm">{inv.customer_name}</div>
+                      {inv.customer_address && (
+                        <div className="text-[11px] text-[var(--khata-text-muted)] truncate">{inv.customer_address}</div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-[10px] text-[var(--khata-text-muted)]">Grand Total (incl. GST)</div>
+                        <div className="font-mono font-extrabold text-base text-[var(--khata-accent)]">
+                          ₹{inv.grand_total}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setPreviewInvoice(mapRecordToInvoiceProps(inv))}
+                          className="neu-btn-secondary px-3 py-1.5 flex items-center gap-1.5 text-xs font-bold"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
+                          <span>View</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadPdf(inv.id, inv.invoice_number)}
+                          disabled={isDownloadingPdf}
+                          className="neu-btn-primary px-3 py-1.5 flex items-center gap-1.5 text-xs font-bold"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>PDF</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
 
           {/* Pagination */}
@@ -1312,15 +1421,15 @@ export const GstBillingView: React.FC = () => {
 
       {/* Fullscreen A4 Invoice Preview Modal */}
       {previewInvoice && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-sm flex flex-col p-2 sm:p-4">
-          <div className="max-w-[220mm] mx-auto w-full flex items-center justify-between pb-3 text-white">
-            <span className="font-bold text-sm">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-sm flex flex-col p-1 sm:p-4 mhi-print-modal-container">
+          <div className="max-w-[220mm] mx-auto w-full flex items-center justify-between pb-2 sm:pb-3 text-white mhi-modal-header mhi-no-print">
+            <span className="font-bold text-xs sm:text-sm truncate">
               Official Tax Invoice · {previewInvoice.invoiceNumber}
             </span>
             <button
               type="button"
               onClick={() => setPreviewInvoice(null)}
-              className="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white transition flex items-center gap-1 text-xs font-bold"
+              className="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white transition flex items-center gap-1 text-xs font-bold cursor-pointer"
             >
               <X className="w-4 h-4" />
               <span>Close</span>
@@ -1335,7 +1444,7 @@ export const GstBillingView: React.FC = () => {
                 if (successRecord) {
                   handleDownloadPdf(successRecord.id, successRecord.invoice_number);
                 } else {
-                  window.print();
+                  handleDownloadDraftPdf();
                 }
               }}
               isDownloadingPdf={isDownloadingPdf}
