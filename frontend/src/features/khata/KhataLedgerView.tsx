@@ -24,6 +24,7 @@ import { formatCurrency, formatQuantity, safeDecimal, parseStrictDecimal } from 
 import { SearchablePicker } from '../../components/SearchablePicker.js';
 import { OfflineBillModal } from '../offlineBills/OfflineBillModal.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
+import { resolveImageUrl } from '../products/productsApi.js';
 
 interface SummaryData {
   totalCustomers: number | string;
@@ -1123,7 +1124,7 @@ export const KhataLedgerView: React.FC = () => {
                               <div className="flex items-center gap-2 min-w-0">
                                 {p.image_url ? (
                                   <img
-                                    src={p.image_url}
+                                    src={resolveImageUrl(p.image_url)}
                                     alt={p.name}
                                     className="w-7 h-7 rounded object-cover flex-shrink-0 border border-[var(--khata-border)]"
                                   />
@@ -1146,7 +1147,7 @@ export const KhataLedgerView: React.FC = () => {
                           <div className="text-[11px] text-[var(--khata-text-muted)] mt-1.5 flex items-center gap-2">
                             {line.selectedProduct.image_url && (
                               <img
-                                src={line.selectedProduct.image_url}
+                                src={resolveImageUrl(line.selectedProduct.image_url)}
                                 alt={line.selectedProduct.name}
                                 className="w-6 h-6 rounded object-cover border border-[var(--khata-border)] flex-shrink-0"
                               />

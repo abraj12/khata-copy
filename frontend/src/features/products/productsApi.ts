@@ -1,9 +1,22 @@
-import { apiClient, getCsrfToken, fetchCsrfToken } from '../../lib/apiClient.js';
+import { apiClient, getCsrfToken, fetchCsrfToken, API_BASE_URL } from '../../lib/apiClient.js';
 
-const API_BASE_URL =
-  (import.meta as unknown as { env: Record<string, string> }).env.VITE_API_BASE_URL ||
-  (import.meta as unknown as { env: Record<string, string> }).env.VITE_API_URL ||
-  'https://api-khata.algions.in';
+export { API_BASE_URL };
+
+/**
+ * Resolves an image URL (relative or absolute) to a full URL.
+ */
+export function resolveImageUrl(url?: string | null): string {
+  if (!url) return '';
+  if (
+    url.startsWith('http://') ||
+    url.startsWith('https://') ||
+    url.startsWith('blob:') ||
+    url.startsWith('data:')
+  ) {
+    return url;
+  }
+  return `${API_BASE_URL}${url.startsWith('/') ? '' : '/'}${url}`;
+}
 
 export interface UploadIntentData {
   uploadUrl: string;

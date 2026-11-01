@@ -20,6 +20,7 @@ import {
   getOfflineBillImageUrl,
   deleteOfflineBill,
   OfflineBillsPagination,
+  resolveImageUrl,
 } from './offlineBillsApi.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 
@@ -218,7 +219,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
   const handleOpenLightbox = (bill: OfflineBillRecord) => {
     if (bill.image_url) {
       setLightboxBill({
-        url: bill.image_url,
+        url: resolveImageUrl(bill.image_url),
         title: bill.customer_name,
         phone: bill.customer_phone,
       });
@@ -553,7 +554,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
                         >
                           {bill.image_url ? (
                             <img
-                              src={bill.image_url}
+                              src={resolveImageUrl(bill.image_url)}
                               alt={bill.customer_name}
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                             />

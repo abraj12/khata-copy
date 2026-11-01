@@ -100,6 +100,7 @@ export class StorageService {
         },
         requestChecksumCalculation: 'WHEN_REQUIRED',
         responseChecksumValidation: 'WHEN_REQUIRED',
+        forcePathStyle: true,
       });
     }
   }
@@ -279,6 +280,34 @@ export class StorageService {
         'OBJECT_NOT_FOUND'
       );
     }
+  }
+
+  /**
+   * Directly streams an object from R2 storage.
+   * Used by server proxy routes to serve images directly to clients without CORS or domain issues.
+   */
+  public async getObjectStream(objectKey: string): Promise<{
+    stream: NodeJS.ReadableStream;
+    contentType: string;
+    contentLength?: number;
+  }> {
+    this.assertConfigured();
+
+    const command = new GetObjectCommand({
+      Bucket: env.R2_BUCKET_NAME!,
+      Key: objectKey,
+    });
+
+    const response = await this.s3Client!.send(command);
+    if (!response.Body) {
+      throw new AppError('Object body is empty or not found in storage.', 404, 'NOT_FOUND');
+    }
+
+    return {
+      stream: response.Body as unknown as NodeJS.ReadableStream,
+      contentType: response.ContentType || 'image/jpeg',
+      contentLength: response.ContentLength,
+    };
   }
 
   /**

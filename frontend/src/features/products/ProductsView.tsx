@@ -20,6 +20,8 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import {
   uploadAndAttachProductImage,
   removeProductImage,
+  resolveImageUrl,
+  API_BASE_URL,
 } from './productsApi.js';
 
 interface Product {
@@ -82,7 +84,7 @@ export const ProductsView: React.FC = () => {
   const [archiveError, setArchiveError] = useState<string | null>(null);
 
   // Lightbox View State
-  const [lightboxProduct, setLightboxProduct] = useState<{ url: string; name: string; price: string } | null>(null);
+  const [lightboxProduct, setLightboxProduct] = useState<{ id?: number; url: string; name: string; price: string } | null>(null);
 
   // Global notification banner
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -643,7 +645,8 @@ export const ProductsView: React.FC = () => {
                           <div
                             onClick={() =>
                               setLightboxProduct({
-                                url: item.image_url!,
+                                id: item.id,
+                                url: resolveImageUrl(item.image_url),
                                 name: item.name,
                                 price: item.buying_price,
                               })
@@ -652,9 +655,15 @@ export const ProductsView: React.FC = () => {
                             title="Click to view full image"
                           >
                             <img
-                              src={item.image_url}
+                              src={resolveImageUrl(item.image_url)}
                               alt={item.name}
                               className="w-full h-full object-cover group-hover:scale-110 transition-transform"
+                              onError={(e) => {
+                                const fallback = `${API_BASE_URL}/api/v1/products/${item.id}/image`;
+                                if (e.currentTarget.src !== fallback) {
+                                  e.currentTarget.src = fallback;
+                                }
+                              }}
                             />
                             <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
                               <Eye className="w-3.5 h-3.5" />
@@ -841,9 +850,24 @@ export const ProductsView: React.FC = () => {
                 ) : editingProduct.image_url ? (
                   <div className="flex items-center gap-3 p-2.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/40">
                     <img
-                      src={editingProduct.image_url}
+                      src={resolveImageUrl(editingProduct.image_url)}
                       alt={editingProduct.name}
-                      className="w-12 h-12 rounded-lg object-cover border border-[var(--khata-border)]"
+                      onClick={() =>
+                        setLightboxProduct({
+                          id: editingProduct.id,
+                          url: resolveImageUrl(editingProduct.image_url),
+                          name: editingProduct.name,
+                          price: editingProduct.buying_price,
+                        })
+                      }
+                      className="w-12 h-12 rounded-lg object-cover border border-[var(--khata-border)] cursor-pointer hover:opacity-80 transition"
+                      title="Click to view full image"
+                      onError={(e) => {
+                        const fallback = `${API_BASE_URL}/api/v1/products/${editingProduct.id}/image`;
+                        if (e.currentTarget.src !== fallback) {
+                          e.currentTarget.src = fallback;
+                        }
+                      }}
                     />
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-semibold text-[var(--khata-text)]">
@@ -939,11 +963,15 @@ export const ProductsView: React.FC = () => {
       {/* Lightbox / Zoom View Modal */}
       {lightboxProduct && (
         <div
-          className="fixed inset-0 bg-black/85 backdrop-blur-md z-[60] flex flex-col items-center justify-center p-4"
+          className="fixed inset-0 bg-black/85 backdrop-blur-md z-[60] flex flex-col items-center justify-center p-4 cursor-pointer"
           role="dialog"
           aria-modal="true"
+          onClick={() => setLightboxProduct(null)}
         >
-          <div className="w-full max-w-2xl flex items-center justify-between text-white pb-3">
+          <div
+            className="w-full max-w-2xl flex items-center justify-between text-white pb-3 cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div>
               <h3 className="font-bold text-base">{lightboxProduct.name}</h3>
               <p className="text-xs text-neutral-300 font-mono">
@@ -959,11 +987,22 @@ export const ProductsView: React.FC = () => {
               <X className="w-6 h-6" />
             </button>
           </div>
-          <div className="max-w-2xl max-h-[80vh] overflow-auto rounded-xl flex items-center justify-center">
+          <div
+            className="max-w-2xl max-h-[80vh] w-full flex items-center justify-center overflow-hidden rounded-xl bg-black/40 p-2 cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             <img
-              src={lightboxProduct.url}
+              src={resolveImageUrl(lightboxProduct.url)}
               alt={lightboxProduct.name}
-              className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl"
+              className="max-w-full max-h-[75vh] object-contain rounded-lg shadow-2xl"
+              onError={(e) => {
+                if (lightboxProduct.id) {
+                  const fallback = `${API_BASE_URL}/api/v1/products/${lightboxProduct.id}/image`;
+                  if (e.currentTarget.src !== fallback) {
+                    e.currentTarget.src = fallback;
+                  }
+                }
+              }}
             />
           </div>
         </div>

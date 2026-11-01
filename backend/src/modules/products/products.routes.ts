@@ -14,7 +14,54 @@ const upload = multer({
 
 const router = Router();
 
-// Protect all product endpoints with requireOwnerSession
+/**
+ * GET /api/v1/products/:id/image - Directly stream product photograph from storage
+ * Public route for <img> tags to completely bypass Cloudflare R2 browser CORS,
+ * domain resolution, and presigned URL expiration issues.
+ */
+router.get('/:id/image', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Invalid product ID.' });
+      return;
+    }
+
+    const product = await productsService.getProductById(id);
+    if (!product || !product.image_object_key || product.archived_at) {
+      res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product image not found or archived.' });
+      return;
+    }
+
+    const { stream, contentType, contentLength } = await storageService.getObjectStream(product.image_object_key);
+
+    res.setHeader('Content-Type', contentType);
+    if (contentLength) {
+      res.setHeader('Content-Length', contentLength);
+    }
+    // Cache for 1 day in browser, revalidate in background up to 7 days
+    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+
+    (stream as any).on('error', (err: unknown) => {
+      if (!res.headersSent) next(err);
+    });
+    res.on('close', () => {
+      if (typeof (stream as any).destroy === 'function') {
+        (stream as any).destroy();
+      }
+    });
+
+    (stream as any).pipe(res);
+  } catch (err: any) {
+    if (err?.name === 'NoSuchKey' || err?.code === 'NoSuchKey') {
+      res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Image object not found in storage.' });
+      return;
+    }
+    next(err);
+  }
+});
+
+// Protect all remaining product endpoints with requireOwnerSession
 router.use(requireOwnerSession);
 
 const productSearchQuerySchema = z.object({

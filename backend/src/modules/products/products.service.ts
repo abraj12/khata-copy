@@ -35,29 +35,25 @@ export interface PaginatedProductsResult {
 
 export class ProductsService {
   /**
-   * Helper to attach temporary presigned GET URLs to product records
+   * Helper to attach image URLs to product records.
+   * Uses direct proxy URLs to eliminate browser CORS and 5-minute presigned expiration timeouts.
    */
   private async attachPresignedUrls(rows: any[]): Promise<ProductRecord[]> {
     if (!storageService.isConfigured()) {
       return rows.map((r) => ({ ...r, image_url: null }));
     }
 
-    return Promise.all(
-      rows.map(async (r) => {
-        let imageUrl: string | null = null;
-        if (r.image_object_key) {
-          try {
-            imageUrl = await storageService.getPresignedViewUrl(r.image_object_key);
-          } catch (err) {
-            console.warn('[PRODUCTS] Failed to generate presigned URL for', r.image_object_key, (err as Error).message);
-          }
-        }
-        return {
-          ...r,
-          image_url: imageUrl,
-        };
-      })
-    );
+    return rows.map((r) => {
+      let imageUrl: string | null = null;
+      if (r.image_object_key) {
+        const v = Date.parse(r.image_updated_at || r.updated_at || '') || 1;
+        imageUrl = `/api/v1/products/${r.id}/image?v=${v}`;
+      }
+      return {
+        ...r,
+        image_url: imageUrl,
+      };
+    });
   }
 
   /**
@@ -261,7 +257,7 @@ export class ProductsService {
   }
 
   /**
-   * Retrieves fresh presigned GET URL for product image
+   * Retrieves fresh image URL for product image
    */
   public async getProductImageUrl(productId: number): Promise<{ imageUrl: string | null; expiresIn: number }> {
     const existing = await this.getProductById(productId);
@@ -273,8 +269,9 @@ export class ProductsService {
       return { imageUrl: null, expiresIn: 0 };
     }
 
-    const imageUrl = await storageService.getPresignedViewUrl(existing.image_object_key);
-    return { imageUrl, expiresIn: 300 };
+    const v = Date.parse(existing.image_updated_at || existing.updated_at || '') || 1;
+    const imageUrl = `/api/v1/products/${productId}/image?v=${v}`;
+    return { imageUrl, expiresIn: 86400 };
   }
 }
 

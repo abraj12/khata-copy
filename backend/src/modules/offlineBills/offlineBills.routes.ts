@@ -195,6 +195,56 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
 });
 
 /**
+ * GET /api/v1/offline-bills/:id/image - Directly stream offline bill image from storage
+ */
+router.get('/:id/image', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Invalid bill ID.' });
+      return;
+    }
+
+    const bill = await offlineBillsService.getOfflineBillById(id);
+    if (!bill || !bill.image_object_key) {
+      res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Offline bill image not found.' });
+      return;
+    }
+
+    const isDownload = req.query.download === 'true' || req.query.download === '1';
+    const { stream, contentType, contentLength } = await storageService.getObjectStream(bill.image_object_key);
+
+    res.setHeader('Content-Type', contentType);
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+
+    if (isDownload) {
+      const filename = bill.original_filename || `offline-bill-${id}.jpg`;
+      const sanitized = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+      res.setHeader('Content-Disposition', `attachment; filename="${sanitized}"`);
+    } else {
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+    }
+
+    (stream as any).on('error', (err: unknown) => {
+      if (!res.headersSent) next(err);
+    });
+    res.on('close', () => {
+      if (typeof (stream as any).destroy === 'function') {
+        (stream as any).destroy();
+      }
+    });
+
+    (stream as any).pipe(res);
+  } catch (err: any) {
+    if (err?.name === 'NoSuchKey' || err?.code === 'NoSuchKey') {
+      res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Bill image not found in storage.' });
+      return;
+    }
+    next(err);
+  }
+});
+
+/**
  * GET /api/v1/offline-bills/:id/image-url - Get presigned view or download URL
  */
 router.get('/:id/image-url', async (req: Request, res: Response, next: NextFunction) => {
