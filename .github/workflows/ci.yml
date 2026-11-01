@@ -132,8 +132,7 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # Android SDK is pre-installed at /usr/local/lib/android/sdk on ubuntu-latest runners
 
       - name: Validate Gradle Wrapper Permissions
         run: |

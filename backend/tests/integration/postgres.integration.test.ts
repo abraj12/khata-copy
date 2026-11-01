@@ -87,7 +87,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
   });
 
   // 1. Migration tracking & Core Tables Verification
-  it('1. All migrations are tracked and all 9 core tables exist in PostgreSQL schema', async () => {
+  it('1. All migrations are tracked and all 10 core tables exist in PostgreSQL schema', async () => {
     const migRes = await pool.query('SELECT version FROM schema_migrations ORDER BY version ASC');
     expect(migRes.rows.map((r) => r.version)).toEqual([
       '001_auth_tables.sql',
@@ -97,6 +97,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '005_search_indexes_and_identity_constraints.sql',
       '006_quantity_two_decimal_places.sql',
       '007_quantity_strict_scale_and_allocation_integrity.sql',
+      '008_strict_quantity_scale.sql',
+      '009_product_images_and_offline_bills.sql',
     ]);
 
     const expectedTables = [
@@ -109,6 +111,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       'payments',
       'payment_allocations',
       'idempotency_keys',
+      'offline_bill_records',
     ];
 
     const tablesRes = await pool.query(
