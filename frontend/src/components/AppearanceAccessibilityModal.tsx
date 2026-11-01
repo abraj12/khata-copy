@@ -234,17 +234,17 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
                 Contrast Override
               </label>
               <div className="grid grid-cols-2 gap-2">
-                {(['default', 'enhanced'] as ContrastOption[]).map((c) => (
+                {(['enhanced', 'default'] as ContrastOption[]).map((c) => (
                   <button
                     key={c}
                     onClick={() => setContrastOverride(c)}
-                    className={`py-2 px-3 rounded-lg text-xs font-semibold capitalize border transition-all ${
+                    className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-all ${
                       preferences.contrastOverride === c
                         ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-sm'
                         : 'border-[var(--khata-border)] text-[var(--khata-text)] bg-[var(--khata-surface-inset)] hover:border-[var(--khata-accent)]'
                     }`}
                   >
-                    {c}
+                    {c === 'enhanced' ? 'Enhanced (Default)' : 'Standard'}
                   </button>
                 ))}
               </div>

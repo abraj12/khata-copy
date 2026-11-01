@@ -29,18 +29,24 @@ function loadSavedPreferences(): UIPreferences {
     const raw = localStorage.getItem(PREFERENCES_STORAGE_KEY);
     if (!raw) return DEFAULT_PREFERENCES;
     const parsed = JSON.parse(raw);
-    if (parsed && parsed.version === 1) {
+    if (parsed && (parsed.version === 1 || parsed.version === 2)) {
       // Validate preset is among valid presets
       const isValidPreset = NEUMORPHIC_PRESETS.some((p) => p.id === parsed.preset);
+
+      // In version 2, contrastOverride defaults to 'enhanced'.
+      // If user had version 1 stored with old default 'default', upgrade to 'enhanced'.
+      let contrastOverride: ContrastOption = DEFAULT_PREFERENCES.contrastOverride;
+      if (parsed.version === 2 && ['default', 'enhanced'].includes(parsed.contrastOverride)) {
+        contrastOverride = parsed.contrastOverride;
+      }
+
       return {
-        version: 1,
+        version: 2,
         preset: isValidPreset ? parsed.preset : DEFAULT_PREFERENCES.preset,
         textSize: ['100', '115', '130', '145'].includes(parsed.textSize)
           ? parsed.textSize
           : DEFAULT_PREFERENCES.textSize,
-        contrastOverride: ['default', 'enhanced'].includes(parsed.contrastOverride)
-          ? parsed.contrastOverride
-          : DEFAULT_PREFERENCES.contrastOverride,
+        contrastOverride,
         reduceMotion: ['system', 'on', 'off'].includes(parsed.reduceMotion)
           ? parsed.reduceMotion
           : DEFAULT_PREFERENCES.reduceMotion,
@@ -99,7 +105,7 @@ export const ThemeAccessibilityProvider: React.FC<{ children: React.ReactNode }>
 
   const setContrastOverride = useCallback((contrastOverride: ContrastOption) => {
     setPreferences((prev) => ({ ...prev, contrastOverride }));
-    announce(`Contrast set to ${contrastOverride === 'enhanced' ? 'Enhanced' : 'Default'}`);
+    announce(`Contrast set to ${contrastOverride === 'enhanced' ? 'Enhanced (Default)' : 'Standard'}`);
   }, [announce]);
 
   const setReduceMotion = useCallback((reduceMotion: MotionOption) => {

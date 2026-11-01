@@ -110,7 +110,7 @@ export type ContrastOption = 'default' | 'enhanced';
 export type MotionOption = 'system' | 'on' | 'off';
 
 export interface UIPreferences {
-  version: 1;
+  version: 1 | 2;
   preset: NeuPresetId;
   textSize: TextSizeOption;
   contrastOverride: ContrastOption;
@@ -120,10 +120,10 @@ export interface UIPreferences {
 }
 
 export const DEFAULT_PREFERENCES: UIPreferences = {
-  version: 1,
+  version: 2,
   preset: 'soft-light',
   textSize: '100',
-  contrastOverride: 'default',
+  contrastOverride: 'enhanced',
   reduceMotion: 'system',
   increaseSpacing: false,
   strongFocus: true,
