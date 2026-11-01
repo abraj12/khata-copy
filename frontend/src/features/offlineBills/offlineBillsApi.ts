@@ -1,5 +1,10 @@
-import { apiClient } from '../../lib/apiClient.js';
-import { uploadFileToPresignedUrl, UploadIntentData } from '../products/productsApi.js';
+import { apiClient, getCsrfToken, fetchCsrfToken } from '../../lib/apiClient.js';
+import type { UploadIntentData } from '../products/productsApi.js';
+
+const API_BASE_URL =
+  (import.meta as unknown as { env: Record<string, string> }).env.VITE_API_BASE_URL ||
+  (import.meta as unknown as { env: Record<string, string> }).env.VITE_API_URL ||
+  'https://api-khata.algions.in';
 
 export interface OfflineBillRecord {
   id: number;
@@ -23,7 +28,7 @@ export interface OfflineBillsPagination {
 }
 
 /**
- * Request presigned PUT URL for uploading an offline bill document image
+ * Request presigned PUT URL for uploading an offline bill document image (legacy)
  */
 export async function getOfflineBillUploadIntent(file: File): Promise<UploadIntentData> {
   const res = await apiClient<{ success: boolean; data: UploadIntentData }>(
@@ -41,7 +46,7 @@ export async function getOfflineBillUploadIntent(file: File): Promise<UploadInte
 }
 
 /**
- * Create offline bill record with verified image
+ * Create offline bill record with verified image (used with legacy presigned URL flow)
  */
 export async function createOfflineBillRecord(params: {
   customerName: string;
@@ -60,21 +65,42 @@ export async function createOfflineBillRecord(params: {
 }
 
 /**
- * End-to-end upload and create offline bill
+ * End-to-end upload and create offline bill via server-side proxy (browser → backend → R2).
+ * Eliminates all browser CORS restrictions.
  */
 export async function uploadAndCreateOfflineBill(params: {
   customerName: string;
   customerPhone: string;
   file: File;
 }): Promise<OfflineBillRecord> {
-  const intent = await getOfflineBillUploadIntent(params.file);
-  await uploadFileToPresignedUrl(intent.uploadUrl, params.file, intent.headers);
-  return await createOfflineBillRecord({
-    customerName: params.customerName,
-    customerPhone: params.customerPhone,
-    imageObjectKey: intent.objectKey,
-    originalFilename: params.file.name,
+  // Ensure CSRF token is available
+  let csrfToken = getCsrfToken();
+  if (!csrfToken) {
+    csrfToken = await fetchCsrfToken();
+  }
+
+  const formData = new FormData();
+  formData.append('image', params.file);
+  formData.append('customerName', params.customerName);
+  formData.append('customerPhone', params.customerPhone);
+
+  const response = await fetch(`${API_BASE_URL}/api/v1/offline-bills/upload`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      // DO NOT set Content-Type — browser sets it automatically with multipart boundary
+      ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+    },
+    body: formData,
   });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || 'Offline bill upload failed');
+  }
+
+  const result = await response.json();
+  return (result as { data: OfflineBillRecord }).data;
 }
 
 /**

@@ -1,9 +1,16 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import multer from 'multer';
 import { z } from 'zod';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { productsService } from './products.service.js';
 import { validateMoneyInput } from '../../utils/validation.js';
 import { storageService } from '../../services/storage.service.js';
+
+// Multer: memory storage, 5 MB limit for product images
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
 
 const router = Router();
 
@@ -148,6 +155,64 @@ router.delete('/:id', async (req: Request, res: Response, next: NextFunction) =>
     next(err);
   }
 });
+
+/**
+ * POST /api/v1/products/:id/image/upload - Server-side proxy upload (browser → backend → R2)
+ * Eliminates browser CORS restrictions by routing the upload through our own API.
+ */
+router.post(
+  '/:id/image/upload',
+  (req: Request, res: Response, next: NextFunction) => {
+    upload.single('image')(req, res, (err) => {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          res.status(400).json({
+            success: false,
+            code: 'FILE_TOO_LARGE',
+            message: 'Product image must not exceed 5 MB.',
+          });
+          return;
+        }
+        res.status(400).json({ success: false, code: 'UPLOAD_ERROR', message: err.message });
+        return;
+      }
+      if (err) return next(err);
+      next();
+    });
+  },
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id) || id <= 0) {
+        res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Invalid product ID.' });
+        return;
+      }
+
+      const existing = await productsService.getProductById(id);
+      if (!existing || existing.archived_at) {
+        res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product not found or archived.' });
+        return;
+      }
+
+      if (!req.file) {
+        res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'No image file provided. Send field named "image".' });
+        return;
+      }
+
+      const { objectKey } = await storageService.validateAndUploadBuffer({
+        buffer: req.file.buffer,
+        mimeType: req.file.mimetype,
+        folder: 'products',
+        referenceId: id,
+      });
+
+      const updated = await productsService.attachProductImage(id, objectKey);
+      res.json({ success: true, data: updated });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 /**
  * POST /api/v1/products/:id/image/upload-intent - Generate presigned PUT URL to upload product image to R2

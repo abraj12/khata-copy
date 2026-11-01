@@ -1,4 +1,9 @@
-import { apiClient } from '../../lib/apiClient.js';
+import { apiClient, getCsrfToken, fetchCsrfToken } from '../../lib/apiClient.js';
+
+const API_BASE_URL =
+  (import.meta as unknown as { env: Record<string, string> }).env.VITE_API_BASE_URL ||
+  (import.meta as unknown as { env: Record<string, string> }).env.VITE_API_URL ||
+  'https://api-khata.algions.in';
 
 export interface UploadIntentData {
   uploadUrl: string;
@@ -13,7 +18,7 @@ export interface ProductImageUrls {
 }
 
 /**
- * Request a presigned PUT URL for a product image
+ * Request a presigned PUT URL for a product image (legacy — kept for compatibility)
  */
 export async function getProductImageUploadIntent(
   productId: number,
@@ -34,7 +39,7 @@ export async function getProductImageUploadIntent(
 }
 
 /**
- * Upload binary file directly to Cloudflare R2 using the presigned PUT URL
+ * Upload binary file directly to Cloudflare R2 using the presigned PUT URL (legacy)
  */
 export async function uploadFileToPresignedUrl(
   uploadUrl: string,
@@ -65,7 +70,7 @@ export async function uploadFileToPresignedUrl(
 }
 
 /**
- * Finalize image attachment: backend verifies file signature & links to product
+ * Finalize image attachment: backend verifies file signature & links to product (legacy)
  */
 export async function completeProductImage(
   productId: number,
@@ -78,15 +83,36 @@ export async function completeProductImage(
 }
 
 /**
- * Helper to upload and attach an image to an existing product
+ * Upload and attach a product image via server-side proxy (browser → backend → R2).
+ * Eliminates all browser CORS restrictions.
  */
 export async function uploadAndAttachProductImage(
   productId: number,
   file: File
 ): Promise<void> {
-  const intent = await getProductImageUploadIntent(productId, file);
-  await uploadFileToPresignedUrl(intent.uploadUrl, file, intent.headers);
-  await completeProductImage(productId, intent.objectKey);
+  // Ensure CSRF token is available
+  let csrfToken = getCsrfToken();
+  if (!csrfToken) {
+    csrfToken = await fetchCsrfToken();
+  }
+
+  const formData = new FormData();
+  formData.append('image', file);
+
+  const response = await fetch(`${API_BASE_URL}/api/v1/products/${productId}/image/upload`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      // DO NOT set Content-Type — browser sets it automatically with multipart boundary
+      ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error((err as { message?: string }).message || 'Image upload failed');
+  }
 }
 
 /**

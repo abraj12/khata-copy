@@ -1,7 +1,15 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import multer from 'multer';
 import { z } from 'zod';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { offlineBillsService } from './offlineBills.service.js';
+import { storageService } from '../../services/storage.service.js';
+
+// Multer: memory storage, 10 MB limit for offline bill images
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 const router = Router();
 
@@ -26,6 +34,71 @@ const createBillSchema = z.object({
   imageObjectKey: z.string().trim().min(1, 'Image object key is required'),
   originalFilename: z.string().max(255).optional(),
 });
+
+/**
+ * POST /api/v1/offline-bills/upload - Server-side proxy upload + create bill in one step
+ * Accepts multipart/form-data with fields: image (file), customerName, customerPhone
+ */
+router.post(
+  '/upload',
+  (req: Request, res: Response, next: NextFunction) => {
+    upload.single('image')(req, res, (err) => {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          res.status(400).json({
+            success: false,
+            code: 'FILE_TOO_LARGE',
+            message: 'Offline bill image must not exceed 10 MB.',
+          });
+          return;
+        }
+        res.status(400).json({ success: false, code: 'UPLOAD_ERROR', message: err.message });
+        return;
+      }
+      if (err) return next(err);
+      next();
+    });
+  },
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!req.file) {
+        res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'No image file provided. Send field named "image".' });
+        return;
+      }
+
+      const customerName = (req.body.customerName || '').trim();
+      const customerPhone = (req.body.customerPhone || '').trim();
+      const originalFilename = req.file.originalname || undefined;
+
+      if (!customerName || customerName.length > 255) {
+        res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Customer name is required (max 255 chars).' });
+        return;
+      }
+      if (!customerPhone || customerPhone.length > 20) {
+        res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Customer phone is required (max 20 chars).' });
+        return;
+      }
+
+      const { objectKey } = await storageService.validateAndUploadBuffer({
+        buffer: req.file.buffer,
+        mimeType: req.file.mimetype,
+        folder: 'offline-bills',
+        referenceId: 'tmp',
+      });
+
+      const newBill = await offlineBillsService.createOfflineBill({
+        customerName,
+        customerPhone,
+        imageObjectKey: objectKey,
+        originalFilename,
+      });
+
+      res.status(201).json({ success: true, data: newBill });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 /**
  * POST /api/v1/offline-bills/upload-intent - Generate presigned PUT URL to upload offline bill image to R2

@@ -318,6 +318,86 @@ export class StorageService {
   }
 
   /**
+   * Uploads an in-memory buffer directly to R2 (server-side proxy upload).
+   * This eliminates all browser CORS issues by having the backend act as the upload intermediary.
+   */
+  public async uploadBufferToR2(options: {
+    buffer: Buffer;
+    objectKey: string;
+    contentType: string;
+  }): Promise<void> {
+    this.assertConfigured();
+    await this.s3Client!.send(
+      new PutObjectCommand({
+        Bucket: env.R2_BUCKET_NAME!,
+        Key: options.objectKey,
+        Body: options.buffer,
+        ContentType: options.contentType,
+        ContentLength: options.buffer.length,
+      })
+    );
+  }
+
+  /**
+   * Validates and uploads an image buffer to R2 in one step.
+   * Used by the server-side proxy upload routes to avoid browser CORS.
+   */
+  public async validateAndUploadBuffer(options: {
+    buffer: Buffer;
+    mimeType: string;
+    folder: 'products' | 'offline-bills';
+    referenceId: string | number;
+  }): Promise<{ objectKey: string; contentType: string; sizeBytes: number }> {
+    this.assertConfigured();
+
+    const { buffer, mimeType, folder, referenceId } = options;
+    const cleanMime = mimeType.toLowerCase().trim();
+
+    // Validate MIME type
+    if (!ALLOWED_IMAGE_TYPES.has(cleanMime)) {
+      throw new AppError(
+        `Unsupported image type "${mimeType}". Only JPEG, PNG, and WebP are permitted.`,
+        400,
+        'INVALID_CONTENT_TYPE'
+      );
+    }
+
+    // Validate size limit
+    const maxBytes = folder === 'products' ? MAX_PRODUCT_IMAGE_BYTES : MAX_OFFLINE_BILL_BYTES;
+    const maxMb = maxBytes / (1024 * 1024);
+    if (buffer.length <= 0) {
+      throw new AppError('File size must be greater than zero bytes.', 400, 'INVALID_FILE_SIZE');
+    }
+    if (buffer.length > maxBytes) {
+      throw new AppError(
+        `Image size exceeds maximum allowed limit of ${maxMb}MB.`,
+        400,
+        'FILE_TOO_LARGE'
+      );
+    }
+
+    // Validate magic bytes (file signature) to prevent content-type spoofing
+    if (!validateImageMagicBytes(buffer, cleanMime)) {
+      throw new AppError(
+        'File contents do not match a valid JPEG, PNG, or WebP image signature.',
+        400,
+        'INVALID_IMAGE_SIGNATURE'
+      );
+    }
+
+    // Generate server-controlled random object key
+    let ext = 'jpg';
+    if (cleanMime === 'image/png') ext = 'png';
+    else if (cleanMime === 'image/webp') ext = 'webp';
+    const randomId = crypto.randomUUID();
+    const objectKey = `${folder}/${referenceId}/${randomId}.${ext}`;
+
+    await this.uploadBufferToR2({ buffer, objectKey, contentType: cleanMime });
+
+    return { objectKey, contentType: cleanMime, sizeBytes: buffer.length };
+  }
+
+  /**
    * Deletes an object from R2 safely without breaking caller execution
    */
   public async deleteObject(objectKey: string): Promise<void> {
