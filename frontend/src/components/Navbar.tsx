@@ -1,10 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../features/auth/AuthProvider.js';
-import { Store, LogOut, BookOpen, Tag, Palette, Loader2, AlertCircle } from 'lucide-react';
+import {
+  Store,
+  LogOut,
+  BookOpen,
+  Tag,
+  Palette,
+  Loader2,
+  AlertCircle,
+  FileText,
+  ChevronDown,
+} from 'lucide-react';
+
+export type NavTab = 'khata' | 'products' | 'gst-bill';
 
 interface NavbarProps {
-  currentTab: 'khata' | 'products';
-  onTabChange: (tab: 'khata' | 'products') => void;
+  currentTab: NavTab;
+  onTabChange: (tab: NavTab) => void;
   onOpenAppearance: () => void;
 }
 
@@ -12,6 +24,19 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
   const { logout, owner } = useAuth();
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isBillMenuOpen, setIsBillMenuOpen] = useState(false);
+  const billMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close bill dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (billMenuRef.current && !billMenuRef.current.contains(e.target as Node)) {
+        setIsBillMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -24,6 +49,8 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
       setIsLoggingOut(false);
     }
   };
+
+  const isBillActive = currentTab === 'gst-bill';
 
   return (
     <header
@@ -71,14 +98,18 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             </div>
           </div>
 
-          {/* Navigation Tabs (Products & Khata only) */}
+          {/* Navigation Tabs (Khata, Products, Bill -> GST Bill) */}
           <nav
             className="flex items-center gap-1.5 sm:gap-2 order-3 sm:order-2 w-full sm:w-auto justify-center sm:justify-start pt-1 sm:pt-0"
             aria-label="Main Navigation"
           >
+            {/* 1. Khata Tab */}
             <button
-              onClick={() => onTabChange('khata')}
-              className={`inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[42px] sm:min-h-[44px] flex-1 sm:flex-initial ${
+              onClick={() => {
+                setIsBillMenuOpen(false);
+                onTabChange('khata');
+              }}
+              className={`inline-flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[42px] sm:min-h-[44px] flex-1 sm:flex-initial ${
                 currentTab === 'khata'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
                   : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
@@ -89,9 +120,13 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               <span>Khata</span>
             </button>
 
+            {/* 2. Products Tab */}
             <button
-              onClick={() => onTabChange('products')}
-              className={`inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[42px] sm:min-h-[44px] flex-1 sm:flex-initial ${
+              onClick={() => {
+                setIsBillMenuOpen(false);
+                onTabChange('products');
+              }}
+              className={`inline-flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[42px] sm:min-h-[44px] flex-1 sm:flex-initial ${
                 currentTab === 'products'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
                   : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
@@ -101,6 +136,55 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               <Tag className="w-4 h-4" />
               <span>Products</span>
             </button>
+
+            {/* 3. Bill Dropdown Menu (Contains GST Bill) */}
+            <div className="relative flex-1 sm:flex-initial" ref={billMenuRef}>
+              <button
+                type="button"
+                onClick={() => setIsBillMenuOpen(!isBillMenuOpen)}
+                className={`w-full inline-flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[42px] sm:min-h-[44px] ${
+                  isBillActive
+                    ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
+                    : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
+                }`}
+                aria-haspopup="true"
+                aria-expanded={isBillMenuOpen}
+                aria-current={isBillActive ? 'page' : undefined}
+              >
+                <FileText className="w-4 h-4" />
+                <span>Bill</span>
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isBillMenuOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {/* Submenu Dropdown */}
+              {isBillMenuOpen && (
+                <div
+                  className="absolute left-0 sm:left-auto sm:right-0 top-full mt-1.5 w-48 p-1.5 rounded-xl border border-[var(--khata-border)] shadow-xl z-50 animate-in fade-in slide-in-from-top-1"
+                  style={{ background: 'var(--khata-surface)' }}
+                  role="menu"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setIsBillMenuOpen(false);
+                      onTabChange('gst-bill');
+                    }}
+                    className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs font-bold text-left transition ${
+                      currentTab === 'gst-bill'
+                        ? 'bg-[var(--khata-accent)] text-white'
+                        : 'text-[var(--khata-text)] hover:bg-[var(--khata-surface-inset)] hover:text-[var(--khata-accent)]'
+                    }`}
+                  >
+                    <FileText className="w-4 h-4" />
+                    <div>
+                      <div>GST Bill</div>
+                      <div className="text-[10px] opacity-75 font-normal">Mannat Tax Invoice</div>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
           </nav>
 
           {/* Controls: Appearance, Owner Phone, Logout */}

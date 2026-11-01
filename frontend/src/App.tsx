@@ -1,15 +1,53 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AuthProvider } from './features/auth/AuthProvider.js';
 import { ProtectedRoute } from './components/ProtectedRoute.js';
-import { Navbar } from './components/Navbar.js';
+import { Navbar, NavTab } from './components/Navbar.js';
 import { KhataLedgerView } from './features/khata/KhataLedgerView.js';
 import { ProductsView } from './features/products/ProductsView.js';
+import { GstBillingView } from './features/bills/GstBillingView.js';
 import { ThemeAccessibilityProvider } from './context/ThemeAccessibilityContext.js';
 import { AppearanceAccessibilityModal } from './components/AppearanceAccessibilityModal.js';
 
+function getInitialTab(): NavTab {
+  if (typeof window !== 'undefined') {
+    const path = window.location.pathname;
+    const hash = window.location.hash;
+    if (path.startsWith('/bills') || hash.includes('bills')) {
+      return 'gst-bill';
+    }
+    if (path.startsWith('/products') || hash.includes('products')) {
+      return 'products';
+    }
+  }
+  return 'khata';
+}
+
 export function KhataDashboard() {
-  const [currentTab, setCurrentTab] = useState<'khata' | 'products'>('khata');
+  const [currentTab, setCurrentTab] = useState<NavTab>(getInitialTab);
   const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
+
+  // Sync tab changes with browser URL and history
+  const handleTabChange = (tab: NavTab) => {
+    setCurrentTab(tab);
+    if (typeof window !== 'undefined') {
+      let targetPath = '/';
+      if (tab === 'gst-bill') targetPath = '/bills/gst';
+      else if (tab === 'products') targetPath = '/products';
+
+      if (window.location.pathname !== targetPath) {
+        window.history.pushState(null, '', targetPath);
+      }
+    }
+  };
+
+  // Listen to browser back/forward navigation
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentTab(getInitialTab());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   return (
     <div
@@ -18,12 +56,14 @@ export function KhataDashboard() {
     >
       <Navbar
         currentTab={currentTab}
-        onTabChange={setCurrentTab}
+        onTabChange={handleTabChange}
         onOpenAppearance={() => setIsAppearanceOpen(true)}
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        {currentTab === 'khata' ? <KhataLedgerView /> : <ProductsView />}
+        {currentTab === 'khata' && <KhataLedgerView />}
+        {currentTab === 'products' && <ProductsView />}
+        {currentTab === 'gst-bill' && <GstBillingView />}
       </main>
 
       <footer

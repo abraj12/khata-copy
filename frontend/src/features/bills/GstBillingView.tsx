@@ -1,0 +1,1309 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import Decimal from 'decimal.js';
+import {
+  FileText,
+  Plus,
+  Trash2,
+  Printer,
+  Download,
+  Eye,
+  Search,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+  RefreshCw,
+  Building2,
+  User,
+  Package,
+  X,
+} from 'lucide-react';
+import MannatTaxInvoice, {
+  MannatInvoiceProps,
+  numberWords,
+} from '../../components/MannatTaxInvoice/MannatTaxInvoice.js';
+import {
+  getNextInvoiceNumber,
+  createGstInvoice,
+  listGstInvoices,
+  downloadInvoicePdf,
+  mapRecordToInvoiceProps,
+  GstInvoiceRecord,
+} from './gstInvoicesApi.js';
+import { apiClient } from '../../lib/apiClient.js';
+
+interface ProductItem {
+  id: number;
+  name: string;
+  buying_price: string;
+  hsn_code?: string | null;
+}
+
+interface CustomerItem {
+  id: number;
+  name: string;
+  phone?: string | null;
+}
+
+interface FormLineItem {
+  id: string; // client temporary ID
+  productId?: number | null;
+  description: string;
+  hsnCode: string;
+  quantity: string;
+  unit: string;
+  rate: string;
+  rateUnit: string;
+}
+
+export const GstBillingView: React.FC = () => {
+  const [activeSubTab, setActiveSubTab] = useState<'create' | 'history'>('create');
+
+  // Form states
+  const [invoiceNumber, setInvoiceNumber] = useState('');
+  const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [state] = useState('Uttar Pradesh');
+  const [stateCode] = useState('09');
+  const [transportationMode, setTransportationMode] = useState('');
+  const [vehicleNumber, setVehicleNumber] = useState('');
+  const [dateOfSupply, setDateOfSupply] = useState(() => new Date().toISOString().slice(0, 10));
+  const [placeOfSupply, setPlaceOfSupply] = useState('Uttar Pradesh');
+
+  // Customer states
+  const [customerId, setCustomerId] = useState<number | null>(null);
+  const [customerName, setCustomerName] = useState('');
+  const [customerAddress, setCustomerAddress] = useState('');
+  const [customerGstin, setCustomerGstin] = useState('');
+  const [customerState, setCustomerState] = useState('Uttar Pradesh');
+  const [customerStateCode, setCustomerStateCode] = useState('09');
+
+  // Line items
+  const [items, setItems] = useState<FormLineItem[]>([
+    {
+      id: 'item-1',
+      productId: null,
+      description: '',
+      hsnCode: '',
+      quantity: '1',
+      unit: 'pcs',
+      rate: '',
+      rateUnit: '',
+    },
+  ]);
+
+  // GST rate setting
+  const [gstRate, setGstRate] = useState<number>(18);
+  const [notes, setNotes] = useState('');
+
+  // UI feedback & modals
+  const [isLoadingNextNum, setIsLoadingNextNum] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successRecord, setSuccessRecord] = useState<GstInvoiceRecord | null>(null);
+  const [previewInvoice, setPreviewInvoice] = useState<MannatInvoiceProps | null>(null);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+
+  // Existing products & customers lookup
+  const [availableProducts, setAvailableProducts] = useState<ProductItem[]>([]);
+  const [availableCustomers, setAvailableCustomers] = useState<CustomerItem[]>([]);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
+
+  // History list states
+  const [historyInvoices, setHistoryInvoices] = useState<GstInvoiceRecord[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyDateFrom, setHistoryDateFrom] = useState('');
+  const [historyDateTo, setHistoryDateTo] = useState('');
+  const [historyPage, setHistoryPage] = useState(0);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  // Fetch initial data (next invoice number, products, customers)
+  useEffect(() => {
+    fetchNextNumber();
+    fetchProducts();
+    fetchCustomers();
+  }, []);
+
+  const fetchNextNumber = async () => {
+    try {
+      setIsLoadingNextNum(true);
+      const nextNum = await getNextInvoiceNumber();
+      setInvoiceNumber(nextNum);
+    } catch (err) {
+      console.warn('Could not auto-fetch invoice number:', err);
+    } finally {
+      setIsLoadingNextNum(false);
+    }
+  };
+
+  const fetchProducts = async () => {
+    try {
+      const res = await apiClient<{ success: boolean; data: ProductItem[] }>('/api/v1/products?limit=100');
+      if (res.data?.data) {
+        setAvailableProducts(res.data.data);
+      }
+    } catch (err) {
+      console.warn('Error fetching products:', err);
+    }
+  };
+
+  const fetchCustomers = async () => {
+    try {
+      const res = await apiClient<{ success: boolean; customers: CustomerItem[] }>('/api/v1/khata/customers?limit=100');
+      if (res.data?.customers) {
+        setAvailableCustomers(res.data.customers);
+      }
+    } catch (err) {
+      console.warn('Error fetching customers:', err);
+    }
+  };
+
+  // Load history when tab is switched
+  useEffect(() => {
+    if (activeSubTab === 'history') {
+      loadHistory();
+    }
+  }, [activeSubTab, historyPage, historySearch, historyDateFrom, historyDateTo]);
+
+  const loadHistory = async () => {
+    try {
+      setIsLoadingHistory(true);
+      const res = await listGstInvoices({
+        search: historySearch,
+        dateFrom: historyDateFrom || undefined,
+        dateTo: historyDateTo || undefined,
+        limit: 15,
+        offset: historyPage * 15,
+      });
+      setHistoryInvoices(res.invoices);
+      setHistoryTotal(res.pagination.total);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to load invoice history.');
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  // Safe Financial Calculation
+  const isIntraState = useMemo(() => {
+    return stateCode.trim() === customerStateCode.trim();
+  }, [stateCode, customerStateCode]);
+
+  const calculations = useMemo(() => {
+    let taxableDec = new Decimal(0);
+
+    const computedItems = items.map((item) => {
+      const q = new Decimal(item.quantity || 0);
+      const r = new Decimal(item.rate || 0);
+      const lineAmt = q.isPositive() && r.isFinite() ? q.times(r).toDecimalPlaces(2, Decimal.ROUND_HALF_UP) : new Decimal(0);
+      taxableDec = taxableDec.plus(lineAmt);
+      return {
+        ...item,
+        amount: lineAmt.toFixed(2),
+      };
+    });
+
+    const gstRateDec = new Decimal(gstRate || 0);
+    let cgstRateVal = 0;
+    let sgstRateVal = 0;
+    let igstRateVal = 0;
+    let cgstAmountDec = new Decimal(0);
+    let sgstAmountDec = new Decimal(0);
+    let igstAmountDec = new Decimal(0);
+
+    if (isIntraState) {
+      cgstRateVal = gstRateDec.dividedBy(2).toNumber();
+      sgstRateVal = gstRateDec.dividedBy(2).toNumber();
+      cgstAmountDec = taxableDec.times(cgstRateVal).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      sgstAmountDec = taxableDec.times(sgstRateVal).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    } else {
+      igstRateVal = gstRateDec.toNumber();
+      igstAmountDec = taxableDec.times(igstRateVal).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    }
+
+    const totalTaxDec = cgstAmountDec.plus(sgstAmountDec).plus(igstAmountDec);
+    const grandTotalDec = taxableDec.plus(totalTaxDec);
+    const words = numberWords(grandTotalDec.toFixed(2));
+
+    return {
+      taxableAmount: taxableDec.toFixed(2),
+      cgstRate: cgstRateVal > 0 ? cgstRateVal : '',
+      cgstAmount: cgstAmountDec.toFixed(2),
+      sgstRate: sgstRateVal > 0 ? sgstRateVal : '',
+      sgstAmount: sgstAmountDec.toFixed(2),
+      igstRate: igstRateVal > 0 ? igstRateVal : '',
+      igstAmount: igstAmountDec.toFixed(2),
+      taxAmount: totalTaxDec.toFixed(2),
+      grandTotal: grandTotalDec.toFixed(2),
+      amountInWords: words,
+      computedItems,
+    };
+  }, [items, gstRate, isIntraState]);
+
+  // Current draft mapped to MannatInvoiceProps
+  const currentDraftInvoice: MannatInvoiceProps = useMemo(() => {
+    return {
+      invoiceNumber: invoiceNumber || 'DRAFT',
+      invoiceDate,
+      transportationMode,
+      vehicleNumber,
+      dateOfSupply,
+      placeOfSupply,
+      customer: {
+        name: customerName || 'Receiver Name',
+        address: customerAddress || '',
+        gstin: customerGstin || '',
+        state: customerState,
+        stateCode: customerStateCode,
+      },
+      items: calculations.computedItems.map((itm) => ({
+        id: itm.id,
+        name: itm.description || 'Description of goods',
+        hsn: itm.hsnCode,
+        quantity: itm.quantity,
+        unit: itm.unit,
+        rate: itm.rate,
+        rateUnit: itm.rateUnit,
+        amount: itm.amount,
+      })),
+      totals: {
+        taxableAmount: calculations.taxableAmount,
+        cgstRate: calculations.cgstRate,
+        cgstAmount: calculations.cgstAmount,
+        sgstRate: calculations.sgstRate,
+        sgstAmount: calculations.sgstAmount,
+        igstRate: calculations.igstRate,
+        igstAmount: calculations.igstAmount,
+        taxAmount: calculations.taxAmount,
+        grandTotal: calculations.grandTotal,
+      },
+      amountInWords: calculations.amountInWords,
+    };
+  }, [
+    invoiceNumber,
+    invoiceDate,
+    transportationMode,
+    vehicleNumber,
+    dateOfSupply,
+    placeOfSupply,
+    customerName,
+    customerAddress,
+    customerGstin,
+    customerState,
+    customerStateCode,
+    calculations,
+  ]);
+
+  // Add line item
+  const handleAddItem = () => {
+    setItems((prev) => [
+      ...prev,
+      {
+        id: `item-${Date.now()}-${Math.random()}`,
+        productId: null,
+        description: '',
+        hsnCode: '',
+        quantity: '1',
+        unit: 'pcs',
+        rate: '',
+        rateUnit: '',
+      },
+    ]);
+  };
+
+  // Remove line item
+  const handleRemoveItem = (id: string) => {
+    if (items.length <= 1) return;
+    setItems((prev) => prev.filter((i) => i.id !== id));
+  };
+
+  // Update line item
+  const handleItemChange = (id: string, field: keyof FormLineItem, val: string) => {
+    setItems((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, [field]: val } : i))
+    );
+  };
+
+  // Handle selecting an existing product
+  const handleSelectProduct = (itemId: string, product: ProductItem) => {
+    setItems((prev) =>
+      prev.map((i) => {
+        if (i.id === itemId) {
+          return {
+            ...i,
+            productId: product.id,
+            description: product.name,
+            hsnCode: product.hsn_code || i.hsnCode || '',
+            // keep existing rate or prefill buying price as reference if empty
+            rate: i.rate || product.buying_price || '',
+          };
+        }
+        return i;
+      })
+    );
+  };
+
+  // Handle selecting an existing customer
+  const handleSelectCustomer = (c: CustomerItem) => {
+    setCustomerId(c.id);
+    setCustomerName(c.name);
+    setIsCustomerDropdownOpen(false);
+  };
+
+  // Save Invoice
+  const handleSaveInvoice = async () => {
+    setErrorMessage(null);
+
+    if (!customerName.trim()) {
+      setErrorMessage('Please enter the customer / receiver name.');
+      return;
+    }
+
+    const hasEmptyItem = items.some((i) => !i.description.trim());
+    if (hasEmptyItem) {
+      setErrorMessage('Every line item must have a description.');
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      const created = await createGstInvoice({
+        invoiceNumber: invoiceNumber.trim() || undefined,
+        invoiceDate,
+        state,
+        stateCode,
+        transportationMode: transportationMode.trim() || null,
+        vehicleNumber: vehicleNumber.trim() || null,
+        dateOfSupply,
+        placeOfSupply,
+        customerId,
+        customerName: customerName.trim(),
+        customerAddress: customerAddress.trim() || null,
+        customerGstin: customerGstin.trim() || null,
+        customerState,
+        customerStateCode,
+        gstRate,
+        items: items.map((i) => ({
+          productId: i.productId || null,
+          description: i.description.trim(),
+          hsnCode: i.hsnCode.trim() || null,
+          quantity: i.quantity,
+          unit: i.unit.trim() || null,
+          rate: i.rate || '0',
+          rateUnit: i.rateUnit.trim() || null,
+        })),
+        notes: notes.trim() || null,
+      });
+
+      setSuccessRecord(created);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to save GST invoice.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Reset form after saving
+  const handleResetForm = () => {
+    setSuccessRecord(null);
+    setCustomerName('');
+    setCustomerAddress('');
+    setCustomerGstin('');
+    setCustomerId(null);
+    setItems([
+      {
+        id: `item-${Date.now()}`,
+        productId: null,
+        description: '',
+        hsnCode: '',
+        quantity: '1',
+        unit: 'pcs',
+        rate: '',
+        rateUnit: '',
+      },
+    ]);
+    setNotes('');
+    fetchNextNumber();
+  };
+
+  // Download PDF helper
+  const handleDownloadPdf = async (id: number, invNum: string) => {
+    try {
+      setIsDownloadingPdf(true);
+      await downloadInvoicePdf(id, invNum);
+    } catch (err: any) {
+      alert(err.message || 'Unable to download PDF.');
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Top Banner & Tab Controls */}
+      <div
+        className="p-4 sm:p-6 rounded-2xl border border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-4"
+        style={{ background: 'var(--khata-surface)' }}
+      >
+        <div className="flex items-center gap-3">
+          <div
+            className="w-11 h-11 rounded-xl flex items-center justify-center border border-[var(--khata-border)] shadow-sm"
+            style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-accent)' }}
+          >
+            <FileText className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-lg sm:text-xl font-bold tracking-tight text-[var(--khata-text)] flex items-center gap-2">
+              <span>GST Tax Invoices</span>
+              <span className="text-xs px-2.5 py-0.5 rounded-md font-mono bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300 font-semibold border border-blue-200 dark:border-blue-800">
+                M/s Mannat Hardware Store
+              </span>
+            </h2>
+            <p className="text-xs text-[var(--khata-text-muted)] mt-0.5">
+              Create, preview, print A4 tax invoices and archive official PDFs in Cloudflare R2.
+            </p>
+          </div>
+        </div>
+
+        {/* Sub-tab Navigation */}
+        <div className="flex items-center gap-2 bg-[var(--khata-surface-inset)] p-1 rounded-xl border border-[var(--khata-border)]">
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('create')}
+            className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition flex items-center gap-1.5 ${
+              activeSubTab === 'create'
+                ? 'bg-[var(--khata-accent)] text-white shadow-sm'
+                : 'text-[var(--khata-text)] hover:text-[var(--khata-accent)]'
+            }`}
+          >
+            <Plus className="w-4 h-4" />
+            <span>Create GST Bill</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('history')}
+            className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition flex items-center gap-1.5 ${
+              activeSubTab === 'history'
+                ? 'bg-[var(--khata-accent)] text-white shadow-sm'
+                : 'text-[var(--khata-text)] hover:text-[var(--khata-accent)]'
+            }`}
+          >
+            <FileText className="w-4 h-4" />
+            <span>Invoice History</span>
+            {historyTotal > 0 && (
+              <span className="ml-1 px-1.5 py-0.2 bg-white/20 rounded-full text-[10px]">
+                {historyTotal}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Error alert */}
+      {errorMessage && (
+        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 dark:bg-rose-950/30 dark:border-rose-900 flex items-center justify-between text-rose-700 dark:text-rose-400 text-sm">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setErrorMessage(null)}
+            className="text-rose-500 hover:text-rose-700 font-bold"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* TAB 1: CREATE GST BILL */}
+      {activeSubTab === 'create' && (
+        <div className="space-y-6">
+          {/* Main Grid: Form Sections */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Left 2 Cols: Form Inputs */}
+            <div className="lg:col-span-2 space-y-6">
+              {/* Section A: Invoice Information */}
+              <div
+                className="p-5 rounded-2xl border border-[var(--khata-border)] space-y-4"
+                style={{ background: 'var(--khata-surface)' }}
+              >
+                <div className="flex items-center justify-between pb-2 border-b border-[var(--khata-border)]">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-[var(--khata-text-muted)] flex items-center gap-2">
+                    <Building2 className="w-4 h-4 text-[var(--khata-accent)]" />
+                    <span>A. Invoice Information</span>
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={fetchNextNumber}
+                    disabled={isLoadingNextNum}
+                    title="Get next sequential number"
+                    className="text-xs font-semibold text-[var(--khata-accent)] hover:underline flex items-center gap-1"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isLoadingNextNum ? 'animate-spin' : ''}`} />
+                    <span>Auto-Number</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                  <div>
+                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
+                      Invoice No. <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={invoiceNumber}
+                      onChange={(e) => setInvoiceNumber(e.target.value)}
+                      placeholder="e.g. 004"
+                      className="neu-input w-full font-mono font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
+                      Invoice Date <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="date"
+                      value={invoiceDate}
+                      onChange={(e) => setInvoiceDate(e.target.value)}
+                      className="neu-input w-full"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
+                      Seller State
+                    </label>
+                    <input
+                      type="text"
+                      value="Uttar Pradesh (09)"
+                      disabled
+                      className="neu-input w-full bg-neutral-100 dark:bg-neutral-800 text-neutral-500 cursor-not-allowed font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
+                      Place of Supply
+                    </label>
+                    <input
+                      type="text"
+                      value={placeOfSupply}
+                      onChange={(e) => setPlaceOfSupply(e.target.value)}
+                      className="neu-input w-full"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
+                      Transportation Mode
+                    </label>
+                    <input
+                      type="text"
+                      value={transportationMode}
+                      onChange={(e) => setTransportationMode(e.target.value)}
+                      placeholder="e.g. Road / Tempo"
+                      className="neu-input w-full"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
+                      Vehicle No.
+                    </label>
+                    <input
+                      type="text"
+                      value={vehicleNumber}
+                      onChange={(e) => setVehicleNumber(e.target.value)}
+                      placeholder="e.g. UP-22-AB-1234"
+                      className="neu-input w-full font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
+                      Date of Supply
+                    </label>
+                    <input
+                      type="date"
+                      value={dateOfSupply}
+                      onChange={(e) => setDateOfSupply(e.target.value)}
+                      className="neu-input w-full"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Section B: Customer Details */}
+              <div
+                className="p-5 rounded-2xl border border-[var(--khata-border)] space-y-4"
+                style={{ background: 'var(--khata-surface)' }}
+              >
+                <div className="flex items-center justify-between pb-2 border-b border-[var(--khata-border)]">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-[var(--khata-text-muted)] flex items-center gap-2">
+                    <User className="w-4 h-4 text-[var(--khata-accent)]" />
+                    <span>B. Customer / Receiver Details (Bill To Party)</span>
+                  </h3>
+
+                  {/* Customer picker dropdown */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setIsCustomerDropdownOpen(!isCustomerDropdownOpen)}
+                      className="text-xs font-semibold text-[var(--khata-accent)] hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>Pick Khata Customer</span>
+                    </button>
+
+                    {isCustomerDropdownOpen && (
+                      <div
+                        className="absolute right-0 top-full mt-2 w-64 p-2 rounded-xl border border-[var(--khata-border)] shadow-xl z-20 space-y-2"
+                        style={{ background: 'var(--khata-surface)' }}
+                      >
+                        <input
+                          type="text"
+                          placeholder="Search customer..."
+                          value={customerSearch}
+                          onChange={(e) => setCustomerSearch(e.target.value)}
+                          className="neu-input w-full text-xs p-1.5"
+                        />
+                        <div className="max-h-48 overflow-y-auto space-y-1">
+                          {availableCustomers
+                            .filter((c) =>
+                              c.name.toLowerCase().includes(customerSearch.toLowerCase())
+                            )
+                            .map((c) => (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => handleSelectCustomer(c)}
+                                className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex items-center justify-between"
+                              >
+                                <span className="font-bold text-[var(--khata-text)] truncate">{c.name}</span>
+                                {c.phone && <span className="text-[10px] text-neutral-400 font-mono">{c.phone}</span>}
+                              </button>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+                  <div className="sm:col-span-2">
+                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
+                      Customer / Firm Name <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={customerName}
+                      onChange={(e) => setCustomerName(e.target.value)}
+                      placeholder="e.g. Sharma Construction Co. / M/s ABC Enterprises"
+                      className="neu-input w-full font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
+                      Customer GSTIN <span className="text-neutral-400 font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={customerGstin}
+                      onChange={(e) => setCustomerGstin(e.target.value.toUpperCase())}
+                      placeholder="e.g. 09DFEPN5357D1ZB"
+                      maxLength={15}
+                      className="neu-input w-full font-mono uppercase"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
+                      Customer Address
+                    </label>
+                    <input
+                      type="text"
+                      value={customerAddress}
+                      onChange={(e) => setCustomerAddress(e.target.value)}
+                      placeholder="e.g. Station Road, Bilaspur, Rampur"
+                      className="neu-input w-full"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
+                        State
+                      </label>
+                      <input
+                        type="text"
+                        value={customerState}
+                        onChange={(e) => setCustomerState(e.target.value)}
+                        className="neu-input w-full"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
+                        State Code
+                      </label>
+                      <input
+                        type="text"
+                        value={customerStateCode}
+                        onChange={(e) => setCustomerStateCode(e.target.value)}
+                        maxLength={2}
+                        placeholder="09"
+                        className="neu-input w-full font-mono text-center font-bold"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {!isIntraState && (
+                  <div className="text-[11px] p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 font-medium">
+                    ⚡ Inter-State transaction detected (State Code {customerStateCode} ≠ 09). IGST will be applied automatically instead of CGST + SGST.
+                  </div>
+                )}
+              </div>
+
+              {/* Section C: Product Selection & Line Items */}
+              <div
+                className="p-5 rounded-2xl border border-[var(--khata-border)] space-y-4"
+                style={{ background: 'var(--khata-surface)' }}
+              >
+                <div className="flex items-center justify-between pb-2 border-b border-[var(--khata-border)]">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-[var(--khata-text-muted)] flex items-center gap-2">
+                    <Package className="w-4 h-4 text-[var(--khata-accent)]" />
+                    <span>C. Product Selection &amp; Line Items</span>
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={handleAddItem}
+                    className="neu-btn-primary text-xs px-3 py-1.5 flex items-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Item</span>
+                  </button>
+                </div>
+
+                {/* Items Table Form */}
+                <div className="space-y-3">
+                  {items.map((item, idx) => (
+                    <div
+                      key={item.id}
+                      className="p-3 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-2.5 text-xs"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-[var(--khata-text)] text-xs flex items-center gap-1.5">
+                          <span className="w-5 h-5 rounded-full bg-[var(--khata-accent)] text-white flex items-center justify-center text-[10px]">
+                            {idx + 1}
+                          </span>
+                          <span>Item #{idx + 1}</span>
+                        </span>
+
+                        {items.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveItem(item.id)}
+                            className="text-rose-500 hover:text-rose-700 p-1 rounded"
+                            title="Remove item"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Pick product button / dropdown */}
+                      {availableProducts.length > 0 && (
+                        <div>
+                          <select
+                            onChange={(e) => {
+                              const selectedProd = availableProducts.find(
+                                (p) => p.id === Number(e.target.value)
+                              );
+                              if (selectedProd) {
+                                handleSelectProduct(item.id, selectedProd);
+                              }
+                            }}
+                            defaultValue=""
+                            className="neu-input w-full text-xs font-medium text-neutral-700 dark:text-neutral-300"
+                          >
+                            <option value="" disabled>
+                              🔍 Or select from Khata Products Catalogue...
+                            </option>
+                            {availableProducts.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name} {p.hsn_code ? `[HSN: ${p.hsn_code}]` : ''} (Buying: ₹{p.buying_price})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 sm:grid-cols-6 gap-2">
+                        {/* Description */}
+                        <div className="sm:col-span-3">
+                          <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-0.5">
+                            Description of Goods <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={item.description}
+                            onChange={(e) => handleItemChange(item.id, 'description', e.target.value)}
+                            placeholder="e.g. HDF BOARD 12mm HDF (OSB) 2.44 x 1.22"
+                            className="neu-input w-full font-medium"
+                          />
+                        </div>
+
+                        {/* HSN */}
+                        <div>
+                          <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-0.5">
+                            HSN Code
+                          </label>
+                          <input
+                            type="text"
+                            value={item.hsnCode}
+                            onChange={(e) => handleItemChange(item.id, 'hsnCode', e.target.value)}
+                            placeholder="e.g. 44119219"
+                            maxLength={20}
+                            className="neu-input w-full font-mono"
+                          />
+                        </div>
+
+                        {/* Quantity & Unit */}
+                        <div className="grid grid-cols-2 gap-1">
+                          <div>
+                            <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-0.5">
+                              Qty. <span className="text-rose-500">*</span>
+                            </label>
+                            <input
+                              type="number"
+                              step="any"
+                              value={item.quantity}
+                              onChange={(e) => handleItemChange(item.id, 'quantity', e.target.value)}
+                              className="neu-input w-full font-bold text-center"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-0.5">
+                              Unit
+                            </label>
+                            <input
+                              type="text"
+                              value={item.unit}
+                              onChange={(e) => handleItemChange(item.id, 'unit', e.target.value)}
+                              placeholder="pcs"
+                              className="neu-input w-full text-center"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Rate & Line Total */}
+                        <div className="grid grid-cols-2 gap-1">
+                          <div>
+                            <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-0.5">
+                              Rate (₹) <span className="text-rose-500">*</span>
+                            </label>
+                            <input
+                              type="number"
+                              step="any"
+                              value={item.rate}
+                              onChange={(e) => handleItemChange(item.id, 'rate', e.target.value)}
+                              placeholder="0.00"
+                              className="neu-input w-full font-bold text-right font-mono"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-0.5">
+                              Amount (₹)
+                            </label>
+                            <div className="neu-input w-full font-bold text-right font-mono bg-neutral-100 dark:bg-neutral-800 text-[var(--khata-accent)] flex items-center justify-end px-2">
+                              {calculations.computedItems[idx]?.amount || '0.00'}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Right 1 Col: GST Calculation Summary & Actions */}
+            <div className="space-y-6">
+              {/* Section D: GST Calculation Settings */}
+              <div
+                className="p-5 rounded-2xl border border-[var(--khata-border)] space-y-4"
+                style={{ background: 'var(--khata-surface)' }}
+              >
+                <h3 className="text-sm font-bold uppercase tracking-wider text-[var(--khata-text-muted)] pb-2 border-b border-[var(--khata-border)]">
+                  D. GST Rates &amp; Summary
+                </h3>
+
+                {/* GST Rate Preset Buttons */}
+                <div>
+                  <label className="block text-xs font-bold text-[var(--khata-text-muted)] mb-1.5">
+                    GST Rate Applicable
+                  </label>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {[18, 28, 12, 5].map((r) => (
+                      <button
+                        key={r}
+                        type="button"
+                        onClick={() => setGstRate(r)}
+                        className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition ${
+                          gstRate === r
+                            ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-sm'
+                            : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
+                        }`}
+                      >
+                        {r}%
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Financial Summary Card */}
+                <div className="p-3.5 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] space-y-2 text-xs">
+                  <div className="flex items-center justify-between text-[var(--khata-text-muted)]">
+                    <span>T. Amt. Before Tax:</span>
+                    <span className="font-mono font-bold text-[var(--khata-text)]">
+                      ₹{calculations.taxableAmount}
+                    </span>
+                  </div>
+
+                  {isIntraState ? (
+                    <>
+                      <div className="flex items-center justify-between text-[var(--khata-text-muted)]">
+                        <span>CGST @ {calculations.cgstRate}%:</span>
+                        <span className="font-mono font-bold text-[var(--khata-text)]">
+                          ₹{calculations.cgstAmount}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-[var(--khata-text-muted)]">
+                        <span>SGST @ {calculations.sgstRate}%:</span>
+                        <span className="font-mono font-bold text-[var(--khata-text)]">
+                          ₹{calculations.sgstAmount}
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex items-center justify-between text-[var(--khata-text-muted)]">
+                      <span>IGST @ {calculations.igstRate}%:</span>
+                      <span className="font-mono font-bold text-[var(--khata-text)]">
+                        ₹{calculations.igstAmount}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between text-[var(--khata-text-muted)]">
+                    <span>Total Tax Amount GST:</span>
+                    <span className="font-mono font-bold text-[var(--khata-text)]">
+                      ₹{calculations.taxAmount}
+                    </span>
+                  </div>
+
+                  <div className="pt-2 border-t border-[var(--khata-border)] flex items-center justify-between text-sm font-extrabold text-[var(--khata-accent)]">
+                    <span>Grand Total:</span>
+                    <span className="font-mono text-base">₹{calculations.grandTotal}</span>
+                  </div>
+                </div>
+
+                {/* Amount in words */}
+                <div className="text-[11px] italic text-[var(--khata-text-muted)] leading-tight p-2 rounded-lg bg-[var(--khata-surface-inset)] border border-[var(--khata-border)]">
+                  <strong className="not-italic font-bold">In Words:</strong> {calculations.amountInWords}
+                </div>
+
+                {/* Action Buttons */}
+                <div className="space-y-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewInvoice(currentDraftInvoice)}
+                    className="neu-btn-secondary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold"
+                  >
+                    <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
+                    <span>Preview A4 Invoice</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSaveInvoice}
+                    disabled={isSaving}
+                    className="neu-btn-primary w-full py-3 flex items-center justify-center gap-2 text-sm font-extrabold shadow-md"
+                  >
+                    {isSaving ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Saving &amp; Archiving in R2...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Save &amp; Generate Invoice</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: INVOICE HISTORY */}
+      {activeSubTab === 'history' && (
+        <div
+          className="p-5 rounded-2xl border border-[var(--khata-border)] space-y-4"
+          style={{ background: 'var(--khata-surface)' }}
+        >
+          {/* Filters */}
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+            <div className="sm:col-span-2 relative">
+              <Search className="w-4 h-4 absolute left-3 top-3 text-neutral-400" />
+              <input
+                type="text"
+                placeholder="Search by invoice # or customer name..."
+                value={historySearch}
+                onChange={(e) => {
+                  setHistorySearch(e.target.value);
+                  setHistoryPage(0);
+                }}
+                className="neu-input w-full pl-9"
+              />
+            </div>
+            <div>
+              <input
+                type="date"
+                value={historyDateFrom}
+                onChange={(e) => {
+                  setHistoryDateFrom(e.target.value);
+                  setHistoryPage(0);
+                }}
+                className="neu-input w-full text-xs"
+                placeholder="From Date"
+              />
+            </div>
+            <div>
+              <input
+                type="date"
+                value={historyDateTo}
+                onChange={(e) => {
+                  setHistoryDateTo(e.target.value);
+                  setHistoryPage(0);
+                }}
+                className="neu-input w-full text-xs"
+                placeholder="To Date"
+              />
+            </div>
+          </div>
+
+          {/* Table */}
+          {isLoadingHistory ? (
+            <div className="py-16 text-center text-xs text-[var(--khata-text-muted)] flex flex-col items-center justify-center gap-2">
+              <Loader2 className="w-6 h-6 animate-spin text-[var(--khata-accent)]" />
+              <span>Loading invoice history...</span>
+            </div>
+          ) : historyInvoices.length === 0 ? (
+            <div className="py-16 text-center text-xs text-[var(--khata-text-muted)] border border-dashed border-[var(--khata-border)] rounded-xl">
+              No GST invoices found. Create your first GST bill using the "Create GST Bill" tab!
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-[var(--khata-border)]">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[var(--khata-surface-inset)] text-[var(--khata-text-muted)] font-bold uppercase tracking-wider border-b border-[var(--khata-border)]">
+                  <tr>
+                    <th className="py-3 px-4">Invoice #</th>
+                    <th className="py-3 px-4">Date</th>
+                    <th className="py-3 px-4">Customer</th>
+                    <th className="py-3 px-4 text-right">Taxable (₹)</th>
+                    <th className="py-3 px-4 text-right">Tax (₹)</th>
+                    <th className="py-3 px-4 text-right">Total (₹)</th>
+                    <th className="py-3 px-4 text-center">PDF</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--khata-border)] font-medium">
+                  {historyInvoices.map((inv) => (
+                    <tr key={inv.id} className="hover:bg-[var(--khata-surface-inset)]/50 transition">
+                      <td className="py-3 px-4 font-mono font-bold text-[var(--khata-accent)]">
+                        {inv.invoice_number}
+                      </td>
+                      <td className="py-3 px-4 text-[var(--khata-text-muted)]">
+                        {inv.invoice_date}
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="font-bold text-[var(--khata-text)]">{inv.customer_name}</div>
+                        <div className="text-[10px] text-[var(--khata-text-muted)]">{inv.customer_state}</div>
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono">
+                        ₹{inv.taxable_amount}
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono text-[var(--khata-text-muted)]">
+                        ₹{inv.tax_amount}
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono font-bold text-[var(--khata-accent)]">
+                        ₹{inv.grand_total}
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            inv.pdf_status === 'uploaded'
+                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                              : 'bg-blue-100 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300'
+                          }`}
+                        >
+                          {inv.pdf_status === 'uploaded' ? 'R2 Synced' : 'Ready'}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewInvoice(mapRecordToInvoiceProps(inv))}
+                            className="p-1.5 rounded-lg border border-[var(--khata-border)] hover:bg-[var(--khata-surface)] text-[var(--khata-text)]"
+                            title="Preview / Print A4"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadPdf(inv.id, inv.invoice_number)}
+                            disabled={isDownloadingPdf}
+                            className="p-1.5 rounded-lg border border-[var(--khata-border)] hover:bg-[var(--khata-surface)] text-[var(--khata-text)]"
+                            title="Download PDF"
+                          >
+                            <Download className="w-3.5 h-3.5 text-emerald-600" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Pagination */}
+          {historyTotal > 15 && (
+            <div className="flex items-center justify-between text-xs pt-2">
+              <span className="text-[var(--khata-text-muted)]">
+                Showing {historyPage * 15 + 1} - {Math.min((historyPage + 1) * 15, historyTotal)} of {historyTotal}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={historyPage === 0}
+                  onClick={() => setHistoryPage((p) => Math.max(0, p - 1))}
+                  className="neu-btn-secondary px-3 py-1.5 text-xs disabled:opacity-40"
+                >
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  disabled={(historyPage + 1) * 15 >= historyTotal}
+                  onClick={() => setHistoryPage((p) => p + 1)}
+                  className="neu-btn-secondary px-3 py-1.5 text-xs disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Success Modal */}
+      {successRecord && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div
+            className="neu-card w-full max-w-md p-6 text-center space-y-4 rounded-2xl border border-[var(--khata-border)]"
+            style={{ background: 'var(--khata-surface)' }}
+          >
+            <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 mx-auto flex items-center justify-center">
+              <CheckCircle2 className="w-8 h-8" />
+            </div>
+
+            <div>
+              <h3 className="text-lg font-extrabold text-[var(--khata-text)]">
+                Invoice #{successRecord.invoice_number} Created!
+              </h3>
+              <p className="text-xs text-[var(--khata-text-muted)] mt-1">
+                Amount: <strong className="font-mono text-[var(--khata-accent)]">₹{successRecord.grand_total}</strong>
+                <br />
+                {successRecord.pdf_status === 'uploaded'
+                  ? 'Archived securely in Cloudflare R2 object storage.'
+                  : 'Invoice saved to Neon database.'}
+              </p>
+            </div>
+
+            <div className="space-y-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPreviewInvoice(mapRecordToInvoiceProps(successRecord));
+                }}
+                className="neu-btn-primary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Preview &amp; Print A4 Invoice</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleDownloadPdf(successRecord.id, successRecord.invoice_number)}
+                className="neu-btn-secondary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold"
+              >
+                <Download className="w-4 h-4 text-emerald-600" />
+                <span>Download PDF File</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetForm}
+                className="w-full py-2 text-xs text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] font-semibold transition"
+              >
+                Create Another Invoice
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fullscreen A4 Invoice Preview Modal */}
+      {previewInvoice && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-sm flex flex-col p-2 sm:p-4">
+          <div className="max-w-[220mm] mx-auto w-full flex items-center justify-between pb-3 text-white">
+            <span className="font-bold text-sm">
+              Official Tax Invoice · {previewInvoice.invoiceNumber}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPreviewInvoice(null)}
+              className="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white transition flex items-center gap-1 text-xs font-bold"
+            >
+              <X className="w-4 h-4" />
+              <span>Close</span>
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto">
+            <MannatTaxInvoice
+              invoice={previewInvoice}
+              showPrintButton={true}
+              onDownloadPdf={() => {
+                if (successRecord) {
+                  handleDownloadPdf(successRecord.id, successRecord.invoice_number);
+                } else {
+                  window.print();
+                }
+              }}
+              isDownloadingPdf={isDownloadingPdf}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
