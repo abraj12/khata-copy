@@ -181,10 +181,10 @@ export function validateStrictInteger(
 }
 
 /**
- * Formats integer quantity values for hardware items (whole units).
- * Example: formatQuantity('5') => "5"
+ * Formats quantity values with up to 2 decimal places.
+ * Example: formatQuantity('5') => "5", formatQuantity('1.5') => "1.50", formatQuantity('2.25') => "2.25"
  */
 export function formatQuantity(value: unknown): string {
   const d = safeDecimal(value);
-  return d.trunc().toFixed(0);
+  return d.decimalPlaces() > 0 ? d.toFixed(2) : d.toFixed(0);
 }

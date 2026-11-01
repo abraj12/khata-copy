@@ -3,7 +3,7 @@
 **Document Status:** Canonical & Implemented  
 **Last Verified:** 2026-11-01  
 **Database Engine:** PostgreSQL 16 (Neon Serverless)  
-**Schema Version:** 005  
+**Schema Version:** 006  
 
 ---
 
@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 3. **`003_idempotency_and_hardening.sql`**: Adds idempotency store, performance indexes, and strict financial constraints.
 4. **`004_integer_quantity_and_money_constraints.sql`**: Converts `udhar_items.quantity` to `INTEGER` [1, 1000000] and enforces strict 2-decimal scale checks across all money columns.
 5. **`005_search_indexes_and_identity_constraints.sql`**: Adds composite search indexes for customers (`normalized_name, id`, `normalized_phone`), active products (`name, id`), and Udhar transactions (`customer_id, transaction_date DESC, id DESC`). Also widens `products.buying_price` to `NUMERIC(12, 2)` ensuring uniform financial precision across all tables.
+6. **`006_quantity_two_decimal_places.sql`**: Widens `udhar_items.quantity` to `NUMERIC(12, 2)` allowing up to 2 decimal places (e.g. 1.5, 2.25, 0.01). Drops the integer-only constraint from migration 004 and adds positive value (`quantity > 0`) and 2-decimal scale checks (`ROUND(quantity, 2) = quantity`).
 
 ### Preflight Safety Audit & How to Run Migrations
 
@@ -134,7 +135,7 @@ Individual line items belonging to a credit transaction.
 - `udhar_transaction_id` (VARCHAR, Foreign Key -> `udhar_transactions.id` ON DELETE CASCADE)
 - `product_id` (VARCHAR, Nullable, Foreign Key -> `products.id` ON DELETE SET NULL)
 - `item_name` (VARCHAR(150), Not Null)
-- `quantity` (NUMERIC(10, 3), Not Null CHECK (quantity > 0))
+- `quantity` (NUMERIC(12, 2), Not Null CHECK (quantity > 0 AND ROUND(quantity, 2) = quantity)) — supports up to 2 decimal places (e.g. 1.5, 2.25, 0.01)
 - `unit_price` (NUMERIC(12, 2), Not Null CHECK (unit_price > 0))
 - `subtotal` (NUMERIC(12, 2), Not Null CHECK (subtotal > 0))
 - `created_at` (TIMESTAMPTZ, Not Null DEFAULT NOW())

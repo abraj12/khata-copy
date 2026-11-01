@@ -62,7 +62,7 @@ The customers directory tracks individual balances and counter-party contact inf
 3. Shopkeeper adds one or more item lines. Each item line uses an independent **Searchable Product Picker** with debounced server-side lookup.
 4. Product buying price is displayed strictly as reference text (`Ref: ₹...`) and **never auto-populates or overrides** the custom selling price.
 5. Each line specifies:
-   - `quantity`: Strict positive integer between 1 and 1,000,000. Fractions (`1.5`, `2.00`) are rejected.
+   - `quantity`: Strict positive numeric $(0, 1000000.00]$ accepting up to 2 decimal places (e.g. `1`, `1.5`, `2.25`, `0.01`). Rejects $>2$ decimal places (`1.234`), 0, negative values, and exponents. Stored canonically as `NUMERIC(12, 2)`.
    - `sellingPrice`: Strict decimal $\ge 0$ with at most 2 decimal places.
 6. Line subtotal is computed as: $\text{Subtotal} = \text{Decimal}(\text{quantity}) \times \text{Decimal}(\text{sellingPrice})$.
 7. Transaction total is the exact sum of line subtotals.

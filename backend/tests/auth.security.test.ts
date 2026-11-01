@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+﻿import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { env, loadAndValidateEnv } from '../src/config/env.js';
@@ -51,8 +51,9 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '003_idempotency_and_hardening.sql' },
             { version: '004_integer_quantity_and_money_constraints.sql' },
             { version: '005_search_indexes_and_identity_constraints.sql' },
+            { version: '006_quantity_two_decimal_places.sql' },
           ],
-          rowCount: 5,
+          rowCount: 6,
         } as any;
       }
       return { rows: [], rowCount: 0 } as any;

@@ -76,14 +76,16 @@ All API endpoints return JSON conforming to standard canonical envelopes:
           "002_khata_transactions.sql",
           "003_idempotency_and_hardening.sql",
           "004_integer_quantity_and_money_constraints.sql",
-          "005_search_indexes_and_identity_constraints.sql"
+          "005_search_indexes_and_identity_constraints.sql",
+          "006_quantity_two_decimal_places.sql"
         ],
         "found": [
           "001_auth_tables.sql",
           "002_khata_transactions.sql",
           "003_idempotency_and_hardening.sql",
           "004_integer_quantity_and_money_constraints.sql",
-          "005_search_indexes_and_identity_constraints.sql"
+          "005_search_indexes_and_identity_constraints.sql",
+          "006_quantity_two_decimal_places.sql"
         ],
         "missing": []
       },
@@ -332,7 +334,7 @@ All API endpoints return JSON conforming to standard canonical envelopes:
 - **Validation Rules:**
   - `customer.phone`: Optional Indian mobile format (10 digits starting with 6-9, optional `+91` prefix, dashes, spaces). Invalid non-empty phone rejected with HTTP 400 (`INVALID_PHONE_FORMAT`).
   - `customer resolution`: If customer ID is not provided, matching proceeds via normalized phone, then single exact normalized name with safe phone attachment under `FOR UPDATE` row lock. Ambiguous name matches or phone collisions reject with HTTP 409 (`AMBIGUOUS_CUSTOMER_MATCH` or `CUSTOMER_NAME_CONFLICT`).
-  - `quantity`: Strict positive integer $[1, 1000000]$. Rejects decimals (`1.5`, `2.00`), negative values, and exponents.
+  - `quantity`: Strict positive numeric $(0, 1000000.00]$ accepting up to 2 decimal places (e.g. `1`, `1.5`, `2.25`, `0.01`). Rejects $>2$ decimal places (`1.234`), zero, negative values, and exponents. Stored canonically as `NUMERIC(12, 2)`.
   - `sellingPrice`: Strict decimal $\ge 0$ with $\le 2$ decimal places. Never auto-populated from buying price.
   - `initialPayment`: Optional non-negative decimal not exceeding transaction total.
 - **Response (201 Created):**

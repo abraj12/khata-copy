@@ -2,21 +2,23 @@
 
 **Document Status:** Canonical & Implemented  
 **Last Verified:** 2026-11-01  
-**Test Suite Status:** 47 / 47 Passing (100%)  
-**Runner:** Vitest 3.x with TypeScript  
+**Test Suite Status:** 72 / 72 Passing (100%)  
+**Runner:** Vitest with TypeScript  
 
 ---
 
 ## 1. Automated Test Suites & Coverage
 
-The backend test suite verifies financial accuracy, row-locking safety, and authentication security.
+The backend test suite verifies financial accuracy, row-locking safety, search pagination, decimal quantity precision, and authentication security.
 
 | Test Suite | File Location | Test Count | Key Invariants Verified |
 |---|---|---|---|
 | **Database Guard** | [backend/tests/testDbGuard.test.ts](file:///c:/Users/rajab/OneDrive/Desktop/khata/backend/tests/testDbGuard.test.ts) | 7 tests | Blocks Neon production hosts (`*.neon.tech`), cloud DBs, rejects unapproved test URLs, permits localhost/test DBs. |
-| **Financial Correctness** | [backend/tests/khata.financial.test.ts](file:///c:/Users/rajab/OneDrive/Desktop/khata/backend/tests/khata.financial.test.ts) | 34 tests | Strict FIFO allocation, overpayment prohibition, zero/negative rejection, 2-decimal string serialization, non-aggregated `FOR UPDATE` locking. |
-| **Authentication & Security** | [backend/tests/auth.security.test.ts](file:///c:/Users/rajab/OneDrive/Desktop/khata/backend/tests/auth.security.test.ts) | 6 tests | Argon2id verification, lockout counters, exponential backoff, advisory lock pruning. |
-| **Total** | | **47 tests** | **All 47 passing** |
+| **Validators & Normalizers** | [backend/tests/validators.unit.test.ts](file:///c:/Users/rajab/OneDrive/Desktop/khata/backend/tests/validators.unit.test.ts) | 9 tests | Decimal quantity validation (up to 2dp), money scale validation, ILIKE wildcard escaping, customer phone and name normalization. |
+| **Search & Pagination** | [backend/tests/search.api.test.ts](file:///c:/Users/rajab/OneDrive/Desktop/khata/backend/tests/search.api.test.ts) | 9 tests | Case-insensitive product search (`LOWER(name)`), customer phone normalization search, bounded pagination (`LIMIT/OFFSET`), and parameter safety. |
+| **Financial Correctness** | [backend/tests/khata.financial.test.ts](file:///c:/Users/rajab/OneDrive/Desktop/khata/backend/tests/khata.financial.test.ts) | 18 tests | Strict FIFO allocation, overpayment prohibition, decimal quantity policy (1.5, 2.25, 0.01), customer phone normalization & conflict resolution, 2-decimal string serialization, non-aggregated `FOR UPDATE` locking. |
+| **Authentication & Security** | [backend/tests/auth.security.test.ts](file:///c:/Users/rajab/OneDrive/Desktop/khata/backend/tests/auth.security.test.ts) | 29 tests | Argon2id verification, lockout counters, exponential backoff, advisory lock pruning, CSRF protection, `/api/v1/health/ready` check. |
+| **Total Automated Tests** | | **72 tests** | **All 72 passing (100%)** |
 
 ---
 
@@ -66,14 +68,14 @@ Every production release candidate must pass all five verification gates prior t
 
 ```mermaid
 flowchart LR
-    G1["Gate 1\nClean Typescript Build\nnpm run build"] --> G2["Gate 2\n47 Unit/Integration Tests\nnpm test"]
+    G1["Gate 1\nClean Typescript Build\nnpm run build"] --> G2["Gate 2\n72 Unit/Integration Tests\nnpm test"]
     G2 --> G3["Gate 3\nLive Neon Readiness\n/api/v1/health/ready"]
-    G3 --> G4["Gate 4\nOffline Asset Bundling\nnpx cap sync android"]
+    G3 --> G4["Gate 4\nOffline Asset Bundling\nnpm run cap:sync"]
     G4 --> G5["Gate 5\nClean Git Working Tree\nNo secrets committed"]
 ```
 
 1. **Gate 1: Monorepo Compilation** - `npm run build` completes with zero TypeScript or Vite errors.
-2. **Gate 2: Financial Test Suite** - 47/47 vitest tests pass.
+2. **Gate 2: Financial & Security Test Suite** - 72/72 vitest tests pass.
 3. **Gate 3: Live Readiness Probe** - `/api/v1/health/ready` returns HTTP 200 with all 9 core tables verified.
 4. **Gate 4: Mobile Shell Synchronization** - `npx cap sync android` copies latest web bundle and fonts into Android assets.
 5. **Gate 5: Clean Working Tree** - No credentials, keystores, or build caches committed to version control.

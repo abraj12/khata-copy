@@ -4,6 +4,19 @@ All notable changes to the Khata project are documented in this file.
 
 ---
 
+## [1.6.0] - 2026-11-01
+
+### Changed — Critical Business Rule Overhaul
+- **Quantity Policy Reversal (Up to 2 Decimal Places):** Overrode the prior integer-only constraint per updated owner specifications. Quantity is now fully decimal-aware, supporting fractional quantities up to 2 decimal places (`NUMERIC(12, 2)`, regex `^(?:0|[1-9]\d*)(?:\.\d{1,2})?$`, range `(0, 1000000.00]`), e.g. `1.5`, `2.25`, `0.01`.
+- **Database Migration 006 (`006_quantity_two_decimal_places.sql`):** Widened `udhar_items.quantity` to `NUMERIC(12, 2)`, dropped integer-only CHECK constraints (`udhar_items_quantity_check`), added `chk_udhar_items_quantity_positive` (`quantity > 0`) and scale validation (`ROUND(quantity, 2) = quantity`).
+- **Frontend Quantity Input & Formatting:** Updated `KhataLedgerView.tsx` quantity input to `step="0.01"`, `min="0.01"`, and `inputMode="decimal"`. Replaced `parseStrictInteger` with `parseStrictDecimal(line.quantity, { maxDecimalPlaces: 2 })`. Updated `formatQuantity` in `frontend/src/lib/formatters.ts` to cleanly format fractional quantities up to 2 decimal places rather than truncating with `d.trunc()`.
+- **Product Search Alphabetical Ordering:** Updated `ProductsService.listActiveProducts` SQL to enforce case-insensitive alphabetical ordering: `ORDER BY LOWER(name) ASC, name ASC, id ASC`.
+- **Authoritative Vercel Deployment:** Removed conflicting nested `frontend/vercel.json` in favor of authoritative root `vercel.json` configured for root workspace installation.
+- **Dedicated Validator Unit Test Suite:** Created `backend/tests/validators.unit.test.ts` covering `validateDecimalQuantityInput`, `validateMoneyInput`, `escapeLike`, and `khataService` normalization functions.
+- **Automated Test Matrix Expansion:** Total passing automated tests expanded from 63 to 72 tests across 5 test suites (100% passing).
+
+---
+
 ## [1.5.0] - 2026-11-01
 
 ### Fixed

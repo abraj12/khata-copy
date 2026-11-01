@@ -34,6 +34,7 @@ export const EXPECTED_MIGRATIONS = [
   '003_idempotency_and_hardening.sql',
   '004_integer_quantity_and_money_constraints.sql',
   '005_search_indexes_and_identity_constraints.sql',
+  '006_quantity_two_decimal_places.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [

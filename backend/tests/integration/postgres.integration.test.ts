@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+﻿import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import pg from 'pg';
 import fs from 'fs';
 import path from 'path';
@@ -40,7 +40,14 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
 
     // 2. Apply real migrations in order
     const migrationsDir = path.resolve(__dirname, '../../migrations');
-    const migrationFiles = ['001_auth_tables.sql', '002_khata_transactions.sql', '003_idempotency_and_hardening.sql'];
+    const migrationFiles = [
+      '001_auth_tables.sql',
+      '002_khata_transactions.sql',
+      '003_idempotency_and_hardening.sql',
+      '004_integer_quantity_and_money_constraints.sql',
+      '005_search_indexes_and_identity_constraints.sql',
+      '006_quantity_two_decimal_places.sql',
+    ];
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS "schema_migrations" (
@@ -76,6 +83,9 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '001_auth_tables.sql',
       '002_khata_transactions.sql',
       '003_idempotency_and_hardening.sql',
+      '004_integer_quantity_and_money_constraints.sql',
+      '005_search_indexes_and_identity_constraints.sql',
+      '006_quantity_two_decimal_places.sql',
     ]);
 
     const expectedTables = [
@@ -152,7 +162,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     await pool.query(
       `INSERT INTO udhar_items (transaction_id, product_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [txId, prodId, 'Premium Basmati Rice 1kg', '85.50', '2.000', '105.00', '210.00']
+      [txId, prodId, 'Premium Basmati Rice 1kg', '85.50', '2.00', '105.00', '210.00']
     );
 
     // Now update product name and archive product
@@ -409,5 +419,56 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       expect((err as Error).message).toContain('violates foreign key constraint');
     }
     expect(deleteFailed).toBe(true);
+  });
+
+  // 9. Decimal Quantity Policy in PostgreSQL: Supports up to 2 decimal places (NUMERIC(12, 2))
+  it('9. PostgreSQL schema accepts fractional quantity (1.25, 1.50) and enforces 2dp scale constraint', async () => {
+    const custRes = await pool.query(
+      INSERT INTO customers (name, normalized_name, phone, normalized_phone)
+       VALUES (, , , ) RETURNING id,
+      ['Decimal Qty Customer', 'decimal qty customer', '9866677788', '9866677788']
+    );
+    const custId = custRes.rows[0].id;
+
+    const prodRes = await pool.query(
+      INSERT INTO products (name, buying_price) VALUES (, ) RETURNING id,
+      ['PVC Pipe 2.5m', '120.00']
+    );
+    const prodId = prodRes.rows[0].id;
+
+    // Tx: 1.25 units @ 200.00 = 250.00
+    const txRes = await pool.query(
+      INSERT INTO udhar_transactions (customer_id, transaction_date, total_amount, note)
+       VALUES (, CURRENT_DATE, , ) RETURNING id,
+      [custId, '250.00', 'Fractional quantity test']
+    );
+    const txId = txRes.rows[0].id;
+
+    // Insert 1.25 quantity -> must succeed
+    await pool.query(
+      INSERT INTO udhar_items (transaction_id, product_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
+       VALUES (, , , , , , ),
+      [txId, prodId, 'PVC Pipe 2.5m', '120.00', '1.25', '200.00', '250.00']
+    );
+
+    const itemRes = await pool.query(
+      SELECT quantity FROM udhar_items WHERE transaction_id = ,
+      [txId]
+    );
+    expect(itemRes.rows[0].quantity).toBe('1.25');
+
+    // Attempting to insert >2 decimal places (1.234) must violate chk_udhar_items_quantity_scale
+    let scaleCheckFailed = false;
+    try {
+      await pool.query(
+        INSERT INTO udhar_items (transaction_id, product_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
+         VALUES (, , , , , , ),
+        [txId, prodId, 'PVC Pipe 2.5m', '120.00', '1.234', '200.00', '246.80']
+      );
+    } catch (err) {
+      scaleCheckFailed = true;
+      expect((err as Error).message).toContain('chk_udhar_items_quantity_scale');
+    }
+    expect(scaleCheckFailed).toBe(true);
   });
 });

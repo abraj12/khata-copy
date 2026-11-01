@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+﻿import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { appPool } from '../src/config/database.js';
 import { khataService } from '../src/modules/khata/khata.service.js';
 import { productsService } from '../src/modules/products/products.service.js';
@@ -133,7 +133,7 @@ describe('Search & Bounded Pagination Test Suite', () => {
 
       await productsService.listActiveProducts();
       expect(executedSql).toContain('archived_at IS NULL');
-      expect(executedSql).toContain('ORDER BY name ASC, id ASC');
+      expect(executedSql).toContain('ORDER BY LOWER(name) ASC, name ASC, id ASC');
     });
 
     it('7. Enforces stable customer ordering (last_activity DESC, name ASC, id ASC) and parameterized LIMIT/OFFSET', async () => {

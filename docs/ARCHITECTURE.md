@@ -48,7 +48,7 @@ flowchart TD
 | **Frontend Web** | React 19, TypeScript 5, Vite 6, Tailwind CSS 3, Lucide React.<br>Bundled locally with `@fontsource/montserrat` for 100% offline rendering.<br>Custom `SearchablePicker` with debounced server-side search (`useRemoteSearch`), responsive bottom-sheet for mobile, and bounded pagination. |
 | **Mobile Runtime** | Capacitor 7 Android platform shell. Embeds frontend build into native Android Webview with local asset caching. |
 | **Backend API** | Node.js 22 LTS, Express 4, TypeScript 5, `tsx` runner, `pg` (PostgreSQL client).<br>Monorepo structure managed with native npm workspaces. |
-| **Financial Engine** | `decimal.js` for arbitrary-precision decimal arithmetic (financial rounding half-up, strict 2-decimal-place strings). |
+| **Financial Engine** | `decimal.js` for arbitrary-precision decimal arithmetic (financial rounding half-up, strict 2-decimal-place scale for money and fractional quantities up to 2 decimal places). |
 | **Database** | PostgreSQL 16 on Neon Serverless. Enforces foreign key constraints, check constraints, unique indexes, and ACID transactions. |
 | **Security & Auth** | Argon2id for password hashing, host-only `httpOnly` secure session cookies, double-submit CSRF cookie protection, `express-rate-limit`. |
 

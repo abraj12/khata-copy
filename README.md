@@ -26,7 +26,7 @@ npm ci
 # 2. Compile both backend and frontend workspaces
 npm run build
 
-# 3. Execute automated test suites (58 tests: financial, auth, search, database guard)
+# 3. Execute automated test suites (72 tests: validators, financial, auth, search, database guard)
 npm test
 ```
 
@@ -47,13 +47,12 @@ Ensure `backend/.env` contains valid local development values:
 ```env
 PORT=5000
 NODE_ENV=development
+DATABASE_URL_POOLED=postgresql://postgres:postgres@localhost:5432/khata_dev
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/khata_dev
-DIRECT_URL=postgresql://postgres:postgres@localhost:5432/khata_dev
 FRONTEND_URL=http://localhost:5173
-OWNER_USERNAME=owner
+OWNER_PHONE=9876543210
 OWNER_PASSWORD_HASH=$argon2id$v=19$m=65536,t=3,p=4$dummyHashForDev
-SESSION_SECRET=dev_session_secret_at_least_64_characters_long_for_security_1234567890
-COOKIE_SECRET=dev_cookie_secret_at_least_64_characters_long_for_security_1234567890
+SESSION_SECRET=dev_session_secret_at_least_32_characters_long_for_security_1234567890
 ```
 
 > [!WARNING]
@@ -104,15 +103,18 @@ Comprehensive architecture, contracts, design rules, and operational guides are 
 
 | Document | Description |
 |---|---|
-| [docs/PRODUCT_REQUIREMENTS.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/PRODUCT_REQUIREMENTS.md) | Exact product workflows, business rules, financial validations, and non-goals. |
+| [docs/REMEDIATION_BASELINE.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/REMEDIATION_BASELINE.md) | Phase 0 repository baseline, active branch, SHA, migrations, and environment inventory. |
+| [docs/REMEDIATION_REPORT.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/REMEDIATION_REPORT.md) | Authoritative remediation and verification report per Sonnet 46 master specification. |
+| [docs/ACCESSIBILITY_AND_THEMES.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/ACCESSIBILITY_AND_THEMES.md) | 9 neumorphic presets, Montserrat font bundling, text scale, and focus visibility guide. |
+| [docs/PRODUCT_REQUIREMENTS.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/PRODUCT_REQUIREMENTS.md) | Exact product workflows, business rules, financial validations (quantity <= 2dp), and non-goals. |
 | [docs/ARCHITECTURE.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/ARCHITECTURE.md) | High-level system architecture, technology stack, sequence diagrams, and data flows. |
 | [docs/API_CONTRACT.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/API_CONTRACT.md) | Canonical REST routes, request/response JSON schemas, and 2-decimal string formatting. |
-| [docs/DATABASE_AND_MIGRATIONS.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/DATABASE_AND_MIGRATIONS.md) | Relational database schema (9 tables), migrations runner, indexes, and connection pooling. |
+| [docs/DATABASE_AND_MIGRATIONS.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/DATABASE_AND_MIGRATIONS.md) | Relational database schema (9 tables), migrations runner (001–006), and connection pooling. |
 | [docs/SECURITY.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/SECURITY.md) | Argon2id auth, host-only cookies, CSRF protection, rate limits, and test DB guards. |
 | [docs/DESIGN_SYSTEM.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/DESIGN_SYSTEM.md) | Locally bundled Montserrat font, 9 tactile neumorphic presets, and text scale architecture. |
 | [docs/DEPLOYMENT.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/DEPLOYMENT.md) | Vercel CDN frontend, Render Node.js backend, Neon DB, and DNS CNAME settings. |
 | [docs/ANDROID_RELEASE.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/ANDROID_RELEASE.md) | Capacitor synchronization, release keystore generation, and signing configurations. |
-| [docs/TESTING_AND_RELEASE.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/TESTING_AND_RELEASE.md) | Test matrix (47 tests), financial edge cases, and release acceptance gates. |
+| [docs/TESTING_AND_RELEASE.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/TESTING_AND_RELEASE.md) | Test matrix (72 tests), financial edge cases, and release acceptance gates. |
 | [docs/OPERATIONS_AND_BACKUPS.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/OPERATIONS_AND_BACKUPS.md) | Health check monitoring, Neon backups, PITR recovery, and emergency password resets. |
 | [CHANGELOG.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/CHANGELOG.md) | Chronological release and remediation notes. |
 

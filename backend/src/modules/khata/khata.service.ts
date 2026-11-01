@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { Decimal } from 'decimal.js';
 import { appPool } from '../../config/database.js';
-import { validateMoneyInput, validateQuantityInput, escapeLike } from '../../utils/validation.js';
+import { validateMoneyInput, validateDecimalQuantityInput, escapeLike } from '../../utils/validation.js';
 
 // Configure Decimal globally for money arithmetic
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
@@ -626,7 +626,7 @@ export class KhataService {
 
       for (const item of input.items) {
         const prodId = Number(item.productId);
-        const qty = validateQuantityInput(item.quantity, `Item for product ID ${prodId} quantity`);
+        const qtyDec = validateDecimalQuantityInput(item.quantity, `Item for product ID ${prodId} quantity`);
         const sellPriceDec = validateMoneyInput(item.sellingPrice, `Selling price for product ID ${prodId}`);
 
         const prodRes = await client.query(
@@ -643,14 +643,14 @@ export class KhataService {
           throw new Error(`Product "${product.name}" is archived and cannot be selected for new Udhar.`);
         }
 
-        const lineTotalDec = new Decimal(qty).times(sellPriceDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+        const lineTotalDec = qtyDec.times(sellPriceDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
         serverComputedTotal = serverComputedTotal.plus(lineTotalDec);
 
         verifiedItems.push({
           productId: prodId,
           nameSnapshot: product.name,
           buyingPriceSnapshot: new Decimal(product.buying_price).toFixed(2),
-          quantity: String(qty),
+          quantity: qtyDec.toFixed(2),
           sellingPrice: sellPriceDec.toFixed(2),
           lineTotal: lineTotalDec.toFixed(2),
         });

@@ -1,4 +1,4 @@
-import { appPool } from '../../config/database.js';
+﻿import { appPool } from '../../config/database.js';
 import { validateMoneyInput, escapeLike } from '../../utils/validation.js';
 
 export interface ProductRecord {
@@ -48,7 +48,7 @@ export class ProductsService {
       sql += ` AND name ILIKE $${params.length}`;
     }
 
-    sql += ` ORDER BY name ASC, id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    sql += ` ORDER BY LOWER(name) ASC, name ASC, id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limit + 1, offset);
 
     const result = await appPool.query(sql, params);

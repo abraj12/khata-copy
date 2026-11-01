@@ -684,41 +684,89 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
     const lineTotal2 = new Decimal('0.35').times(new Decimal('0.10')).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
     expect(lineTotal2).toBe('0.04');
   });
-  // TEST CASE 12: Hardware Item Integer Quantity Enforcement
-  it('12. Integer Quantity Enforcement: Rejects fractional decimals with "Quantity must be a whole number."', async () => {
-    const prod = await productsService.createProduct('Hammer 500g', '250.00');
+  // TEST CASE 12: Decimal Quantity Enforcement (up to 2 decimal places)
+  // Business rule change: Quantity now allows up to 2 decimal places (e.g., 1.5, 2.25, 0.01).
+  // Integer-only restriction removed per updated product specification.
+  it('12. Decimal Quantity Policy: Accepts up to 2dp, rejects >2dp, zero, and negative', async () => {
+    const prod = await productsService.createProduct('PVC Pipe 1m', '250.00');
     const prodId = parseInt(prod.id.toString(), 10);
 
-    // Rejection of fractional strings
-    await expect(
-      khataService.createTransaction({
-        customer: { name: 'Ramesh Patel' },
-        items: [{ productId: prodId, quantity: '1.5', sellingPrice: '300.00' }],
-      })
-    ).rejects.toThrow('Quantity must be a whole number.');
+    // --- ACCEPTANCE: Valid quantities (0 < qty <= 1,000,000 with at most 2dp) ---
 
-    await expect(
-      khataService.createTransaction({
-        customer: { name: 'Ramesh Patel' },
-        items: [{ productId: prodId, quantity: '0.5', sellingPrice: '300.00' }],
-      })
-    ).rejects.toThrow('Quantity must be a whole number.');
-
-    await expect(
-      khataService.createTransaction({
-        customer: { name: 'Ramesh Patel' },
-        items: [{ productId: prodId, quantity: '2.00', sellingPrice: '300.00' }],
-      })
-    ).rejects.toThrow('Quantity must be a whole number.');
-
-    // Acceptance of valid whole integer quantity
-    const tx = await khataService.createTransaction({
+    // Whole integer — must still be accepted
+    const txInt = await khataService.createTransaction({
       customer: { name: 'Ramesh Patel' },
       items: [{ productId: prodId, quantity: '3', sellingPrice: '300.00' }],
     });
-    expect(tx.success).toBe(true);
-    expect(tx.totalAmount).toBe('900.00');
-    expect(tx.remainingDue).toBe('900.00');
+    expect(txInt.success).toBe(true);
+    expect(txInt.totalAmount).toBe('900.00'); // 3 × 300.00
+
+    // 1 decimal place — accepted
+    const tx1dp = await khataService.createTransaction({
+      customer: { name: 'Ramesh Patel' },
+      items: [{ productId: prodId, quantity: '1.5', sellingPrice: '200.00' }],
+    });
+    expect(tx1dp.success).toBe(true);
+    expect(tx1dp.totalAmount).toBe('300.00'); // 1.5 × 200.00
+
+    // 2 decimal places — accepted
+    const tx2dp = await khataService.createTransaction({
+      customer: { name: 'Ramesh Patel' },
+      items: [{ productId: prodId, quantity: '1.25', sellingPrice: '10.10' }],
+    });
+    expect(tx2dp.success).toBe(true);
+    // 1.25 × 10.10 = 12.625 -> ROUND_HALF_UP -> 12.63
+    expect(tx2dp.totalAmount).toBe('12.63');
+
+    // Minimum valid quantity (0.01) — accepted
+    const txMin = await khataService.createTransaction({
+      customer: { name: 'Ramesh Patel' },
+      items: [{ productId: prodId, quantity: '0.01', sellingPrice: '100.00' }],
+    });
+    expect(txMin.success).toBe(true);
+    expect(txMin.totalAmount).toBe('1.00'); // 0.01 × 100.00
+
+    // --- REJECTION: Invalid quantities ---
+
+    // More than 2 decimal places — rejected
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Ramesh Patel' },
+        items: [{ productId: prodId, quantity: '1.234', sellingPrice: '300.00' }],
+      })
+    ).rejects.toThrow(/at most 2 decimal places|up to 2 decimal places/);
+
+    // Zero — rejected
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Ramesh Patel' },
+        items: [{ productId: prodId, quantity: '0', sellingPrice: '300.00' }],
+      })
+    ).rejects.toThrow(/greater than 0/);
+
+    // Negative — rejected
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Ramesh Patel' },
+        items: [{ productId: prodId, quantity: '-1', sellingPrice: '300.00' }],
+      })
+    ).rejects.toThrow(/greater than 0/);
+
+    // Non-numeric — rejected
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Ramesh Patel' },
+        items: [{ productId: prodId, quantity: '1.2abc', sellingPrice: '300.00' }],
+      })
+    ).rejects.toThrow(/greater than 0|decimal places/);
+
+    // Exponent notation — rejected
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Ramesh Patel' },
+        items: [{ productId: prodId, quantity: '1e2', sellingPrice: '300.00' }],
+      })
+    ).rejects.toThrow(/greater than 0|decimal places/);
   });
 
   // TEST CASE 13: Strict Money Precision (Max 2 Decimal Places)
