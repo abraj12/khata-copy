@@ -141,6 +141,8 @@ export const NormalBillingView: React.FC = () => {
   const [availableCustomers, setAvailableCustomers] = useState<CustomerItem[]>([]);
   const [customerSearch, setCustomerSearch] = useState('');
   const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
+  const [openProductPickerItemId, setOpenProductPickerItemId] = useState<string | null>(null);
+  const [productPickerSearch, setProductPickerSearch] = useState('');
 
   // History list states
   const [historyBills, setHistoryBills] = useState<NormalBillRecord[]>([]);
@@ -152,6 +154,7 @@ export const NormalBillingView: React.FC = () => {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const customerDropdownRef = useRef<HTMLDivElement>(null);
+  const productPickerRef = useRef<HTMLDivElement>(null);
 
   // 1. Fetch next sequential bill number on mount
   const fetchNextNumber = async () => {
@@ -171,47 +174,71 @@ export const NormalBillingView: React.FC = () => {
   }, []);
 
   // 2. Load existing products from catalogue for search/selection
-  useEffect(() => {
-    const fetchProducts = async () => {
-      try {
-        setIsLoadingProducts(true);
-        const { data } = await apiClient<{ success: boolean; products: ProductItem[] }>(
-          '/api/v1/products?limit=200'
-        );
-        if (data?.products) {
-          setAvailableProducts(data.products);
+  const fetchProducts = async () => {
+    try {
+      setIsLoadingProducts(true);
+      const all: ProductItem[] = [];
+      let offset = 0;
+      let hasMore = true;
+
+      while (hasMore && offset < 200) {
+        const res = await apiClient<{
+          success: boolean;
+          data: ProductItem[];
+          pagination?: { hasMore: boolean; nextOffset: number | null };
+        }>(`/api/v1/products?limit=50&offset=${offset}`);
+
+        const items = res.data?.data || (res.data as any)?.products;
+        if (items && Array.isArray(items)) {
+          all.push(...items);
+          if (res.data.pagination?.hasMore && res.data.pagination?.nextOffset) {
+            offset = res.data.pagination.nextOffset;
+          } else {
+            hasMore = false;
+          }
+        } else {
+          hasMore = false;
         }
-      } catch (err) {
-        console.warn('Could not load products catalogue:', err);
-      } finally {
-        setIsLoadingProducts(false);
       }
-    };
+      setAvailableProducts(all);
+    } catch (err) {
+      console.warn('Could not load products catalogue:', err);
+    } finally {
+      setIsLoadingProducts(false);
+    }
+  };
+
+  useEffect(() => {
     fetchProducts();
   }, []);
 
   // 3. Load customers for autocomplete search
-  useEffect(() => {
-    const fetchCustomers = async () => {
-      try {
-        const { data } = await apiClient<{ success: boolean; customers: CustomerItem[] }>(
-          '/api/v1/khata/customers?limit=200'
-        );
-        if (data?.customers) {
-          setAvailableCustomers(data.customers);
-        }
-      } catch (err) {
-        console.warn('Could not load customers for selection:', err);
+  const fetchCustomers = async () => {
+    try {
+      const res = await apiClient<{ success: boolean; customers: CustomerItem[] }>(
+        '/api/v1/khata/customers?limit=200'
+      );
+      const custs = res.data?.customers || (res.data as any)?.data;
+      if (custs && Array.isArray(custs)) {
+        setAvailableCustomers(custs);
       }
-    };
+    } catch (err) {
+      console.warn('Could not load customers for selection:', err);
+    }
+  };
+
+  useEffect(() => {
     fetchCustomers();
   }, []);
 
-  // Close customer dropdown on outside click
+  // Close customer & product dropdowns on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (customerDropdownRef.current && !customerDropdownRef.current.contains(e.target as Node)) {
         setIsCustomerDropdownOpen(false);
+      }
+      if (productPickerRef.current && !productPickerRef.current.contains(e.target as Node)) {
+        setOpenProductPickerItemId(null);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -251,13 +278,13 @@ export const NormalBillingView: React.FC = () => {
     loadHistory();
   };
 
-  // Filtered customer list for autocomplete
+  // Filtered customer list for autocomplete & picker
   const filteredCustomers = useMemo(() => {
-    if (!customerSearch.trim()) return availableCustomers.slice(0, 8);
+    if (!customerSearch.trim()) return availableCustomers;
     const query = customerSearch.toLowerCase();
-    return availableCustomers
-      .filter((c) => c.name.toLowerCase().includes(query) || (c.phone && c.phone.includes(query)))
-      .slice(0, 8);
+    return availableCustomers.filter(
+      (c) => c.name.toLowerCase().includes(query) || (c.phone && c.phone.includes(query))
+    );
   }, [availableCustomers, customerSearch]);
 
   const handleSelectCustomer = (customer: CustomerItem) => {
@@ -678,16 +705,28 @@ export const NormalBillingView: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Bill Number */}
               <div>
-                <label className="block text-xs font-bold text-[var(--khata-text-muted)] mb-1">
-                  Bill Number *
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-bold text-[var(--khata-text-muted)] flex items-center gap-1">
+                    <span>Bill Number *</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={fetchNextNumber}
+                    disabled={isLoadingNextNum}
+                    className="text-[10px] font-semibold text-[var(--khata-accent)] hover:underline flex items-center gap-1 cursor-pointer"
+                    title="Fetch next sequential bill number from server"
+                  >
+                    <RotateCcw className={`w-3 h-3 ${isLoadingNextNum ? 'animate-spin' : ''}`} />
+                    <span>Auto / Refresh</span>
+                  </button>
+                </div>
                 <div className="relative">
                   <input
                     type="text"
                     value={billNumber}
                     onChange={(e) => setBillNumber(e.target.value)}
-                    placeholder="e.g. 001"
-                    className="neu-input w-full font-mono font-bold text-sm"
+                    placeholder={isLoadingNextNum ? 'Fetching...' : 'e.g. 001'}
+                    className="neu-input w-full font-mono font-bold text-sm tracking-wide"
                   />
                   {isLoadingNextNum && (
                     <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -820,17 +859,90 @@ export const NormalBillingView: React.FC = () => {
                 <User className="w-4 h-4 text-[var(--khata-accent)]" />
                 <span>Section B: Details of Receiver (Bill to Party)</span>
               </div>
-              <span className="text-[11px] font-semibold text-[var(--khata-text-muted)]">
-                Select from existing customer or enter manually
-              </span>
+              
+              {/* Customer picker toggle */}
+              <div className="relative" ref={customerDropdownRef}>
+                <button
+                  type="button"
+                  onClick={() => setIsCustomerDropdownOpen(!isCustomerDropdownOpen)}
+                  className="text-xs font-semibold text-[var(--khata-accent)] hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  <User className="w-3.5 h-3.5" />
+                  <span>Pick Khata Customer</span>
+                </button>
+
+                {isCustomerDropdownOpen && (
+                  <div
+                    className="absolute right-0 top-full mt-2 w-72 max-w-[85vw] p-2 rounded-xl border border-[var(--khata-border)] shadow-xl z-30 space-y-2 animate-in fade-in"
+                    style={{ background: 'var(--khata-surface)' }}
+                  >
+                    <div className="p-1 text-[10px] font-bold text-[var(--khata-text-muted)] border-b border-[var(--khata-border)] flex items-center justify-between">
+                      <span>KHATA CUSTOMERS ({availableCustomers.length})</span>
+                      <span>Click to autofill</span>
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Search customer by name or phone..."
+                      value={customerSearch}
+                      onChange={(e) => setCustomerSearch(e.target.value)}
+                      className="neu-input w-full text-xs p-1.5"
+                      autoFocus
+                    />
+                    <div className="max-h-48 overflow-y-auto space-y-1">
+                      {filteredCustomers.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => handleSelectCustomer(c)}
+                          className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex items-center justify-between transition"
+                        >
+                          <div>
+                            <span className="font-bold text-[var(--khata-text)] block truncate">{c.name}</span>
+                            {c.address && (
+                              <span className="text-[10px] text-[var(--khata-text-muted)] block truncate max-w-[180px]">
+                                {c.address}
+                              </span>
+                            )}
+                          </div>
+                          {c.phone && (
+                            <span className="text-[10px] text-[var(--khata-text-muted)] font-mono ml-2">
+                              {c.phone}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                      {filteredCustomers.length === 0 && (
+                        <div className="p-2 text-center text-xs text-[var(--khata-text-muted)]">
+                          No Khata customers found.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Customer Autocomplete Search / Manual Input */}
-              <div className="relative md:col-span-2" ref={customerDropdownRef}>
-                <label className="block text-xs font-bold text-[var(--khata-text-muted)] mb-1">
-                  Customer / Receiver Name *
-                </label>
+              <div className="relative md:col-span-2">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-bold text-[var(--khata-text-muted)]">
+                    Customer / Receiver Name *
+                  </label>
+                  {customerId && (
+                    <div className="flex items-center gap-1.5 text-[10px]">
+                      <span className="text-emerald-600 font-bold">✓ Linked Customer</span>
+                      <button
+                        type="button"
+                        onClick={() => setCustomerId(null)}
+                        className="text-rose-500 hover:underline font-bold cursor-pointer"
+                        title="Unlink customer"
+                      >
+                        (Unlink)
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <div className="relative">
                   <input
                     type="text"
@@ -838,55 +950,13 @@ export const NormalBillingView: React.FC = () => {
                     onChange={(e) => {
                       setCustomerName(e.target.value);
                       setCustomerSearch(e.target.value);
-                      setIsCustomerDropdownOpen(true);
                       setCustomerId(null);
                     }}
-                    onFocus={() => setIsCustomerDropdownOpen(true)}
                     placeholder="Search existing customer or type new name..."
                     className="neu-input w-full font-bold text-sm pl-8"
                   />
                   <Search className="w-4 h-4 text-[var(--khata-text-muted)] absolute left-2.5 top-1/2 -translate-y-1/2" />
-                  {customerId && (
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
-                      ✓ Linked Customer
-                    </span>
-                  )}
                 </div>
-
-                {/* Autocomplete Dropdown */}
-                {isCustomerDropdownOpen && filteredCustomers.length > 0 && (
-                  <div
-                    className="absolute left-0 right-0 top-full mt-1.5 p-1 rounded-xl border border-[var(--khata-border)] shadow-2xl z-50 max-h-60 overflow-y-auto animate-in fade-in"
-                    style={{ background: 'var(--khata-surface)' }}
-                  >
-                    <div className="p-1.5 text-[10px] font-bold text-[var(--khata-text-muted)] border-b border-[var(--khata-border)] flex items-center justify-between">
-                      <span>EXISTING CUSTOMERS ({availableCustomers.length})</span>
-                      <span>Click to autofill</span>
-                    </div>
-                    {filteredCustomers.map((cust) => (
-                      <button
-                        key={cust.id}
-                        type="button"
-                        onClick={() => handleSelectCustomer(cust)}
-                        className="w-full text-left p-2 rounded-lg hover:bg-[var(--khata-surface-inset)] transition flex items-center justify-between text-xs"
-                      >
-                        <div>
-                          <div className="font-bold text-[var(--khata-text)]">{cust.name}</div>
-                          {cust.address && (
-                            <div className="text-[10px] text-[var(--khata-text-muted)] truncate max-w-xs">
-                              {cust.address}
-                            </div>
-                          )}
-                        </div>
-                        {cust.phone && (
-                          <span className="text-[11px] font-mono font-medium text-[var(--khata-accent)]">
-                            {cust.phone}
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
               </div>
 
               {/* Customer Phone (Optional) */}
@@ -1021,20 +1091,38 @@ export const NormalBillingView: React.FC = () => {
                                 (Unlink)
                               </button>
                             </div>
-                          ) : isLoadingProducts ? (
-                            <span className="text-[10px] text-[var(--khata-text-muted)] flex items-center gap-1">
-                              <Loader2 className="w-3 h-3 animate-spin text-[var(--khata-accent)]" />
-                              <span>Loading catalogue...</span>
-                            </span>
-                          ) : availableProducts.length > 0 ? (
-                            <span className="text-[10px] text-[var(--khata-text-muted)]">
-                              {availableProducts.length} catalogue products available
-                            </span>
-                          ) : null}
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenProductPickerItemId(
+                                    openProductPickerItemId === item.id ? null : item.id
+                                  );
+                                  setProductPickerSearch('');
+                                }}
+                                className="text-[10px] font-semibold text-[var(--khata-accent)] hover:underline flex items-center gap-1 cursor-pointer"
+                                title="Pick from store product catalogue"
+                              >
+                                <Package className="w-3 h-3" />
+                                <span>Pick Product</span>
+                              </button>
+                              {isLoadingProducts ? (
+                                <span className="text-[10px] text-[var(--khata-text-muted)] flex items-center gap-1">
+                                  <Loader2 className="w-3 h-3 animate-spin text-[var(--khata-accent)]" />
+                                  <span>Loading...</span>
+                                </span>
+                              ) : availableProducts.length > 0 ? (
+                                <span className="text-[10px] text-[var(--khata-text-muted)]">
+                                  {availableProducts.length} in catalogue
+                                </span>
+                              ) : null}
+                            </div>
+                          )}
                         </div>
                       </div>
 
-                      <div className="relative">
+                      <div className="relative" ref={openProductPickerItemId === item.id ? productPickerRef : undefined}>
                         <input
                           type="text"
                           list={`normal-product-options-${item.id}`}
@@ -1060,6 +1148,70 @@ export const NormalBillingView: React.FC = () => {
                             </option>
                           ))}
                         </datalist>
+
+                        {/* Interactive Product Popover Picker */}
+                        {openProductPickerItemId === item.id && (
+                          <div
+                            className="absolute left-0 right-0 top-full mt-1.5 p-2 rounded-xl border border-[var(--khata-border)] shadow-2xl z-30 space-y-2 animate-in fade-in"
+                            style={{ background: 'var(--khata-surface)' }}
+                          >
+                            <div className="flex items-center justify-between text-[10px] font-bold text-[var(--khata-text-muted)] pb-1 border-b border-[var(--khata-border)]">
+                              <span>SELECT PRODUCT FROM CATALOGUE ({availableProducts.length})</span>
+                              <button
+                                type="button"
+                                onClick={() => setOpenProductPickerItemId(null)}
+                                className="text-neutral-400 hover:text-neutral-600 p-0.5 cursor-pointer"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                            <input
+                              type="text"
+                              placeholder="Search products by name or HSN..."
+                              value={productPickerSearch}
+                              onChange={(e) => setProductPickerSearch(e.target.value)}
+                              className="neu-input w-full text-xs p-1.5"
+                              autoFocus
+                            />
+                            <div className="max-h-48 overflow-y-auto space-y-1">
+                              {availableProducts
+                                .filter(
+                                  (p) =>
+                                    p.name.toLowerCase().includes(productPickerSearch.toLowerCase()) ||
+                                    (p.hsn_code && p.hsn_code.includes(productPickerSearch))
+                                )
+                                .map((p) => (
+                                  <button
+                                    key={p.id}
+                                    type="button"
+                                    onClick={() => {
+                                      handleSelectProduct(item.id, p);
+                                      setOpenProductPickerItemId(null);
+                                      setProductPickerSearch('');
+                                    }}
+                                    className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex items-center justify-between transition"
+                                  >
+                                    <div>
+                                      <span className="font-bold text-[var(--khata-text)] block truncate">{p.name}</span>
+                                      {p.hsn_code && (
+                                        <span className="text-[10px] text-[var(--khata-text-muted)] font-mono">
+                                          HSN: {p.hsn_code}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span className="text-xs font-bold text-[var(--khata-accent)] font-mono ml-2">
+                                      ₹{p.buying_price}
+                                    </span>
+                                  </button>
+                                ))}
+                              {availableProducts.length === 0 && (
+                                <div className="p-2 text-center text-xs text-[var(--khata-text-muted)]">
+                                  {isLoadingProducts ? 'Loading catalogue...' : 'No products found.'}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
 
