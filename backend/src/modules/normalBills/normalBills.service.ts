@@ -379,6 +379,71 @@ export class NormalBillsService {
   }
 
   /**
+   * Generates a preview PDF buffer for normal bills on-the-fly without database writes.
+   */
+  public async generateDraftPdf(input: CreateNormalBillInput): Promise<{ buffer: Buffer; filename: string }> {
+    let totalAmountDec = new Decimal(0);
+    const computedItems: Array<CreateNormalBillItemInput & { amount: string }> = [];
+
+    for (const item of input.items || []) {
+      const qtyDec = new Decimal(item.quantity || 1);
+      const rateDec = new Decimal(item.rate || 0);
+      const lineAmountDec = qtyDec.times(rateDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      totalAmountDec = totalAmountDec.plus(lineAmountDec);
+
+      computedItems.push({
+        ...item,
+        quantity: qtyDec.toFixed(3),
+        rate: rateDec.toFixed(2),
+        amount: lineAmountDec.toFixed(2),
+      });
+    }
+
+    const billNumber = input.billNumber || 'Draft';
+    const amountInWords = numberToIndianWords(totalAmountDec.toNumber());
+
+    const buffer = await generateMannatInvoicePdf({
+      invoiceNumber: billNumber,
+      invoiceDate: input.billDate || new Date().toISOString().slice(0, 10),
+      state: input.state || 'Uttar Pradesh',
+      stateCode: input.stateCode || '09',
+      transportationMode: input.transportationMode || null,
+      vehicleNumber: input.vehicleNumber || null,
+      dateOfSupply: input.dateOfSupply || null,
+      placeOfSupply: input.placeOfSupply || null,
+      customer: {
+        name: input.customerName || 'Valued Customer',
+        address: input.customerAddress || null,
+        phone: input.customerPhone || null,
+        state: input.customerState || 'Uttar Pradesh',
+        stateCode: input.customerStateCode || '09',
+      },
+      items: computedItems.map((item) => ({
+        name: item.description,
+        hsn: item.hsnCode,
+        quantity: item.quantity,
+        unit: item.unit,
+        rate: item.rate,
+        rateUnit: item.rateUnit,
+        amount: item.amount,
+      })),
+      totals: {
+        taxableAmount: totalAmountDec.toFixed(2),
+        taxAmount: 0,
+        grandTotal: totalAmountDec.toFixed(2),
+      },
+      amountInWords,
+      isNormalBill: true,
+      billTitle: 'NORMAL BILL',
+    });
+
+    return {
+      buffer,
+      filename: `Normal_Bill_${billNumber}.pdf`,
+    };
+  }
+
+  /**
    * Lists normal bills with pagination, search, date filtering, and embedded items snapshot.
    */
   public async listBills(query: {

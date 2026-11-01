@@ -31,6 +31,7 @@ import {
   createNormalBill,
   listNormalBills,
   downloadNormalBillPdf,
+  downloadNormalBillDraftPdf,
   mapNormalBillToInvoiceProps,
 } from './normalBillsApi.js';
 import { apiClient } from '../../lib/apiClient.js';
@@ -422,6 +423,58 @@ export const NormalBillingView: React.FC = () => {
       }
     }
     return null;
+  };
+
+  const handleDownloadPdf = async (id: number, bNumber: string) => {
+    try {
+      setIsDownloadingPdf(true);
+      await downloadNormalBillPdf(id, bNumber);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to download bill PDF.');
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
+  const handleDownloadDraftPdf = async () => {
+    const err = validateForm();
+    if (err) {
+      setErrorMessage(err);
+      return;
+    }
+    try {
+      setIsDownloadingPdf(true);
+      await downloadNormalBillDraftPdf({
+        billNumber: billNumber.trim() || undefined,
+        billDate,
+        state,
+        stateCode,
+        transportationMode: transportationMode.trim() || null,
+        vehicleNumber: vehicleNumber.trim() || null,
+        dateOfSupply: dateOfSupply || null,
+        placeOfSupply: placeOfSupply.trim() || null,
+        customerId,
+        customerName: customerName.trim(),
+        customerAddress: customerAddress.trim() || null,
+        customerPhone: customerPhone.trim() || null,
+        customerState,
+        customerStateCode,
+        items: items.map((item) => ({
+          productId: item.productId,
+          description: item.description.trim(),
+          hsnCode: item.hsnCode.trim() || null,
+          quantity: parseFloat(item.quantity) || 1,
+          unit: item.unit.trim() || null,
+          rate: parseFloat(item.rate) || 0,
+          rateUnit: item.rateUnit.trim() || null,
+        })),
+        notes: notes.trim() || null,
+      });
+    } catch (dErr: any) {
+      setErrorMessage(dErr.message || 'Failed to download draft bill PDF.');
+    } finally {
+      setIsDownloadingPdf(false);
+    }
   };
 
   // Submit & Save Normal Bill
@@ -1380,76 +1433,41 @@ export const NormalBillingView: React.FC = () => {
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL: FULL MANNAT NORMAL BILL PREVIEW                                    */}
+      {/* FULLSCREEN A4 NORMAL BILL PREVIEW MODAL                                   */}
       {/* ========================================================================= */}
       {previewInvoice && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-sm animate-in fade-in"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div
-            className="neu-card w-full max-w-4xl max-h-[96vh] flex flex-col p-0 overflow-hidden shadow-2xl border border-[var(--khata-border)]"
-            style={{ background: 'var(--khata-surface)' }}
-          >
-            {/* Modal Header */}
-            <div className="p-3 sm:p-4 border-b border-[var(--khata-border)] flex items-center justify-between bg-[var(--khata-surface-inset)] mhi-no-print">
-              <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4 text-emerald-500" />
-                <span className="font-black text-sm text-[var(--khata-text)]">
-                  Normal Bill Preview · #{previewInvoice.invoiceNumber || 'Draft'}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={handleClosePreview}
-                className="p-1 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-sm flex flex-col p-1 sm:p-4 mhi-print-modal-container">
+          <div className="max-w-[220mm] mx-auto w-full flex items-center justify-between pb-2 sm:pb-3 text-white mhi-modal-header mhi-no-print">
+            <span className="font-bold text-xs sm:text-sm truncate">
+              Official Bill · #{previewInvoice.invoiceNumber || 'Draft'}
+            </span>
+            <button
+              type="button"
+              onClick={handleClosePreview}
+              className="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white transition flex items-center gap-1 text-xs font-bold cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+              <span>Close</span>
+            </button>
+          </div>
 
-            {/* Modal Body: Mannat Invoice A4 Component */}
-            <div className="flex-1 overflow-y-auto p-2 sm:p-6 bg-neutral-100 dark:bg-neutral-900 flex justify-center">
-              <MannatTaxInvoice
-                invoice={previewInvoice}
-                showPrintButton={true}
-                isNormalBill={true}
-                billTitle="NORMAL BILL"
-                onDownloadPdf={
-                  previewInvoice.id
-                    ? async () => {
-                        try {
-                          setIsDownloadingPdf(true);
-                          await downloadNormalBillPdf(
-                            previewInvoice.id!,
-                            previewInvoice.invoiceNumber || 'Bill'
-                          );
-                        } catch (err: any) {
-                          alert(err.message || 'Failed to download bill PDF.');
-                        } finally {
-                          setIsDownloadingPdf(false);
-                        }
-                      }
-                    : undefined
+          <div className="flex-1 overflow-y-auto">
+            <MannatTaxInvoice
+              invoice={previewInvoice}
+              showPrintButton={true}
+              isNormalBill={true}
+              billTitle="NORMAL BILL"
+              onDownloadPdf={() => {
+                if (previewInvoice?.id) {
+                  handleDownloadPdf(previewInvoice.id, previewInvoice.invoiceNumber || 'Bill');
+                } else if (successRecord?.id) {
+                  handleDownloadPdf(successRecord.id, successRecord.bill_number);
+                } else {
+                  handleDownloadDraftPdf();
                 }
-                isDownloadingPdf={isDownloadingPdf}
-              />
-            </div>
-
-            {/* Modal Footer */}
-            <div className="p-3 border-t border-[var(--khata-border)] flex items-center justify-between bg-[var(--khata-surface-inset)] mhi-no-print">
-              <span className="text-[11px] text-[var(--khata-text-muted)]">
-                A4 Portrait Layout · Non-GST Bill
-              </span>
-              <button
-                type="button"
-                onClick={handleClosePreview}
-                className="neu-btn-secondary text-xs px-4 py-1.5 font-bold"
-              >
-                Close Preview
-              </button>
-            </div>
+              }}
+              isDownloadingPdf={isDownloadingPdf}
+            />
           </div>
         </div>
       )}

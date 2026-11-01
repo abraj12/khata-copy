@@ -141,6 +141,33 @@ export async function downloadNormalBillPdf(id: number, billNumber: string): Pro
   window.URL.revokeObjectURL(blobUrl);
 }
 
+export async function downloadNormalBillDraftPdf(payload: CreateNormalBillPayload): Promise<void> {
+  const url = `${API_BASE_URL}/api/v1/normal-bills/preview-pdf`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorJson = await response.json().catch(() => ({}));
+    throw new Error(errorJson.message || 'Failed to download draft bill PDF');
+  }
+
+  const blob = await response.blob();
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = `Normal_Bill_${payload.billNumber || 'Draft'}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(blobUrl);
+}
+
 export function mapNormalBillToInvoiceProps(record: NormalBillRecord): MannatInvoiceProps {
   return {
     id: record.id,

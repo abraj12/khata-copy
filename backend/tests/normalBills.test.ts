@@ -88,7 +88,7 @@ describe('Normal Billing Module (Non-GST Standard Bills) Test Suite', () => {
 
   it('2. Creates a Normal Bill with 0 GST calculations and pure Decimal math', async () => {
     const mockClient = {
-      query: vi.fn().mockImplementation(async (sql: any, params?: any[]) => {
+      query: vi.fn().mockImplementation(async (sql: any) => {
         const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
         if (sqlText === 'BEGIN' || sqlText === 'COMMIT' || sqlText === 'ROLLBACK') {
           return { rowCount: 1 };
@@ -255,5 +255,28 @@ describe('Normal Billing Module (Non-GST Standard Bills) Test Suite', () => {
     expect(res.body.bills).toHaveLength(1);
     expect(res.body.bills[0].items).toHaveLength(1);
     expect(res.body.bills[0].items[0].description).toBe('White Cement 5kg');
+  });
+
+  it('6. Generates and streams on-the-fly draft PDF via POST /api/v1/normal-bills/preview-pdf without saving', async () => {
+    const res = await request(app)
+      .post('/api/v1/normal-bills/preview-pdf')
+      .set('Cookie', authCookie)
+      .set('X-CSRF-Token', csrfToken)
+      .send({
+        billNumber: 'DRAFT-01',
+        customerName: 'Quick Buyer',
+        items: [
+          {
+            description: 'Fevicol SH 1kg',
+            quantity: 3,
+            rate: 260,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(res.headers['content-disposition']).toContain('attachment; filename="Normal_Bill_DRAFT-01.pdf"');
+    expect(res.body.length).toBeGreaterThan(100);
   });
 });

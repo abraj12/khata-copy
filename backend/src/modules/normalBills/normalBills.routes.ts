@@ -95,6 +95,33 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 });
 
 /**
+ * POST /api/v1/normal-bills/preview-pdf - Generates and streams PDF on-the-fly without saving to database
+ */
+router.post('/preview-pdf', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = createNormalBillSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        message: parsed.error.errors[0]?.message || 'Invalid bill input.',
+        errors: parsed.error.errors,
+      });
+      return;
+    }
+
+    const { buffer, filename } = await normalBillsService.generateDraftPdf(parsed.data);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * GET /api/v1/normal-bills - List normal bills with search and pagination
  */
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
@@ -149,7 +176,7 @@ router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
 });
 
 /**
- * GET /api/v1/normal-bills/:id/pdf - Stream PDF invoice download
+ * GET /api/v1/normal-bills/:id/pdf - Stream PDF bill download
  */
 router.get('/:id/pdf', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -159,11 +186,16 @@ router.get('/:id/pdf', async (req: Request, res: Response, next: NextFunction) =
       return;
     }
 
+    const isDownload = req.query.download === 'true';
     const { buffer, filename } = await normalBillsService.getBillPdf(id);
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader(
+      'Content-Disposition',
+      `${isDownload ? 'attachment' : 'inline'}; filename="${filename}"`
+    );
     res.setHeader('Content-Length', buffer.length);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
     res.send(buffer);
   } catch (err) {
     next(err);
