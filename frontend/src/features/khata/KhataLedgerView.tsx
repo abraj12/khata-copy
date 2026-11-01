@@ -46,6 +46,7 @@ interface ProductReference {
   id: number;
   name: string;
   buying_price: string;
+  hsn_code?: string | null;
   image_url?: string | null;
 }
 
@@ -1118,7 +1119,7 @@ export const KhataLedgerView: React.FC = () => {
                           onSelect={(prod) => handleProductSelect(line.lineId, prod)}
                           onClear={() => handleProductClear(line.lineId)}
                           getOptionKey={(p) => p.id}
-                          getOptionLabel={(p) => `${p.name} (Ref: ${formatCurrency(p.buying_price)})`}
+                          getOptionLabel={(p) => `${p.name}${p.hsn_code ? ` [HSN: ${p.hsn_code}]` : ''} (Ref: ${formatCurrency(p.buying_price)})`}
                           renderOption={(p) => (
                             <div className="flex items-center justify-between gap-2 w-full">
                               <div className="flex items-center gap-2 min-w-0">

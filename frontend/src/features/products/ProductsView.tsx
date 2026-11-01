@@ -28,6 +28,7 @@ interface Product {
   id: number;
   name: string;
   buying_price: string;
+  hsn_code?: string | null;
   image_url?: string | null;
   image_object_key?: string | null;
   created_at: string;
@@ -56,6 +57,7 @@ export const ProductsView: React.FC = () => {
   // Create state
   const [isAdding, setIsAdding] = useState(false);
   const [newName, setNewName] = useState('');
+  const [newHsn, setNewHsn] = useState('');
   const [newPrice, setNewPrice] = useState('');
   const [createImageFile, setCreateImageFile] = useState<File | null>(null);
   const [createImagePreview, setCreateImagePreview] = useState<string | null>(null);
@@ -68,6 +70,7 @@ export const ProductsView: React.FC = () => {
   // Edit state
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editName, setEditName] = useState('');
+  const [editHsn, setEditHsn] = useState('');
   const [editPrice, setEditPrice] = useState('');
   const [editImageFile, setEditImageFile] = useState<File | null>(null);
   const [editImagePreview, setEditImagePreview] = useState<string | null>(null);
@@ -247,6 +250,7 @@ export const ProductsView: React.FC = () => {
           body: JSON.stringify({
             name: newName.trim(),
             buying_price: safeDecimal(newPrice).toFixed(2),
+            hsn_code: newHsn.trim() || null,
           }),
         }
       );
@@ -267,6 +271,7 @@ export const ProductsView: React.FC = () => {
       }
 
       setNewName('');
+      setNewHsn('');
       setNewPrice('');
       handleClearCreateImage();
       setIsAdding(false);
@@ -289,6 +294,7 @@ export const ProductsView: React.FC = () => {
   const handleStartEdit = (product: Product) => {
     setEditingProduct(product);
     setEditName(product.name);
+    setEditHsn(product.hsn_code || '');
     setEditPrice(safeDecimal(product.buying_price).toFixed(2));
     setEditImageFile(null);
     setEditImagePreview(null);
@@ -363,6 +369,7 @@ export const ProductsView: React.FC = () => {
         body: JSON.stringify({
           name: editName.trim(),
           buying_price: safeDecimal(editPrice).toFixed(2),
+          hsn_code: editHsn.trim() || null,
         }),
       });
 
@@ -385,6 +392,7 @@ export const ProductsView: React.FC = () => {
         setEditError(`Product details saved, but image upload failed: ${editImageErrorMsg}. Please retry uploading image.`);
       } else {
         setEditingProduct(null);
+        setEditHsn('');
         handleClearEditImage();
         showNotification('success', 'Product updated successfully.');
       }
@@ -490,7 +498,7 @@ export const ProductsView: React.FC = () => {
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-bold text-[var(--khata-text-muted)] uppercase mb-1">
                 Product Name <span className="text-rose-500">*</span>
@@ -502,6 +510,19 @@ export const ProductsView: React.FC = () => {
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="e.g. Basmati Rice 1kg"
                 className="neu-input w-full text-sm font-medium"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-[var(--khata-text-muted)] uppercase mb-1">
+                HSN Code <span className="text-neutral-400 font-normal">(Optional)</span>
+              </label>
+              <input
+                type="text"
+                value={newHsn}
+                onChange={(e) => setNewHsn(e.target.value)}
+                placeholder="e.g. 1006.30"
+                maxLength={20}
+                className="neu-input w-full text-sm font-medium font-mono"
               />
             </div>
             <div>
@@ -653,6 +674,7 @@ export const ProductsView: React.FC = () => {
                   <tr className="border-b border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
                     <th className="py-3.5 px-4 sm:px-6 w-14 text-center">Photo</th>
                     <th className="py-3.5 px-4 sm:px-6">Product Name</th>
+                    <th className="py-3.5 px-4 sm:px-6">HSN</th>
                     <th className="py-3.5 px-4 sm:px-6 text-right">Owner Buying Price</th>
                     <th className="py-3.5 px-4 sm:px-6 text-center w-28">Actions</th>
                   </tr>
@@ -703,6 +725,16 @@ export const ProductsView: React.FC = () => {
 
                       <td className="py-3.5 px-4 sm:px-6 font-semibold text-[var(--khata-text)]">
                         {item.name}
+                      </td>
+
+                      <td className="py-3.5 px-4 sm:px-6 text-xs font-mono text-[var(--khata-text-muted)]">
+                        {item.hsn_code ? (
+                          <span className="px-2 py-0.5 rounded-md bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] inline-block">
+                            {item.hsn_code}
+                          </span>
+                        ) : (
+                          <span className="text-neutral-400 dark:text-neutral-600">—</span>
+                        )}
                       </td>
 
                       <td className="py-3.5 px-4 sm:px-6 text-right font-semibold text-[var(--khata-accent)] tabular-numbers">
@@ -808,6 +840,20 @@ export const ProductsView: React.FC = () => {
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
                   className="neu-input w-full text-sm font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--khata-text-muted)] uppercase mb-1">
+                  HSN Code <span className="text-neutral-400 font-normal">(Optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={editHsn}
+                  onChange={(e) => setEditHsn(e.target.value)}
+                  placeholder="e.g. 1006.30"
+                  maxLength={20}
+                  className="neu-input w-full text-sm font-medium font-mono"
                 />
               </div>
 

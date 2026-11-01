@@ -74,11 +74,13 @@ const productSearchQuerySchema = z.object({
 const createProductSchema = z.object({
   name: z.string().trim().min(1, 'Product name is required').max(255),
   buying_price: z.union([z.number(), z.string()]),
+  hsn_code: z.string().trim().max(20, 'HSN code cannot exceed 20 characters').nullable().optional(),
 });
 
 const updateProductSchema = z.object({
   name: z.string().trim().min(1).max(255).optional(),
   buying_price: z.union([z.number(), z.string()]).optional(),
+  hsn_code: z.string().trim().max(20, 'HSN code cannot exceed 20 characters').nullable().optional(),
 });
 
 const uploadIntentSchema = z.object({
@@ -128,10 +130,10 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       return;
     }
 
-    const { name, buying_price } = parsed.data;
+    const { name, buying_price, hsn_code } = parsed.data;
     // Strict money validation (rejects >2 decimals, NaN, Infinity, negative)
     const priceDec = validateMoneyInput(buying_price, 'Buying price');
-    const newProduct = await productsService.createProduct(name, priceDec.toFixed(2));
+    const newProduct = await productsService.createProduct(name, priceDec.toFixed(2), hsn_code);
     res.status(201).json({ success: true, data: newProduct });
   } catch (err) {
     next(err);
@@ -168,6 +170,7 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
     const updated = await productsService.updateProduct(id, {
       name: parsed.data.name,
       buyingPrice: validatedPrice,
+      hsnCode: parsed.data.hsn_code,
     });
 
     if (!updated) {

@@ -7,6 +7,7 @@ export interface ProductRecord {
   id: number;
   name: string;
   buying_price: string;
+  hsn_code?: string | null;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -65,7 +66,7 @@ export class ProductsService {
     const offset = Math.max(0, opts.offset || 0);
 
     let sql = `
-      SELECT id, name, buying_price, created_at, updated_at, archived_at,
+      SELECT id, name, buying_price, hsn_code, created_at, updated_at, archived_at,
              image_object_key, image_content_type, image_size_bytes, image_updated_at
       FROM products
       WHERE archived_at IS NULL
@@ -75,7 +76,7 @@ export class ProductsService {
     if (opts.search && opts.search.trim()) {
       const cleanSearch = escapeLike(opts.search.trim());
       params.push(`%${cleanSearch}%`);
-      sql += ` AND name ILIKE $${params.length}`;
+      sql += ` AND (name ILIKE $${params.length} OR (hsn_code IS NOT NULL AND hsn_code ILIKE $${params.length}))`;
     }
 
     sql += ` ORDER BY LOWER(name) ASC, name ASC, id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
@@ -103,7 +104,7 @@ export class ProductsService {
    */
   public async getProductById(id: number): Promise<ProductRecord | null> {
     const result = await appPool.query(
-      `SELECT id, name, buying_price, created_at, updated_at, archived_at,
+      `SELECT id, name, buying_price, hsn_code, created_at, updated_at, archived_at,
               image_object_key, image_content_type, image_size_bytes, image_updated_at
        FROM products
        WHERE id = $1`,
@@ -118,19 +119,24 @@ export class ProductsService {
   /**
    * Creates a new reference product with strict money validation
    */
-  public async createProduct(name: string, buyingPrice: string | number): Promise<ProductRecord> {
+  public async createProduct(
+    name: string,
+    buyingPrice: string | number,
+    hsnCode?: string | null
+  ): Promise<ProductRecord> {
     const trimmed = name.trim();
     if (!trimmed) throw new AppError('Product name cannot be empty.', 400, 'VALIDATION_ERROR');
 
     const priceDec = validateMoneyInput(buyingPrice, 'Buying price');
     const formattedPrice = priceDec.toFixed(2);
+    const cleanHsn = hsnCode && hsnCode.trim() ? hsnCode.trim() : null;
 
     const result = await appPool.query(
-      `INSERT INTO products (name, buying_price, created_at, updated_at)
-       VALUES ($1, $2, NOW(), NOW())
-       RETURNING id, name, buying_price, created_at, updated_at, archived_at,
+      `INSERT INTO products (name, buying_price, hsn_code, created_at, updated_at)
+       VALUES ($1, $2, $3, NOW(), NOW())
+       RETURNING id, name, buying_price, hsn_code, created_at, updated_at, archived_at,
                  image_object_key, image_content_type, image_size_bytes, image_updated_at`,
-      [trimmed, formattedPrice]
+      [trimmed, formattedPrice, cleanHsn]
     );
     return { ...result.rows[0], image_url: null };
   }
@@ -140,7 +146,7 @@ export class ProductsService {
    */
   public async updateProduct(
     id: number,
-    data: { name?: string; buyingPrice?: string | number }
+    data: { name?: string; buyingPrice?: string | number; hsnCode?: string | null }
   ): Promise<ProductRecord | null> {
     const existing = await this.getProductById(id);
     if (!existing || existing.archived_at) return null;
@@ -153,13 +159,17 @@ export class ProductsService {
       newPrice = priceDec.toFixed(2);
     }
 
+    const newHsn = data.hsnCode !== undefined
+      ? (data.hsnCode && data.hsnCode.trim() ? data.hsnCode.trim() : null)
+      : (existing.hsn_code || null);
+
     const result = await appPool.query(
       `UPDATE products
-       SET name = $1, buying_price = $2, updated_at = NOW()
-       WHERE id = $3 AND archived_at IS NULL
-       RETURNING id, name, buying_price, created_at, updated_at, archived_at,
+       SET name = $1, buying_price = $2, hsn_code = $3, updated_at = NOW()
+       WHERE id = $4 AND archived_at IS NULL
+       RETURNING id, name, buying_price, hsn_code, created_at, updated_at, archived_at,
                  image_object_key, image_content_type, image_size_bytes, image_updated_at`,
-      [newName, newPrice, id]
+      [newName, newPrice, newHsn, id]
     );
     if (result.rows.length === 0) return null;
     const [updatedWithUrl] = await this.attachPresignedUrls(result.rows);
@@ -202,7 +212,7 @@ export class ProductsService {
            image_updated_at = NOW(),
            updated_at = NOW()
        WHERE id = $4 AND archived_at IS NULL
-       RETURNING id, name, buying_price, created_at, updated_at, archived_at,
+       RETURNING id, name, buying_price, hsn_code, created_at, updated_at, archived_at,
                  image_object_key, image_content_type, image_size_bytes, image_updated_at`,
       [imageObjectKey, verified.contentType, verified.contentLength, productId]
     );
@@ -239,7 +249,7 @@ export class ProductsService {
            image_updated_at = NULL,
            updated_at = NOW()
        WHERE id = $1 AND archived_at IS NULL
-       RETURNING id, name, buying_price, created_at, updated_at, archived_at,
+       RETURNING id, name, buying_price, hsn_code, created_at, updated_at, archived_at,
                  image_object_key, image_content_type, image_size_bytes, image_updated_at`,
       [productId]
     );

@@ -56,6 +56,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '007_quantity_strict_scale_and_allocation_integrity.sql' },
             { version: '008_strict_quantity_scale.sql' },
             { version: '009_product_images_and_offline_bills.sql' },
+            { version: '010_product_hsn_code.sql' },
           ],
           rowCount: 6,
         } as any;

@@ -38,6 +38,7 @@ export const EXPECTED_MIGRATIONS = [
   '007_quantity_strict_scale_and_allocation_integrity.sql',
   '008_strict_quantity_scale.sql',
   '009_product_images_and_offline_bills.sql',
+  '010_product_hsn_code.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [

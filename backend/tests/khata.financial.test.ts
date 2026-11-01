@@ -8,6 +8,7 @@ interface ProductRow {
   id: string;
   name: string;
   buying_price: string;
+  hsn_code?: string | null;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -135,6 +136,7 @@ class MockDatabaseState {
         id,
         name: params[0] as string,
         buying_price: params[1] as string,
+        hsn_code: (params[2] as string) || null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         archived_at: null,
