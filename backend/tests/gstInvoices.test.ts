@@ -76,11 +76,8 @@ describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
   it('2. Suggests the next sequential invoice number via /api/v1/gst-invoices/next-number', async () => {
     vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
       const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
-      if (sqlText.includes('nextval')) {
-        return { rows: [{ next_val: '4' }], rowCount: 1 } as any;
-      }
-      if (sqlText.includes('SELECT id FROM gst_invoices WHERE invoice_number')) {
-        return { rows: [], rowCount: 0 } as any;
+      if (sqlText.includes('MAX(') || sqlText.includes('max_num')) {
+        return { rows: [{ max_num: '3' }], rowCount: 1 } as any;
       }
       return { rows: [], rowCount: 0 } as any;
     });

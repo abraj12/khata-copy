@@ -396,6 +396,8 @@ export const GstBillingView: React.FC = () => {
       });
 
       setSuccessRecord(created);
+      // Auto-fetch next sequential invoice number from server for the next bill
+      fetchNextNumber();
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to save GST invoice.');
     } finally {
@@ -455,7 +457,10 @@ export const GstBillingView: React.FC = () => {
           <div>
             <h2 className="text-lg sm:text-xl font-bold tracking-tight text-[var(--khata-text)] flex items-center gap-2">
               <span>GST Tax Invoices</span>
-              <span className="text-xs px-2.5 py-0.5 rounded-md font-mono bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300 font-semibold border border-blue-200 dark:border-blue-800">
+              <span
+                className="text-xs px-2.5 py-0.5 rounded-md font-mono font-bold border border-[var(--khata-border)]"
+                style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-accent)' }}
+              >
                 M/s Mannat Hardware Store
               </span>
             </h2>
@@ -548,16 +553,35 @@ export const GstBillingView: React.FC = () => {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                   <div>
-                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
-                      Invoice No. <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={invoiceNumber}
-                      onChange={(e) => setInvoiceNumber(e.target.value)}
-                      placeholder="e.g. 004"
-                      className="neu-input w-full font-mono font-bold"
-                    />
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-bold text-[var(--khata-text-muted)]">
+                        Invoice No. <span className="text-rose-500">*</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={fetchNextNumber}
+                        disabled={isLoadingNextNum}
+                        title="Sync next sequential invoice number from database"
+                        className="text-[10px] font-semibold text-[var(--khata-accent)] hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <RefreshCw className={`w-2.5 h-2.5 ${isLoadingNextNum ? 'animate-spin' : ''}`} />
+                        <span>Auto-Seq</span>
+                      </button>
+                    </div>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={invoiceNumber}
+                        onChange={(e) => setInvoiceNumber(e.target.value)}
+                        placeholder={isLoadingNextNum ? 'Fetching...' : 'e.g. 001'}
+                        className="neu-input w-full font-mono font-bold text-sm tracking-wide"
+                      />
+                      {isLoadingNextNum && (
+                        <div className="absolute right-2.5 top-1/2 -translate-y-1/2">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--khata-accent)]" />
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <div>
@@ -579,8 +603,9 @@ export const GstBillingView: React.FC = () => {
                     <input
                       type="text"
                       value="Uttar Pradesh (09)"
-                      disabled
-                      className="neu-input w-full bg-neutral-100 dark:bg-neutral-800 text-neutral-500 cursor-not-allowed font-medium"
+                      readOnly
+                      className="neu-input w-full font-bold cursor-default"
+                      style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-text)' }}
                     />
                   </div>
 
@@ -682,7 +707,7 @@ export const GstBillingView: React.FC = () => {
                                 className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex items-center justify-between"
                               >
                                 <span className="font-bold text-[var(--khata-text)] truncate">{c.name}</span>
-                                {c.phone && <span className="text-[10px] text-neutral-400 font-mono">{c.phone}</span>}
+                                {c.phone && <span className="text-[10px] text-[var(--khata-text-muted)] font-mono">{c.phone}</span>}
                               </button>
                             ))}
                         </div>
@@ -761,7 +786,7 @@ export const GstBillingView: React.FC = () => {
                 </div>
 
                 {!isIntraState && (
-                  <div className="text-[11px] p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 font-medium">
+                  <div className="text-[11px] p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 font-semibold">
                     ⚡ Inter-State transaction detected (State Code {customerStateCode} ≠ 09). IGST will be applied automatically instead of CGST + SGST.
                   </div>
                 )}
@@ -788,63 +813,37 @@ export const GstBillingView: React.FC = () => {
                 </div>
 
                 {/* Items Table Form */}
-                <div className="space-y-3">
+                <div className="space-y-4">
                   {items.map((item, idx) => (
                     <div
                       key={item.id}
-                      className="p-3 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-2.5 text-xs"
+                      className="p-4 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-3 text-xs"
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-[var(--khata-text)] text-xs flex items-center gap-1.5">
-                          <span className="w-5 h-5 rounded-full bg-[var(--khata-accent)] text-white flex items-center justify-center text-[10px]">
+                      <div className="flex items-center justify-between pb-1 border-b border-[var(--khata-border)]/50">
+                        <span className="font-bold text-[var(--khata-text)] text-xs flex items-center gap-2">
+                          <span className="w-5 h-5 rounded-full bg-[var(--khata-accent)] text-white flex items-center justify-center text-[10px] font-bold">
                             {idx + 1}
                           </span>
-                          <span>Item #{idx + 1}</span>
+                          <span>Line Item #{idx + 1}</span>
                         </span>
 
                         {items.length > 1 && (
                           <button
                             type="button"
                             onClick={() => handleRemoveItem(item.id)}
-                            className="text-rose-500 hover:text-rose-700 p-1 rounded"
+                            className="text-rose-500 hover:text-rose-700 p-1 rounded flex items-center gap-1 text-xs font-semibold"
                             title="Remove item"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Remove</span>
                           </button>
                         )}
                       </div>
 
-                      {/* Pick product button / dropdown */}
-                      {availableProducts.length > 0 && (
-                        <div>
-                          <select
-                            onChange={(e) => {
-                              const selectedProd = availableProducts.find(
-                                (p) => p.id === Number(e.target.value)
-                              );
-                              if (selectedProd) {
-                                handleSelectProduct(item.id, selectedProd);
-                              }
-                            }}
-                            defaultValue=""
-                            className="neu-input w-full text-xs font-medium text-neutral-700 dark:text-neutral-300"
-                          >
-                            <option value="" disabled>
-                              🔍 Or select from Khata Products Catalogue...
-                            </option>
-                            {availableProducts.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.name} {p.hsn_code ? `[HSN: ${p.hsn_code}]` : ''} (Buying: ₹{p.buying_price})
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-
-                      <div className="grid grid-cols-1 sm:grid-cols-6 gap-2">
-                        {/* Description */}
-                        <div className="sm:col-span-3">
-                          <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-0.5">
+                      {/* Row 1: Description of Goods & Catalogue Quick-Fill */}
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                        <div className={availableProducts.length > 0 ? 'sm:col-span-7' : 'sm:col-span-12'}>
+                          <label className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1">
                             Description of Goods <span className="text-rose-500">*</span>
                           </label>
                           <input
@@ -856,9 +855,42 @@ export const GstBillingView: React.FC = () => {
                           />
                         </div>
 
-                        {/* HSN */}
-                        <div>
-                          <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-0.5">
+                        {availableProducts.length > 0 && (
+                          <div className="sm:col-span-5">
+                            <label className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1">
+                              Catalogue Quick-Fill
+                            </label>
+                            <select
+                              onChange={(e) => {
+                                const selectedProd = availableProducts.find(
+                                  (p) => p.id === Number(e.target.value)
+                                );
+                                if (selectedProd) {
+                                  handleSelectProduct(item.id, selectedProd);
+                                }
+                              }}
+                              defaultValue=""
+                              className="neu-input w-full text-xs font-medium"
+                              style={{ background: 'var(--khata-surface)', color: 'var(--khata-text)' }}
+                            >
+                              <option value="" disabled>
+                                🔍 Select from Products...
+                              </option>
+                              {availableProducts.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name} {p.hsn_code ? `[HSN: ${p.hsn_code}]` : ''} (₹{p.buying_price})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Row 2: 5 Spacious Numeric Columns (HSN, Qty, Unit, Rate, Amount) */}
+                      <div className="grid grid-cols-2 sm:grid-cols-12 gap-3 pt-1">
+                        {/* HSN Code */}
+                        <div className="col-span-1 sm:col-span-2">
+                          <label className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1">
                             HSN Code
                           </label>
                           <input
@@ -867,60 +899,67 @@ export const GstBillingView: React.FC = () => {
                             onChange={(e) => handleItemChange(item.id, 'hsnCode', e.target.value)}
                             placeholder="e.g. 44119219"
                             maxLength={20}
-                            className="neu-input w-full font-mono"
+                            className="neu-input w-full font-mono text-center sm:text-left text-xs"
                           />
                         </div>
 
-                        {/* Quantity & Unit */}
-                        <div className="grid grid-cols-2 gap-1">
-                          <div>
-                            <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-0.5">
-                              Qty. <span className="text-rose-500">*</span>
-                            </label>
-                            <input
-                              type="number"
-                              step="any"
-                              value={item.quantity}
-                              onChange={(e) => handleItemChange(item.id, 'quantity', e.target.value)}
-                              className="neu-input w-full font-bold text-center"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-0.5">
-                              Unit
-                            </label>
-                            <input
-                              type="text"
-                              value={item.unit}
-                              onChange={(e) => handleItemChange(item.id, 'unit', e.target.value)}
-                              placeholder="pcs"
-                              className="neu-input w-full text-center"
-                            />
-                          </div>
+                        {/* Quantity */}
+                        <div className="col-span-1 sm:col-span-2">
+                          <label className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1">
+                            Quantity <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            type="number"
+                            step="any"
+                            value={item.quantity}
+                            onChange={(e) => handleItemChange(item.id, 'quantity', e.target.value)}
+                            placeholder="1"
+                            className="neu-input w-full font-bold text-center text-sm"
+                          />
                         </div>
 
-                        {/* Rate & Line Total */}
-                        <div className="grid grid-cols-2 gap-1">
-                          <div>
-                            <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-0.5">
-                              Rate (₹) <span className="text-rose-500">*</span>
-                            </label>
-                            <input
-                              type="number"
-                              step="any"
-                              value={item.rate}
-                              onChange={(e) => handleItemChange(item.id, 'rate', e.target.value)}
-                              placeholder="0.00"
-                              className="neu-input w-full font-bold text-right font-mono"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-0.5">
-                              Amount (₹)
-                            </label>
-                            <div className="neu-input w-full font-bold text-right font-mono bg-neutral-100 dark:bg-neutral-800 text-[var(--khata-accent)] flex items-center justify-end px-2">
-                              {calculations.computedItems[idx]?.amount || '0.00'}
-                            </div>
+                        {/* Unit */}
+                        <div className="col-span-1 sm:col-span-2">
+                          <label className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1">
+                            Unit
+                          </label>
+                          <input
+                            type="text"
+                            value={item.unit}
+                            onChange={(e) => handleItemChange(item.id, 'unit', e.target.value)}
+                            placeholder="pcs"
+                            className="neu-input w-full text-center text-xs"
+                          />
+                        </div>
+
+                        {/* Rate (₹) - Spacious width, easy to view & edit numbers */}
+                        <div className="col-span-1 sm:col-span-3">
+                          <label className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1">
+                            Rate (₹) <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            type="number"
+                            step="any"
+                            value={item.rate}
+                            onChange={(e) => handleItemChange(item.id, 'rate', e.target.value)}
+                            placeholder="0.00"
+                            className="neu-input w-full font-bold text-right font-mono text-sm px-3"
+                          />
+                        </div>
+
+                        {/* Amount (₹) - High contrast, dedicated wide container */}
+                        <div className="col-span-2 sm:col-span-3">
+                          <label className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1">
+                            Amount (₹)
+                          </label>
+                          <div
+                            className="neu-input w-full font-extrabold text-right font-mono text-sm flex items-center justify-end px-3 select-all"
+                            style={{
+                              background: 'var(--khata-surface)',
+                              color: 'var(--khata-text)',
+                            }}
+                          >
+                            ₹{calculations.computedItems[idx]?.amount || '0.00'}
                           </div>
                         </div>
                       </div>

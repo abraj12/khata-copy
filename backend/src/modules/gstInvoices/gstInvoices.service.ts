@@ -95,29 +95,24 @@ export class GstInvoicesService {
   }
 
   /**
-   * Generates next collision-free invoice number using sequence
+   * Generates the next sequential invoice number from the database.
+   * Finds the maximum existing numerical invoice number and increments it by 1,
+   * formatted as 3-digit padded (001, 002, 003...).
+   * Pure, idempotent, and non-destructive.
    */
   public async getNextInvoiceNumber(): Promise<string> {
-    const res = await appPool.query("SELECT nextval('gst_invoice_number_seq') AS next_val");
-    const num = Number(res.rows[0]?.next_val || 1);
-    const candidate = String(num).padStart(3, '0');
-
-    // Check if candidate already exists in database
-    const checkRes = await appPool.query(
-      'SELECT id FROM gst_invoices WHERE invoice_number = $1',
-      [candidate]
-    );
-
-    if ((checkRes.rowCount ?? 0) === 0) {
-      return candidate;
-    }
-
-    // If candidate exists, find maximum existing numeric invoice number + 1
-    const maxRes = await appPool.query(
-      "SELECT MAX(NULLIF(regexp_replace(invoice_number, '\\D', '', 'g'), '')::INT) as max_num FROM gst_invoices"
-    );
-    const nextMax = (Number(maxRes.rows[0]?.max_num) || num) + 1;
-    return String(nextMax).padStart(3, '0');
+    const maxRes = await appPool.query(`
+      SELECT COALESCE(MAX(
+        CASE
+          WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
+          WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
+          ELSE 0
+        END
+      ), 0) AS max_num FROM gst_invoices
+    `);
+    const maxNum = Number(maxRes.rows[0]?.max_num || 0);
+    const nextNum = maxNum + 1;
+    return String(nextNum).padStart(3, '0');
   }
 
   /**
@@ -136,25 +131,23 @@ export class GstInvoicesService {
       // 1. Resolve invoice number
       let invoiceNumber = input.invoiceNumber?.trim();
       if (!invoiceNumber) {
-        const nextValRes = await client.query("SELECT nextval('gst_invoice_number_seq') AS next_val");
-        const num = Number(nextValRes.rows[0]?.next_val || 1);
-        invoiceNumber = String(num).padStart(3, '0');
+        const maxRes = await client.query(`
+          SELECT COALESCE(MAX(
+            CASE
+              WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
+              WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
+              ELSE 0
+            END
+          ), 0) AS max_num FROM gst_invoices
+        `);
+        const maxNum = Number(maxRes.rows[0]?.max_num || 0);
+        invoiceNumber = String(maxNum + 1).padStart(3, '0');
+      }
 
-        // Check collision
-        const existsRes = await client.query('SELECT 1 FROM gst_invoices WHERE invoice_number = $1', [invoiceNumber]);
-        if ((existsRes.rowCount ?? 0) > 0) {
-          const maxRes = await client.query(
-            "SELECT MAX(NULLIF(regexp_replace(invoice_number, '\\D', '', 'g'), '')::INT) as max_num FROM gst_invoices"
-          );
-          const nextMax = (Number(maxRes.rows[0]?.max_num) || num) + 1;
-          invoiceNumber = String(nextMax).padStart(3, '0');
-        }
-      } else {
-        // Verify uniqueness
-        const existsRes = await client.query('SELECT 1 FROM gst_invoices WHERE invoice_number = $1', [invoiceNumber]);
-        if ((existsRes.rowCount ?? 0) > 0) {
-          throw new AppError(`Invoice number "${invoiceNumber}" already exists.`, 409, 'DUPLICATE_INVOICE_NUMBER');
-        }
+      // Check collision
+      const existsRes = await client.query('SELECT 1 FROM gst_invoices WHERE invoice_number = $1', [invoiceNumber]);
+      if ((existsRes.rowCount ?? 0) > 0) {
+        throw new AppError(`Invoice number "${invoiceNumber}" already exists.`, 409, 'DUPLICATE_INVOICE_NUMBER');
       }
 
       // 2. Calculate item amounts and total taxable value using Decimal.js
