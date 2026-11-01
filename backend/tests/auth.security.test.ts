@@ -39,6 +39,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { table_name: 'payments' },
             { table_name: 'payment_allocations' },
             { table_name: 'idempotency_keys' },
+            { table_name: 'offline_bill_records' },
           ],
           rowCount: 9,
         } as any;
@@ -54,6 +55,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '006_quantity_two_decimal_places.sql' },
             { version: '007_quantity_strict_scale_and_allocation_integrity.sql' },
             { version: '008_strict_quantity_scale.sql' },
+            { version: '009_product_images_and_offline_bills.sql' },
           ],
           rowCount: 6,
         } as any;

@@ -105,6 +105,14 @@ export const envSchema = z.object({
       return parseInt(trimmed, 10);
     })
     .default(1),
+
+  // Cloudflare R2 Object Storage (Optional: if not configured, image features return 503 Service Unavailable)
+  R2_ACCOUNT_ID: z.string().min(1).optional(),
+  R2_ACCESS_KEY_ID: z.string().min(1).optional(),
+  R2_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  R2_BUCKET_NAME: z.string().min(1).optional(),
+  R2_ENDPOINT: z.string().url().optional(),
+  R2_PUBLIC_DOMAIN: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -185,3 +193,12 @@ export function loadAndValidateEnv(overrides: Partial<Record<string, string | un
 }
 
 export const env = loadAndValidateEnv();
+
+export function isR2Configured(targetEnv: Env = env): boolean {
+  return Boolean(
+    targetEnv.R2_ACCOUNT_ID &&
+    targetEnv.R2_ACCESS_KEY_ID &&
+    targetEnv.R2_SECRET_ACCESS_KEY &&
+    targetEnv.R2_BUCKET_NAME
+  );
+}

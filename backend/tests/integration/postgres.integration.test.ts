@@ -28,6 +28,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     try {
       // 1. Drop public schema tables cleanly for test isolation
       await client.query(`
+        DROP TABLE IF EXISTS "offline_bill_records" CASCADE;
         DROP TABLE IF EXISTS "idempotency_keys" CASCADE;
         DROP TABLE IF EXISTS "payment_allocations" CASCADE;
         DROP TABLE IF EXISTS "payments" CASCADE;
@@ -51,8 +52,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '005_search_indexes_and_identity_constraints.sql',
         '006_quantity_two_decimal_places.sql',
         '007_quantity_strict_scale_and_allocation_integrity.sql',
-      '008_strict_quantity_scale.sql',
         '008_strict_quantity_scale.sql',
+        '009_product_images_and_offline_bills.sql',
       ];
 
       await client.query(`
@@ -615,5 +616,24 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     );
     expect(validAllocRes.rows.length).toBe(1);
     expect(parseFloat(validAllocRes.rows[0].amount)).toBe(500.00);
+  });
+
+  it('12. Migration 009 schema: offline_bill_records and product image columns', async () => {
+    // Check product image columns
+    const prodRes = await pool.query(`
+      INSERT INTO products (name, buying_price, image_object_key, image_content_type, image_size_bytes)
+      VALUES ('Test With Image', 99.00, 'products/1/img.jpg', 'image/jpeg', 1024)
+      RETURNING id, name, image_object_key, image_content_type
+    `);
+    expect(prodRes.rows[0].image_object_key).toBe('products/1/img.jpg');
+
+    // Check offline_bill_records table
+    const billRes = await pool.query(`
+      INSERT INTO offline_bill_records (customer_name, customer_phone, normalized_customer_phone, image_object_key, image_content_type, image_size_bytes)
+      VALUES ('Bill Cust', '+91 98765 43210', '9876543210', 'offline-bills/1/bill.jpg', 'image/jpeg', 2048)
+      RETURNING id, customer_name, normalized_customer_phone, image_object_key
+    `);
+    expect(billRes.rows[0].customer_name).toBe('Bill Cust');
+    expect(billRes.rows[0].normalized_customer_phone).toBe('9876543210');
   });
 });

@@ -1,6 +1,7 @@
 import { AppError } from '../../utils/errors.js';
-﻿import { appPool } from '../../config/database.js';
+import { appPool } from '../../config/database.js';
 import { validateMoneyInput, escapeLike } from '../../utils/validation.js';
+import { storageService } from '../../services/storage.service.js';
 
 export interface ProductRecord {
   id: number;
@@ -9,6 +10,11 @@ export interface ProductRecord {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  image_object_key?: string | null;
+  image_content_type?: string | null;
+  image_size_bytes?: number | string | null;
+  image_updated_at?: string | null;
+  image_url?: string | null;
 }
 
 export interface ListProductsOptions {
@@ -29,6 +35,32 @@ export interface PaginatedProductsResult {
 
 export class ProductsService {
   /**
+   * Helper to attach temporary presigned GET URLs to product records
+   */
+  private async attachPresignedUrls(rows: any[]): Promise<ProductRecord[]> {
+    if (!storageService.isConfigured()) {
+      return rows.map((r) => ({ ...r, image_url: null }));
+    }
+
+    return Promise.all(
+      rows.map(async (r) => {
+        let imageUrl: string | null = null;
+        if (r.image_object_key) {
+          try {
+            imageUrl = await storageService.getPresignedViewUrl(r.image_object_key);
+          } catch (err) {
+            console.warn('[PRODUCTS] Failed to generate presigned URL for', r.image_object_key, (err as Error).message);
+          }
+        }
+        return {
+          ...r,
+          image_url: imageUrl,
+        };
+      })
+    );
+  }
+
+  /**
    * Lists active products with case-insensitive search and bounded pagination
    */
   public async listActiveProducts(optionsOrSearch?: string | ListProductsOptions): Promise<PaginatedProductsResult> {
@@ -37,7 +69,8 @@ export class ProductsService {
     const offset = Math.max(0, opts.offset || 0);
 
     let sql = `
-      SELECT id, name, buying_price, created_at, updated_at, archived_at
+      SELECT id, name, buying_price, created_at, updated_at, archived_at,
+             image_object_key, image_content_type, image_size_bytes, image_updated_at
       FROM products
       WHERE archived_at IS NULL
     `;
@@ -54,7 +87,9 @@ export class ProductsService {
 
     const result = await appPool.query(sql, params);
     const hasMore = result.rows.length > limit;
-    const products = hasMore ? result.rows.slice(0, limit) : result.rows;
+    const rawProducts = hasMore ? result.rows.slice(0, limit) : result.rows;
+
+    const products = await this.attachPresignedUrls(rawProducts);
 
     return {
       products,
@@ -72,12 +107,16 @@ export class ProductsService {
    */
   public async getProductById(id: number): Promise<ProductRecord | null> {
     const result = await appPool.query(
-      `SELECT id, name, buying_price, created_at, updated_at, archived_at
+      `SELECT id, name, buying_price, created_at, updated_at, archived_at,
+              image_object_key, image_content_type, image_size_bytes, image_updated_at
        FROM products
        WHERE id = $1`,
       [id]
     );
-    return result.rows[0] || null;
+
+    if (result.rows.length === 0) return null;
+    const [productWithUrl] = await this.attachPresignedUrls(result.rows);
+    return productWithUrl || null;
   }
 
   /**
@@ -93,10 +132,11 @@ export class ProductsService {
     const result = await appPool.query(
       `INSERT INTO products (name, buying_price, created_at, updated_at)
        VALUES ($1, $2, NOW(), NOW())
-       RETURNING id, name, buying_price, created_at, updated_at, archived_at`,
+       RETURNING id, name, buying_price, created_at, updated_at, archived_at,
+                 image_object_key, image_content_type, image_size_bytes, image_updated_at`,
       [trimmed, formattedPrice]
     );
-    return result.rows[0];
+    return { ...result.rows[0], image_url: null };
   }
 
   /**
@@ -121,10 +161,13 @@ export class ProductsService {
       `UPDATE products
        SET name = $1, buying_price = $2, updated_at = NOW()
        WHERE id = $3 AND archived_at IS NULL
-       RETURNING id, name, buying_price, created_at, updated_at, archived_at`,
+       RETURNING id, name, buying_price, created_at, updated_at, archived_at,
+                 image_object_key, image_content_type, image_size_bytes, image_updated_at`,
       [newName, newPrice, id]
     );
-    return result.rows[0] || null;
+    if (result.rows.length === 0) return null;
+    const [updatedWithUrl] = await this.attachPresignedUrls(result.rows);
+    return updatedWithUrl || null;
   }
 
   /**
@@ -138,6 +181,100 @@ export class ProductsService {
       [id]
     );
     return (result.rowCount ?? 0) > 0;
+  }
+
+  /**
+   * Attaches or replaces a product image after verifying the uploaded R2 object
+   */
+  public async attachProductImage(productId: number, imageObjectKey: string): Promise<ProductRecord> {
+    const existing = await this.getProductById(productId);
+    if (!existing || existing.archived_at) {
+      throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
+    }
+
+    // Verify object in storage
+    const verified = await storageService.verifyObject(imageObjectKey, 'products', productId);
+
+    const oldKey = existing.image_object_key;
+
+    // Update product record
+    const result = await appPool.query(
+      `UPDATE products
+       SET image_object_key = $1,
+           image_content_type = $2,
+           image_size_bytes = $3,
+           image_updated_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $4 AND archived_at IS NULL
+       RETURNING id, name, buying_price, created_at, updated_at, archived_at,
+                 image_object_key, image_content_type, image_size_bytes, image_updated_at`,
+      [imageObjectKey, verified.contentType, verified.contentLength, productId]
+    );
+
+    if (result.rows.length === 0) {
+      throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
+    }
+
+    // Delete previous image if replaced
+    if (oldKey && oldKey !== imageObjectKey) {
+      await storageService.deleteObject(oldKey);
+    }
+
+    const [updatedWithUrl] = await this.attachPresignedUrls(result.rows);
+    return updatedWithUrl;
+  }
+
+  /**
+   * Removes a product image without deleting the product itself
+   */
+  public async removeProductImage(productId: number): Promise<ProductRecord> {
+    const existing = await this.getProductById(productId);
+    if (!existing || existing.archived_at) {
+      throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
+    }
+
+    const oldKey = existing.image_object_key;
+
+    const result = await appPool.query(
+      `UPDATE products
+       SET image_object_key = NULL,
+           image_content_type = NULL,
+           image_size_bytes = NULL,
+           image_updated_at = NULL,
+           updated_at = NOW()
+       WHERE id = $1 AND archived_at IS NULL
+       RETURNING id, name, buying_price, created_at, updated_at, archived_at,
+                 image_object_key, image_content_type, image_size_bytes, image_updated_at`,
+      [productId]
+    );
+
+    if (result.rows.length === 0) {
+      throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
+    }
+
+    // Delete previous R2 object
+    if (oldKey) {
+      await storageService.deleteObject(oldKey);
+    }
+
+    return { ...result.rows[0], image_url: null };
+  }
+
+  /**
+   * Retrieves fresh presigned GET URL for product image
+   */
+  public async getProductImageUrl(productId: number): Promise<{ imageUrl: string | null; expiresIn: number }> {
+    const existing = await this.getProductById(productId);
+    if (!existing || existing.archived_at) {
+      throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
+    }
+
+    if (!existing.image_object_key || !storageService.isConfigured()) {
+      return { imageUrl: null, expiresIn: 0 };
+    }
+
+    const imageUrl = await storageService.getPresignedViewUrl(existing.image_object_key);
+    return { imageUrl, expiresIn: 300 };
   }
 }
 

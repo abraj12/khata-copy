@@ -37,6 +37,7 @@ export const EXPECTED_MIGRATIONS = [
   '006_quantity_two_decimal_places.sql',
   '007_quantity_strict_scale_and_allocation_integrity.sql',
   '008_strict_quantity_scale.sql',
+  '009_product_images_and_offline_bills.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [
@@ -49,6 +50,7 @@ export const EXPECTED_CORE_TABLES = [
   'payments',
   'payment_allocations',
   'idempotency_keys',
+  'offline_bill_records',
 ];
 
 export interface ReadinessReport {

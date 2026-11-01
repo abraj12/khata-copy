@@ -3,7 +3,7 @@
 **Document Status:** Canonical & Implemented  
 **Last Verified:** 2026-11-01  
 **Database Engine:** PostgreSQL 16 (Neon Serverless)  
-**Schema Version:** 008  
+**Schema Version:** 009  
 
 ---
 
@@ -21,6 +21,7 @@ Migrations are executed sequentially via `backend/scripts/migrate.ts` using dire
 | **006** | `006_quantity_two_decimal_places.sql` | Quantity widened to allow fractional quantities up to 2 decimal places. |
 | **007** | `007_quantity_strict_scale_and_allocation_integrity.sql` | Unconstrained NUMERIC with TRUNC scale check and **composite foreign keys** ensuring payment allocations cannot cross customer ownership. |
 | **008** | `008_strict_quantity_scale.sql` | **Strict scale enforcement**: Enforces `scale(quantity) <= 2 AND TRUNC(quantity, 2) = quantity` to strictly reject direct SQL inputs with trailing zeros or excess precision (e.g. `1.2300` and `1.234`). |
+| **009** | `009_product_images_and_offline_bills.sql` | Adds nullable Cloudflare R2 image metadata columns to `products` (`image_object_key`, `image_content_type`, `image_size_bytes`, `image_updated_at`) and creates `offline_bill_records` table with search indexes. |
 
 ---
 
@@ -77,10 +78,50 @@ ALTER TABLE "payment_allocations"
 
 ---
 
-## 4. Running Migrations in Production
+## 4. Product Images & Offline Bill Documents (Migration 009)
+
+### 4.1 Product Image Metadata
+Existing products continue working seamlessly without images. Four nullable columns store the server-controlled Cloudflare R2 object reference:
+```sql
+ALTER TABLE "products"
+  ADD COLUMN IF NOT EXISTS "image_object_key" TEXT,
+  ADD COLUMN IF NOT EXISTS "image_content_type" VARCHAR(50),
+  ADD COLUMN IF NOT EXISTS "image_size_bytes" BIGINT,
+  ADD COLUMN IF NOT EXISTS "image_updated_at" TIMESTAMPTZ;
+```
+
+### 4.2 Non-Financial Offline Bill Documents
+`offline_bill_records` is strictly isolated from core Khata accounting tables. It contains zero foreign keys to `customers` or `udhar_transactions`:
+```sql
+CREATE TABLE IF NOT EXISTS "offline_bill_records" (
+  "id" BIGSERIAL PRIMARY KEY,
+  "customer_name" VARCHAR(255) NOT NULL,
+  "customer_phone" VARCHAR(20) NOT NULL,
+  "normalized_customer_phone" VARCHAR(10) NOT NULL,
+  "image_object_key" TEXT NOT NULL,
+  "image_content_type" VARCHAR(50) NOT NULL,
+  "image_size_bytes" BIGINT NOT NULL,
+  "original_filename" VARCHAR(255),
+  "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS "idx_offline_bill_records_phone"
+  ON "offline_bill_records" ("normalized_customer_phone");
+
+CREATE INDEX IF NOT EXISTS "idx_offline_bill_records_created"
+  ON "offline_bill_records" ("created_at" DESC);
+
+CREATE INDEX IF NOT EXISTS "idx_offline_bill_records_name"
+  ON "offline_bill_records" (LOWER("customer_name"));
+```
+
+---
+
+## 5. Running Migrations in Production
 
 To apply forward-only migrations safely to Neon PostgreSQL:
 ```bash
 npm run migrate --workspace=backend
 ```
-Migration script uses advisory locking and transaction rollback on failure. Zero data loss.
+Migration script uses advisory locking (`pg_advisory_lock(987654321)`) and transaction rollback on failure. Zero data loss.

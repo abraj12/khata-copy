@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { productsService } from './products.service.js';
 import { validateMoneyInput } from '../../utils/validation.js';
+import { storageService } from '../../services/storage.service.js';
 
 const router = Router();
 
@@ -23,6 +24,16 @@ const createProductSchema = z.object({
 const updateProductSchema = z.object({
   name: z.string().trim().min(1).max(255).optional(),
   buying_price: z.union([z.number(), z.string()]).optional(),
+});
+
+const uploadIntentSchema = z.object({
+  contentType: z.string().trim().min(1, 'Content-Type is required'),
+  sizeBytes: z.coerce.number().int().positive('Size must be positive'),
+  originalFilename: z.string().max(255).optional(),
+});
+
+const completeImageSchema = z.object({
+  objectKey: z.string().trim().min(1, 'Object key is required'),
 });
 
 /**
@@ -133,6 +144,111 @@ router.delete('/:id', async (req: Request, res: Response, next: NextFunction) =>
     }
 
     res.json({ success: true, message: 'Product archived successfully.' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/v1/products/:id/image/upload-intent - Generate presigned PUT URL to upload product image to R2
+ */
+router.post('/:id/image/upload-intent', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Invalid product ID.' });
+      return;
+    }
+
+    const existing = await productsService.getProductById(id);
+    if (!existing || existing.archived_at) {
+      res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product not found or archived.' });
+      return;
+    }
+
+    const parsed = uploadIntentSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        message: parsed.error.errors[0]?.message || 'Invalid upload intent payload.',
+      });
+      return;
+    }
+
+    const intent = await storageService.getUploadIntent({
+      folder: 'products',
+      referenceId: id,
+      contentType: parsed.data.contentType,
+      sizeBytes: parsed.data.sizeBytes,
+      originalFilename: parsed.data.originalFilename,
+    });
+
+    res.json({ success: true, data: intent });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/v1/products/:id/image/complete - Verify and attach uploaded R2 image to product
+ */
+router.post('/:id/image/complete', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Invalid product ID.' });
+      return;
+    }
+
+    const parsed = completeImageSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        message: parsed.error.errors[0]?.message || 'Invalid complete payload.',
+      });
+      return;
+    }
+
+    const updated = await productsService.attachProductImage(id, parsed.data.objectKey);
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/v1/products/:id/image-url - Get short-lived presigned GET view URL
+ */
+router.get('/:id/image-url', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Invalid product ID.' });
+      return;
+    }
+
+    const data = await productsService.getProductImageUrl(id);
+    res.json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * DELETE /api/v1/products/:id/image - Remove image from product without deleting product
+ */
+router.delete('/:id/image', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Invalid product ID.' });
+      return;
+    }
+
+    const updated = await productsService.removeProductImage(id);
+    res.json({ success: true, message: 'Product image removed successfully.', data: updated });
   } catch (err) {
     next(err);
   }

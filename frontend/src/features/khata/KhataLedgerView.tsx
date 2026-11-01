@@ -17,10 +17,12 @@ import {
   DollarSign,
   Trash2,
   Loader2,
+  Tag,
 } from 'lucide-react';
 import Decimal from 'decimal.js';
 import { formatCurrency, formatQuantity, safeDecimal, parseStrictDecimal } from '../../lib/formatters.js';
 import { SearchablePicker } from '../../components/SearchablePicker.js';
+import { OfflineBillModal } from '../offlineBills/OfflineBillModal.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 
 interface SummaryData {
@@ -43,6 +45,7 @@ interface ProductReference {
   id: number;
   name: string;
   buying_price: string;
+  image_url?: string | null;
 }
 
 interface UdharItemDetail {
@@ -150,6 +153,9 @@ export const KhataLedgerView: React.FC = () => {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 280);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Offline Bills Modal state
+  const [isOfflineBillsOpen, setIsOfflineBillsOpen] = useState(false);
 
   // New Udhar Modal state
   const [isNewUdharOpen, setIsNewUdharOpen] = useState(false);
@@ -785,13 +791,25 @@ export const KhataLedgerView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={handleOpenNewUdharModal}
-          className="neu-btn-primary text-xs sm:text-sm font-bold px-4 py-2.5 self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" />
-          <span>New Udhar</span>
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          <button
+            type="button"
+            onClick={() => setIsOfflineBillsOpen(true)}
+            className="neu-btn-secondary text-xs sm:text-sm font-bold px-4 py-2.5 inline-flex items-center gap-2"
+            title="Manage physical offline bill documents"
+          >
+            <FileText className="w-4 h-4 text-[var(--khata-accent)]" />
+            <span>Offline Bill</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleOpenNewUdharModal}
+            className="neu-btn-primary text-xs sm:text-sm font-bold px-4 py-2.5 inline-flex items-center gap-2"
+          >
+            <Plus className="w-4 h-4" />
+            <span>New Udhar</span>
+          </button>
+        </div>
       </div>
 
       {/* Customer Inset Search Bar */}
@@ -1102,8 +1120,21 @@ export const KhataLedgerView: React.FC = () => {
                           getOptionLabel={(p) => `${p.name} (Ref: ${formatCurrency(p.buying_price)})`}
                           renderOption={(p) => (
                             <div className="flex items-center justify-between gap-2 w-full">
-                              <span className="font-semibold text-[var(--khata-text)]">{p.name}</span>
-                              <span className="text-[11px] text-[var(--khata-text-muted)] font-mono">
+                              <div className="flex items-center gap-2 min-w-0">
+                                {p.image_url ? (
+                                  <img
+                                    src={p.image_url}
+                                    alt={p.name}
+                                    className="w-7 h-7 rounded object-cover flex-shrink-0 border border-[var(--khata-border)]"
+                                  />
+                                ) : (
+                                  <div className="w-7 h-7 rounded bg-[var(--khata-surface-inset)] flex items-center justify-center text-[var(--khata-text-muted)] flex-shrink-0 border border-[var(--khata-border)]">
+                                    <Tag className="w-3.5 h-3.5" />
+                                  </div>
+                                )}
+                                <span className="font-semibold text-[var(--khata-text)] truncate">{p.name}</span>
+                              </div>
+                              <span className="text-[11px] text-[var(--khata-text-muted)] font-mono flex-shrink-0">
                                 Ref: {formatCurrency(p.buying_price)}
                               </span>
                             </div>
@@ -1112,7 +1143,14 @@ export const KhataLedgerView: React.FC = () => {
                           required
                         />
                         {line.selectedProduct && (
-                          <div className="text-[11px] text-[var(--khata-text-muted)] mt-1 flex items-center gap-1">
+                          <div className="text-[11px] text-[var(--khata-text-muted)] mt-1.5 flex items-center gap-2">
+                            {line.selectedProduct.image_url && (
+                              <img
+                                src={line.selectedProduct.image_url}
+                                alt={line.selectedProduct.name}
+                                className="w-6 h-6 rounded object-cover border border-[var(--khata-border)] flex-shrink-0"
+                              />
+                            )}
                             <span>Ref buying price:</span>
                             <span className="font-semibold text-[var(--khata-text)] font-mono">
                               {formatCurrency(line.selectedProduct.buying_price)}
@@ -1631,6 +1669,12 @@ export const KhataLedgerView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Offline Bills Document Modal */}
+      <OfflineBillModal
+        isOpen={isOfflineBillsOpen}
+        onClose={() => setIsOfflineBillsOpen(false)}
+      />
     </div>
   );
 };

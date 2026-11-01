@@ -11,6 +11,7 @@ import { authRoutes } from './modules/auth/auth.routes.js';
 import { productsRoutes } from './modules/products/products.routes.js';
 import { khataRoutes } from './modules/khata/khata.routes.js';
 import { realtimeRoutes } from './modules/realtime/realtime.service.js';
+import { offlineBillsRoutes } from './modules/offlineBills/offlineBills.routes.js';
 
 export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
   const app = express();
@@ -119,6 +120,7 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
   app.use('/api/v1/khata', khataRoutes);
   app.use('/api/v1/ledger', khataRoutes); // Backward compatibility
   app.use('/api/v1/realtime', realtimeRoutes);
+  app.use('/api/v1/offline-bills', offlineBillsRoutes);
 
   // 9. Centralized Error Handler
   app.use(errorHandler);

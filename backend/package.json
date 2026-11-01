@@ -19,6 +19,8 @@
     "preflight:legacy": "tsx scripts/preflight-legacy-audit.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1161.0",
+    "@aws-sdk/s3-request-presigner": "^3.1161.0",
     "@types/connect-pg-simple": "^7.0.3",
     "@types/cookie-parser": "^1.4.8",
     "@types/cors": "^2.8.17",
