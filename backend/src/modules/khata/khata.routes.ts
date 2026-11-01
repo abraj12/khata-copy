@@ -45,7 +45,9 @@ const customerSearchQuerySchema = z.object({
  */
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { customers, pagination } = await khataService.listCustomers({ limit: 50, offset: 0 });
+    const parsed = customerSearchQuerySchema.safeParse(req.query);
+    const options = parsed.success ? parsed.data : { limit: 50, offset: 0 };
+    const { customers, pagination } = await khataService.listCustomers(options);
     res.json({ success: true, customers, pagination });
   } catch (err) {
     next(err);

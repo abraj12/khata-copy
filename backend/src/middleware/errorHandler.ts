@@ -68,8 +68,10 @@ export function errorHandler(
     publicMessage = 'An unexpected internal server error occurred.';
   }
 
-  if (env.NODE_ENV !== 'production' || statusCode >= 500) {
-    console.error(`[UNHANDLED ERROR] [${requestId}]`, err);
+  if (statusCode >= 500) {
+    console.error(`[UNHANDLED SERVER ERROR] [${requestId}]`, err);
+  } else if (env.NODE_ENV === 'development') {
+    console.warn(`[CLIENT ERROR ${statusCode}] [${requestId}] ${err.message}`);
   }
 
   const responseBody: Record<string, unknown> = {

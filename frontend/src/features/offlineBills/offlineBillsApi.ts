@@ -1,6 +1,7 @@
 import { apiClient, getCsrfToken, fetchCsrfToken, API_BASE_URL } from '../../lib/apiClient.js';
 import type { UploadIntentData } from '../products/productsApi.js';
 export { resolveImageUrl } from '../products/productsApi.js';
+export { API_BASE_URL } from '../../lib/apiClient.js';
 
 
 export interface OfflineBillRecord {

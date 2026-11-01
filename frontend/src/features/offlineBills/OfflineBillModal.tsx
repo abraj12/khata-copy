@@ -21,6 +21,7 @@ import {
   deleteOfflineBill,
   OfflineBillsPagination,
   resolveImageUrl,
+  API_BASE_URL,
 } from './offlineBillsApi.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 
@@ -59,7 +60,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
   });
 
   // Lightbox View State
-  const [lightboxBill, setLightboxBill] = useState<{ url: string; title: string; phone: string } | null>(null);
+  const [lightboxBill, setLightboxBill] = useState<{ id?: number; url: string; title: string; phone: string } | null>(null);
   const [deletingBillId, setDeletingBillId] = useState<number | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -221,6 +222,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
   const handleOpenLightbox = (bill: OfflineBillRecord) => {
     if (bill.image_url) {
       setLightboxBill({
+        id: bill.id,
         url: resolveImageUrl(bill.image_url),
         title: bill.customer_name,
         phone: bill.customer_phone,
@@ -230,6 +232,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
       getOfflineBillImageUrl(bill.id, false)
         .then((res) => {
           setLightboxBill({
+            id: bill.id,
             url: res.url,
             title: bill.customer_name,
             phone: bill.customer_phone,
@@ -682,6 +685,14 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
               alt={lightboxBill.title}
               crossOrigin="use-credentials"
               className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl"
+              onError={(e) => {
+                if (lightboxBill.id) {
+                  const fallback = `${API_BASE_URL}/api/v1/offline-bills/${lightboxBill.id}/image`;
+                  if (e.currentTarget.src !== fallback) {
+                    e.currentTarget.src = fallback;
+                  }
+                }
+              }}
             />
           </div>
         </div>

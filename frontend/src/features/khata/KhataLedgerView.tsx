@@ -592,7 +592,7 @@ export const KhataLedgerView: React.FC = () => {
         body: JSON.stringify({
           customer: customerPayload,
           items: validatedItems,
-          initialPayment: initPaymentDec.greaterThan(0) ? initPaymentDec.toNumber() : null,
+          initialPayment: initPaymentDec.greaterThan(0) ? initPaymentDec.toFixed(2) : null,
           note: transactionNote.trim() || null,
           idempotencyKey: activeKey,
         }),
@@ -662,7 +662,7 @@ export const KhataLedgerView: React.FC = () => {
           'Idempotency-Key': activeKey,
         },
         body: JSON.stringify({
-          amount: payDec.toNumber(),
+          amount: payDec.toFixed(2),
           note: paymentNote.trim() || null,
           idempotencyKey: activeKey,
         }),

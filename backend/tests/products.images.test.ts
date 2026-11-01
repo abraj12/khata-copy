@@ -350,4 +350,77 @@ describe('Product Images API Test Suite', () => {
       expect(res.body.data.id).toBe(10);
     });
   });
+  describe('5. Product Image Streaming (GET /api/v1/products/:id/image)', () => {
+    it('rejects unauthenticated request with 401', async () => {
+      const res = await request(app).get('/api/v1/products/10/image');
+      expect(res.status).toBe(401);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('returns 404 when product has no image attached', async () => {
+      vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
+        const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
+        if (sqlText.includes('information_schema.tables')) {
+          return { rows: [{ table_name: 'products' }, { table_name: 'session' }], rowCount: 2 } as any;
+        }
+        if (sqlText.includes('FROM products') && sqlText.includes('WHERE id = $1')) {
+          return {
+            rows: [{ id: 10, name: 'Tata Tea Gold', buying_price: '180.00', archived_at: null, image_object_key: null }],
+            rowCount: 1,
+          } as any;
+        }
+        return { rows: [], rowCount: 0 } as any;
+      });
+
+      const res = await request(app)
+        .get('/api/v1/products/10/image')
+        .set('Cookie', authCookie);
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('NOT_FOUND');
+    });
+
+    it('streams image with private Cache-Control and Cross-Origin-Resource-Policy', async () => {
+      const { Readable } = require('stream');
+      const fakeStream = new Readable();
+      fakeStream.push(Buffer.from([0xff, 0xd8, 0xff]));
+      fakeStream.push(null);
+
+      vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
+        const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
+        if (sqlText.includes('information_schema.tables')) {
+          return { rows: [{ table_name: 'products' }, { table_name: 'session' }], rowCount: 2 } as any;
+        }
+        if (sqlText.includes('FROM products') && sqlText.includes('WHERE id = $1')) {
+          return {
+            rows: [{
+              id: 10,
+              name: 'Tata Tea Gold',
+              buying_price: '180.00',
+              archived_at: null,
+              image_object_key: 'products/10/pic.jpg',
+              image_content_type: 'image/jpeg',
+            }],
+            rowCount: 1,
+          } as any;
+        }
+        return { rows: [], rowCount: 0 } as any;
+      });
+
+      vi.spyOn(storageService, 'getObjectStream').mockResolvedValue({
+        stream: fakeStream,
+        contentType: 'image/jpeg',
+        contentLength: 3,
+      });
+
+      const res = await request(app)
+        .get('/api/v1/products/10/image')
+        .set('Cookie', authCookie);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toBe('image/jpeg');
+      expect(res.headers['cross-origin-resource-policy']).toBe('cross-origin');
+      expect(res.headers['cache-control']).toContain('private');
+    });
+  });
 });

@@ -246,7 +246,7 @@ export const ProductsView: React.FC = () => {
           method: 'POST',
           body: JSON.stringify({
             name: newName.trim(),
-            buying_price: safeDecimal(newPrice).toNumber(),
+            buying_price: safeDecimal(newPrice).toFixed(2),
           }),
         }
       );
@@ -362,7 +362,7 @@ export const ProductsView: React.FC = () => {
         method: 'PATCH',
         body: JSON.stringify({
           name: editName.trim(),
-          buying_price: safeDecimal(editPrice).toNumber(),
+          buying_price: safeDecimal(editPrice).toFixed(2),
         }),
       });
 

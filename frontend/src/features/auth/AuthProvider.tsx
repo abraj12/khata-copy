@@ -104,6 +104,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         error: null,
         isOffline: false,
       });
+      // Purge cached offline assets and sensitive document data on logout
+      if (typeof window !== 'undefined' && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_CACHE' });
+      }
     } catch (err: unknown) {
       const status = (err as { status?: number }).status;
       if (status === 401) {
@@ -115,6 +119,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           error: null,
           isOffline: false,
         });
+        if (typeof window !== 'undefined' && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_CACHE' });
+        }
       } else {
         // Scenario 2: Network failure / backend unavailable (502/503/timeout)
         // Do NOT falsely claim server revocation. Keep state and notify user with retry option.

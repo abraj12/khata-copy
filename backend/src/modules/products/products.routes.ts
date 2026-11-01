@@ -14,6 +14,9 @@ const upload = multer({
 
 const router = Router();
 
+// Protect all product endpoints with requireOwnerSession
+router.use(requireOwnerSession);
+
 /**
  * GET /api/v1/products/:id/image - Directly stream product photograph from storage
  * Public route for <img> tags to completely bypass Cloudflare R2 browser CORS,
@@ -40,8 +43,8 @@ router.get('/:id/image', async (req: Request, res: Response, next: NextFunction)
     if (contentLength) {
       res.setHeader('Content-Length', contentLength);
     }
-    // Cache for 1 day in browser, revalidate in background up to 7 days
-    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    // Cache privately in owner browser for 1 day, revalidate in background up to 7 days
+    res.setHeader('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
 
     (stream as any).on('error', (err: unknown) => {
       if (!res.headersSent) next(err);
@@ -61,9 +64,6 @@ router.get('/:id/image', async (req: Request, res: Response, next: NextFunction)
     next(err);
   }
 });
-
-// Protect all remaining product endpoints with requireOwnerSession
-router.use(requireOwnerSession);
 
 const productSearchQuerySchema = z.object({
   search: z.string().max(100).optional(),
