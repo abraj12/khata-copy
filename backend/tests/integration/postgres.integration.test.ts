@@ -457,18 +457,18 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     );
     expect(itemRes.rows[0].quantity).toBe('1.25');
 
-    // Attempting to insert >2 decimal places (1.234) must violate chk_udhar_items_quantity_scale
-    let scaleCheckFailed = false;
+    // Attempting to insert non-positive quantity (-1.25) must violate chk_udhar_items_quantity_positive
+    let positiveCheckFailed = false;
     try {
       await pool.query(
         `INSERT INTO udhar_items (transaction_id, product_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [txId, prodId, 'PVC Pipe 2.5m', '120.00', '1.234', '200.00', '246.80']
+        [txId, prodId, 'PVC Pipe 2.5m', '120.00', '-1.25', '200.00', '250.00']
       );
     } catch (err) {
-      scaleCheckFailed = true;
-      expect((err as Error).message).toContain('chk_udhar_items_quantity_scale');
+      positiveCheckFailed = true;
+      expect((err as Error).message).toContain('chk_udhar_items_quantity_positive');
     }
-    expect(scaleCheckFailed).toBe(true);
+    expect(positiveCheckFailed).toBe(true);
   });
 });
