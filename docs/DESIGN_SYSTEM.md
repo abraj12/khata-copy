@@ -12,7 +12,7 @@
 ### 1.1 Local Montserrat Bundling
 Khata bundles all font assets directly into the application build using `@fontsource/montserrat` (weights `400`, `500`, `600`, and `700`).
 - **Zero External Dependencies:** No requests are made to `fonts.googleapis.com` or `fonts.gstatic.com`.
-- **Offline & Mobile Ready:** When bundled as an Android APK via Capacitor, the application renders typography instantly without internet access.
+- **Mobile & PWA Ready:** When running as an Android TWA (Trusted Web Activity) or Progressive Web App, the application renders typography instantly without external font requests.
 
 ### 1.2 Layout-Safe Text Scaling
 To provide accessibility enlargement without breaking CSS grid containers, modal dialogues, or button paddings:

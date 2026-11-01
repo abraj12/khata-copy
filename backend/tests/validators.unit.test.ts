@@ -47,6 +47,7 @@ describe('Unit Test Suite: Validators & Normalizers (Phase 12.1)', () => {
       // Excess decimal places (> 2)
       expect(() => validateDecimalQuantityInput('1.234')).toThrow(/up to 2 decimal places/);
       expect(() => validateDecimalQuantityInput('0.001')).toThrow(/up to 2 decimal places/);
+      expect(() => validateDecimalQuantityInput('1.2300')).toThrow(/up to 2 decimal places/);
 
       // Non-numeric text
       expect(() => validateDecimalQuantityInput('1.2abc')).toThrow(FinancialValidationError);

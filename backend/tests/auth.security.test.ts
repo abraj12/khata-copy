@@ -53,6 +53,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '005_search_indexes_and_identity_constraints.sql' },
             { version: '006_quantity_two_decimal_places.sql' },
             { version: '007_quantity_strict_scale_and_allocation_integrity.sql' },
+            { version: '008_strict_quantity_scale.sql' },
           ],
           rowCount: 6,
         } as any;
@@ -373,12 +374,12 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     }).toThrow(/SESSION_COOKIE_SECURE must be true/);
   });
 
-  // TEST CASE 21: Android Capacitor WebView Origin Support
-  it('21. Android Capacitor WebView origins (capacitor://localhost, https://localhost) are permitted and authenticated', async () => {
-    // 1. Android Capacitor login
+  // TEST CASE 21: Production Origin & Security Defense
+  it('21. Production website origin (https://khata.algions.in) is permitted and authenticated; unauthorized origins are rejected', async () => {
+    // 1. Production website login
     const loginRes = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'capacitor://localhost')
+      .set('Origin', 'https://khata.algions.in')
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
     expect(loginRes.status).toBe(200);
@@ -386,14 +387,21 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
 
     const cookie = loginRes.headers['set-cookie'];
 
-    // 2. Android Capacitor accessing protected route
+    // 2. Production website accessing protected route
     const meRes = await request(app)
       .get('/api/v1/auth/me')
-      .set('Origin', 'capacitor://localhost')
+      .set('Origin', 'https://khata.algions.in')
       .set('Cookie', cookie);
 
     expect(meRes.status).toBe(200);
     expect(meRes.body.authenticated).toBe(true);
+
+    // 3. Unauthorized origin rejected
+    const badRes = await request(app)
+      .post('/api/v1/auth/logout')
+      .set('Origin', 'https://malicious-site.com')
+      .set('Cookie', cookie);
+    expect(badRes.status).toBe(403);
   });
 
   // TEST CASE 25: Secret Leak Defense - Secrets never returned in JSON or headers
@@ -457,7 +465,9 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
       expect(isAllowedOrigin('http://localhost:3000')).toBe(false);
       expect(isAllowedOrigin('http://127.0.0.1:5173')).toBe(false);
       expect(isAllowedOrigin('https://khata.algions.in')).toBe(true);
-      expect(isAllowedOrigin('capacitor://localhost')).toBe(true);
+      expect(isAllowedOrigin('capacitor://localhost')).toBe(false);
+      expect(isAllowedOrigin('https://localhost')).toBe(false);
+      expect(isAllowedOrigin('https://evil.com')).toBe(false);
     } finally {
       (env as any).NODE_ENV = originalEnv;
     }

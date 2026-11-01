@@ -10,9 +10,10 @@
  * 4. Safe cache invalidation and client claim on activation.
  */
 
-const CACHE_VERSION = 'khata-static-v1.0.0';
+const CACHE_VERSION = 'khata-static-v1.0.1';
 const STATIC_CACHE_NAME = `khata-assets-${CACHE_VERSION}`;
-const IMMUTABLE_ASSET_REGEX = /\/assets\/.*\.[a-f0-9]{8,}\.(js|css|woff2?|png|svg)$/i;
+// Matches Vite's hashed asset filenames (e.g. /assets/index-D1wM4r-5.js, /assets/index-DwglHT6G.css, /assets/font-Dx9f2Ab3.woff2)
+const IMMUTABLE_ASSET_REGEX = /^\/assets\/[\w.-]+[-.][A-Za-z0-9_-]{8,}\.(?:js|css|woff2?|png|jpe?g|gif|svg|webp|ico)$/i;
 
 self.addEventListener('install', (event) => {
   // Activate immediately without waiting for existing tabs to close

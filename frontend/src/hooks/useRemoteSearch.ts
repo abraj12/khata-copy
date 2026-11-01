@@ -20,7 +20,7 @@ export function useRemoteSearch<T>({
   debounceMs = 280,
   enabled = true,
 }: UseRemoteSearchOptions<T>) {
-  const [query, setQuery] = useState('');
+  const [query, setQueryState] = useState('');
   const debouncedQuery = useDebouncedValue(query, debounceMs);
 
   const [items, setItems] = useState<T[]>([]);
@@ -42,6 +42,23 @@ export function useRemoteSearch<T>({
       }
     };
   }, []);
+
+  // Immediate query change handler: clears stale results and shows loading immediately during debounce
+  const setQuery = useCallback(
+    (newQuery: string) => {
+      setQueryState(newQuery);
+      if (newQuery !== debouncedQuery) {
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+        }
+        setItems([]);
+        setIsLoading(true);
+        setIsError(false);
+        setErrorMessage(null);
+      }
+    },
+    [debouncedQuery]
+  );
 
   const executeFetch = useCallback(
     async (searchQuery: string, offset = 0, isInitialOrSearchChange = true) => {
@@ -111,7 +128,7 @@ export function useRemoteSearch<T>({
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
-    setQuery('');
+    setQueryState('');
     setItems([]);
     setHasMore(false);
     setNextOffset(null);

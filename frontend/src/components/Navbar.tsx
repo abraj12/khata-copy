@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../features/auth/AuthProvider.js';
-import { Store, LogOut, BookOpen, Tag, Palette } from 'lucide-react';
+import { Store, LogOut, BookOpen, Tag, Palette, Loader2, AlertCircle } from 'lucide-react';
 
 interface NavbarProps {
   currentTab: 'khata' | 'products';
@@ -10,12 +10,44 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenAppearance }) => {
   const { logout, owner } = useAuth();
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    setLogoutError(null);
+    try {
+      await logout();
+    } catch (err) {
+      setLogoutError((err as Error).message || 'Logout could not be confirmed.');
+    } finally {
+      setIsLoggingOut(false);
+    }
+  };
 
   return (
     <header
       className="sticky top-0 z-30 border-b border-[var(--khata-border)] shadow-sm"
       style={{ background: 'var(--khata-surface)' }}
     >
+      {/* Logout error banner with retry option */}
+      {logoutError && (
+        <div className="bg-rose-500/10 border-b border-rose-500/20 px-4 py-2 flex items-center justify-between text-xs text-rose-500">
+          <div className="flex items-center gap-1.5 font-medium">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <span>{logoutError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleLogout}
+            disabled={isLoggingOut}
+            className="underline font-bold hover:text-rose-600 transition ml-2 cursor-pointer"
+          >
+            {isLoggingOut ? 'Retrying...' : 'Retry Logout'}
+          </button>
+        </div>
+      )}
+
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
         <div className="flex flex-wrap items-center justify-between py-2 sm:py-0 sm:h-16 gap-2">
           {/* Brand Identity */}
@@ -94,12 +126,17 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
 
             {/* Logout Button */}
             <button
-              onClick={() => logout()}
+              onClick={handleLogout}
+              disabled={isLoggingOut}
               title="Logout"
               aria-label="Logout"
               className="neu-btn-danger text-xs px-2.5 sm:px-3 py-1.5 sm:py-2 flex items-center gap-1.5 min-h-[38px] sm:min-h-[44px]"
             >
-              <LogOut className="w-4 h-4" />
+              {isLoggingOut ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <LogOut className="w-4 h-4" />
+              )}
               <span className="hidden sm:inline">Logout</span>
             </button>
           </div>

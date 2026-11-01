@@ -3,7 +3,7 @@
 **Document Status:** Canonical & Implemented  
 **Last Verified:** 2026-11-01  
 **Database Engine:** PostgreSQL 16 (Neon Serverless)  
-**Schema Version:** 007  
+**Schema Version:** 008  
 
 ---
 
@@ -19,29 +19,42 @@ Migrations are executed sequentially via `backend/scripts/migrate.ts` using dire
 | **004** | `004_integer_quantity_and_money_constraints.sql` | Initial integer quantity constraints and money scale checks. |
 | **005** | `005_search_indexes_and_identity_constraints.sql` | Normalized phone & name indexes; `products.buying_price` widened to `NUMERIC(12,2)`. |
 | **006** | `006_quantity_two_decimal_places.sql` | Quantity widened to allow fractional quantities up to 2 decimal places. |
-| **007** | `007_quantity_strict_scale_and_allocation_integrity.sql` | **Unconstrained NUMERIC with TRUNC scale check** (rejects silent rounding on direct SQL inserts) and **composite foreign keys** ensuring payment allocations cannot cross customer ownership. |
+| **007** | `007_quantity_strict_scale_and_allocation_integrity.sql` | Unconstrained NUMERIC with TRUNC scale check and **composite foreign keys** ensuring payment allocations cannot cross customer ownership. |
+| **008** | `008_strict_quantity_scale.sql` | **Strict scale enforcement**: Enforces `scale(quantity) <= 2 AND TRUNC(quantity, 2) = quantity` to strictly reject direct SQL inputs with trailing zeros or excess precision (e.g. `1.2300` and `1.234`). |
 
 ---
 
-## 2. Migration 007 Details
+## 2. Quantity Precision Enforcement (Migrations 007 & 008)
 
-### 2.1 Quantity Precision Enforcement
+### Problem & Solution
 PostgreSQL columns declared `NUMERIC(12,2)` automatically round values like `1.234` to `1.23` during type coercion before executing CHECK constraints.
-Migration 007 converts `udhar_items.quantity` to unconstrained `NUMERIC` and adds:
+Migration 007 converted `udhar_items.quantity` to unconstrained `NUMERIC`.
+Migration 008 tightened the scale constraint to enforce both `scale(quantity) <= 2` and `TRUNC(quantity, 2) = quantity`:
+
 ```sql
 ALTER TABLE "udhar_items"
-  ADD CONSTRAINT "chk_udhar_items_quantity_scale"
-  CHECK (TRUNC("quantity", 2) = "quantity");
+  DROP CONSTRAINT IF EXISTS "chk_udhar_items_quantity_scale";
 
 ALTER TABLE "udhar_items"
-  ADD CONSTRAINT "chk_udhar_items_quantity_positive"
-  CHECK ("quantity" > 0 AND "quantity" <= 1000000);
+  ADD CONSTRAINT "chk_udhar_items_quantity_scale"
+  CHECK (scale("quantity") <= 2 AND TRUNC("quantity", 2) = "quantity");
 ```
-Under this definition:
-- `1.25`: `TRUNC(1.25, 2) = 1.25` (Accepted)
-- `1.234`: `TRUNC(1.234, 2) = 1.23 != 1.234` (Rejected with constraint violation)
 
-### 2.2 Payment Allocation Cross-Customer Integrity
+### Verification Matrix:
+- `1`: `scale = 0`, `TRUNC(1, 2) = 1` -> **Accepted**
+- `1.2`: `scale = 1`, `TRUNC(1.2, 2) = 1.2` -> **Accepted**
+- `1.25`: `scale = 2`, `TRUNC(1.25, 2) = 1.25` -> **Accepted**
+- `0.01`: `scale = 2`, `TRUNC(0.01, 2) = 0.01` -> **Accepted**
+- `1.2300`: `scale = 4 > 2` -> **Rejected**
+- `1.234`: `scale = 3 > 2` -> **Rejected**
+- `0`: Rejected by `quantity > 0`
+- `-1`: Rejected by `quantity > 0`
+- `1000001`: Rejected by `quantity <= 1000000`
+
+---
+
+## 3. Payment Allocation Cross-Customer Integrity (Migration 007)
+
 To prevent any possibility of a payment belonging to Customer A being allocated to a transaction belonging to Customer B, composite unique constraints and foreign keys are enforced:
 ```sql
 ALTER TABLE "payments" ADD CONSTRAINT "uq_payments_id_customer" UNIQUE ("id", "customer_id");
@@ -64,17 +77,10 @@ ALTER TABLE "payment_allocations"
 
 ---
 
-## 3. Legacy Ledger Preflight Audit Script
+## 4. Running Migrations in Production
 
-Run the safe, read-only preflight inspection:
+To apply forward-only migrations safely to Neon PostgreSQL:
 ```bash
-npm run preflight:legacy --workspace=backend
+npm run migrate --workspace=backend
 ```
-This script connects in `READ ONLY` transaction mode and reports:
-- Number of legacy `ledger_entries`
-- Total registered customers
-- Customers with missing `normalized_phone`
-- Phone normalization collision groups
-- Total normalized `udhar_transactions` and `payments`
-- Unrepresented legacy records count
-- Never prints customer PII to logs.
+Migration script uses advisory locking and transaction rollback on failure. Zero data loss.

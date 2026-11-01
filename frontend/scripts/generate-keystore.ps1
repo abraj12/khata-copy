@@ -1,17 +1,43 @@
 # ==============================================================================
-# Khata Android Release Keystore Generator (PowerShell)
+# Khata Android TWA Release Keystore Utility (PowerShell)
+# ==============================================================================
+# Manages signing keystore and fingerprint verification for Android TWA (in.algions.khata)
+#
+# CRITICAL NOTICE ON UPGRADE COMPATIBILITY:
+# If you are updating an existing installed application on devices or Google Play,
+# you MUST use your existing original release keystore and alias. Generating a new
+# key will cause Android to reject in-place updates ("signatures do not match").
 # ==============================================================================
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "   Khata Android Release Keystore Generator               " -ForegroundColor Cyan
+Write-Host "   Khata Android TWA Keystore & Fingerprint Utility       " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "This script generates the dedicated release signing keystore."
-Write-Host "NOTE: Keep this keystore secure! Future app updates require this same key."
+Write-Host "Target Package: in.algions.khata"
+Write-Host "Target Origin:  https://khata.algions.in"
 Write-Host ""
 
-$keystorePath = Join-Path $PSScriptRoot "..\android\release-keystore.jks"
+$twaDir = Join-Path $PSScriptRoot "..\..\android-twa"
+$keystorePath = Join-Path $twaDir "release-keystore.jks"
+
 if (Test-Path $keystorePath) {
-    Write-Host "[WARNING] Keystore already exists at $keystorePath" -ForegroundColor Yellow
+    Write-Host "[INFO] Existing keystore found at: $keystorePath" -ForegroundColor Green
+    Write-Host "Extracting SHA-256 certificate fingerprint:" -ForegroundColor Cyan
+    keytool -list -v -keystore $keystorePath -alias "khata-release-key"
+    Write-Host ""
+    Write-Host "To configure Android release signing in android-twa/signing.properties:"
+    Write-Host "RELEASE_STORE_FILE=release-keystore.jks"
+    Write-Host "RELEASE_STORE_PASSWORD=<your-keystore-password>"
+    Write-Host "RELEASE_KEY_ALIAS=khata-release-key"
+    Write-Host "RELEASE_KEY_PASSWORD=<your-key-password>"
+    exit 0
+}
+
+Write-Host "[NOTICE] No keystore found at: $keystorePath" -ForegroundColor Yellow
+Write-Host "Would you like to generate a NEW keystore for initial installation? (y/N): " -NoNewline
+$response = Read-Host
+
+if ($response -ne "y" -and $response -ne "Y") {
+    Write-Host "Aborted. Please place your existing release keystore at $keystorePath" -ForegroundColor Yellow
     exit 0
 }
 
@@ -29,8 +55,11 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "[SUCCESS] Keystore created successfully!" -ForegroundColor Green
     Write-Host "File: $keystorePath"
     Write-Host ""
-    Write-Host "To configure Gradle release signing, create 'frontend/android/signing.properties':"
-    Write-Host "RELEASE_STORE_FILE=../release-keystore.jks"
+    Write-Host "SHA-256 Fingerprint for Digital Asset Links (.well-known/assetlinks.json):" -ForegroundColor Cyan
+    keytool -list -v -keystore $keystorePath -alias "khata-release-key"
+    Write-Host ""
+    Write-Host "To configure Gradle release signing, create 'android-twa/signing.properties':"
+    Write-Host "RELEASE_STORE_FILE=release-keystore.jks"
     Write-Host "RELEASE_STORE_PASSWORD=<your-keystore-password>"
     Write-Host "RELEASE_KEY_ALIAS=khata-release-key"
     Write-Host "RELEASE_KEY_PASSWORD=<your-key-password>"

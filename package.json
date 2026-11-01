@@ -26,9 +26,10 @@
     "khata",
     "authentication",
     "neon",
-    "capacitor",
     "argon2id",
-    "express-session"
+    "express-session",
+    "twa",
+    "pwa"
   ],
   "author": "Algions",
   "license": "UNLICENSED",

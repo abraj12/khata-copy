@@ -93,20 +93,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
-    let warning: string | null = null;
+    setAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
     try {
       await authApi.logout();
-    } catch (err) {
-      warning = 'Server session could not be invalidated on backend. Local session was cleared.';
-      console.warn('[AUTH] Server logout warning:', (err as Error).message);
-    } finally {
+      // Scenario 1: Successful logout - backend revokes session, frontend clears state
       setAuthState({
         isAuthenticated: false,
         isLoading: false,
         owner: null,
-        error: warning,
+        error: null,
         isOffline: false,
       });
+    } catch (err: unknown) {
+      const status = (err as { status?: number }).status;
+      if (status === 401) {
+        // Scenario 3: Session is already unauthenticated/expired on the server
+        setAuthState({
+          isAuthenticated: false,
+          isLoading: false,
+          owner: null,
+          error: null,
+          isOffline: false,
+        });
+      } else {
+        // Scenario 2: Network failure / backend unavailable (502/503/timeout)
+        // Do NOT falsely claim server revocation. Keep state and notify user with retry option.
+        const failureMessage =
+          'Logout could not be confirmed with the server. Please check your network and retry.';
+        setAuthState((prev) => ({
+          ...prev,
+          isLoading: false,
+          error: failureMessage,
+          isOffline: true,
+        }));
+        throw new Error(failureMessage);
+      }
     }
   };
 

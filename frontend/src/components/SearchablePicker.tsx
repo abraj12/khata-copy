@@ -84,6 +84,41 @@ export function SearchablePicker<T>({
     debounceMs: 280,
   });
 
+  // Focus trap for mobile bottom sheet modal
+  useEffect(() => {
+    if (!isOpen || !isMobile) return;
+
+    const modalEl = containerRef.current?.querySelector('[role="dialog"]') as HTMLElement | null;
+    if (!modalEl) return;
+
+    const handleTabKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+
+      const focusable = modalEl.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusable.length) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleTabKey);
+    return () => document.removeEventListener('keydown', handleTabKey);
+  }, [isOpen, isMobile]);
+
   // Lock body scroll on mobile bottom-sheet open
   useEffect(() => {
     if (isOpen && isMobile) {
@@ -300,6 +335,14 @@ export function SearchablePicker<T>({
                       onChange={(e) => setQuery(e.target.value)}
                       onKeyDown={handleKeyDown}
                       placeholder={searchPlaceholder}
+                      aria-label={searchPlaceholder || (mode === 'customer' ? 'Search customers' : 'Search products')}
+                      aria-autocomplete="list"
+                      aria-controls={listboxId}
+                      aria-activedescendant={
+                        activeIndex >= 0 && items[activeIndex]
+                          ? `option-${componentId}-${getOptionKey(items[activeIndex])}`
+                          : undefined
+                      }
                       className="neu-input neu-input-with-leading-icon w-full text-sm font-medium pr-9"
                     />
                     {query && (
@@ -341,6 +384,14 @@ export function SearchablePicker<T>({
                     onChange={(e) => setQuery(e.target.value)}
                     onKeyDown={handleKeyDown}
                     placeholder={searchPlaceholder}
+                    aria-label={searchPlaceholder || (mode === 'customer' ? 'Search customers' : 'Search products')}
+                    aria-autocomplete="list"
+                    aria-controls={listboxId}
+                    aria-activedescendant={
+                      activeIndex >= 0 && items[activeIndex]
+                        ? `option-${componentId}-${getOptionKey(items[activeIndex])}`
+                        : undefined
+                    }
                     className="neu-input neu-input-with-leading-icon w-full text-sm font-medium pr-8"
                   />
                   {query && (

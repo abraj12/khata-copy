@@ -6,6 +6,7 @@
 **Application Name:** Khata  
 **Target Platform:** Android (Trusted Web Activity via `androidbrowserhelper:2.5.0` & AndroidX Browser `1.8.0`)  
 **Production URL:** `https://khata.algions.in`  
+**Gradle Wrapper:** 8.11.1 | **JDK:** 17 | **Compile SDK:** 35 | **Min SDK:** 23
 
 ---
 
@@ -28,14 +29,14 @@ Rather than bundling static web assets inside the APK (which would require gener
 
 ---
 
-## 2. Digital Asset Links (`.well-known/assetlinks.json`)
+## 2. Digital Asset Links (`.well-known/assetlinks.json`) & Application-Side Metadata
 
+### 2.1 Website-Side Asset Links
 Android verifies ownership of the remote website by fetching:
 `https://khata.algions.in/.well-known/assetlinks.json`
 
 The file is hosted from `frontend/public/.well-known/assetlinks.json` and served with `Content-Type: application/json`.
 
-### Format:
 ```json
 [
   {
@@ -51,7 +52,21 @@ The file is hosted from `frontend/public/.well-known/assetlinks.json` and served
 ]
 ```
 
-### Validating Asset Links Configuration:
+### 2.2 Application-Side Asset Statements
+In `android-twa/app/src/main/res/values/strings.xml`:
+```xml
+<string name="asset_statements" translatable="false">
+    [{\\\"relation\\\": [\\\"delegate_permission/common.handle_all_urls\\\"], \\\"target\\\": {\\\"namespace\\\": \\\"web\\\", \\\"site\\\": \\\"https://khata.algions.in\\\"}}]
+</string>
+```
+And inside `<application>` in `android-twa/app/src/main/AndroidManifest.xml`:
+```xml
+<meta-data
+    android:name="asset_statements"
+    android:resource="@string/asset_statements" />
+```
+
+### 2.3 Validating Asset Links Configuration
 Run the repository validation script:
 ```bash
 node frontend/scripts/validate-assetlinks.js
@@ -59,47 +74,39 @@ node frontend/scripts/validate-assetlinks.js
 
 ---
 
-## 3. Keystore Generation & Fingerprint Extraction
+## 3. Certificate Types & Release Signing
 
-> [!IMPORTANT]
-> The release signing key is permanent. Once an application is installed or published to Google Play, all future APK updates must use the exact same key. Keep your keystore safe. Keystores (`*.jks`) and `signing.properties` are strictly excluded from git.
+Android requires all applications to be digitally signed with a certificate before installation. It is critical to distinguish the different certificate types:
 
-### 3.1 Generating a New Release Keystore
-```bash
-keytool -genkeypair -v \
-  -keystore android-twa/release-keystore.jks \
-  -alias khata-release-key \
-  -keyalg RSA \
-  -keysize 2048 \
-  -validity 10000 \
-  -dname "CN=Khata Owner, OU=Khata App, O=Algions Technologies, L=Delhi, ST=Delhi, C=IN"
-```
+| Certificate Type | Purpose | SHA-256 Fingerprint Location |
+|---|---|---|
+| **Development / Debug Certificate** | Local testing on developer devices via `assembleDebug`. Standard debug key in `~/.android/debug.keystore`. | Fingerprint `D0:83:6B:...` currently registered for local validation. |
+| **Existing Original Release Key** | Used if Khata was previously distributed directly (e.g. via direct APK download). Must be retained for in-place updates. | Extracted using `keytool -list -v -keystore release-keystore.jks`. |
+| **Google Play App Signing Key** | Google's certificate if distributed via the Play Store with Play App Signing. Google replaces your upload key with this key for users. | Extracted from Google Play Console -> App Signing -> App signing key certificate. |
+| **Play Upload Key** | The key used only to upload AABs/APKs to the Google Play Console if Play App Signing is enabled. | Extracted from your local upload keystore. |
 
-### 3.2 Extracting the SHA-256 Fingerprint
-To view the SHA-256 fingerprint from an existing keystore:
-```bash
-keytool -list -v -keystore android-twa/release-keystore.jks -alias khata-release-key
-```
-
-Look for the line:
-`Certificate fingerprints: SHA256: XX:XX:XX:...`
-
-Copy that fingerprint and add it to `frontend/public/.well-known/assetlinks.json`.
+> [!CRITICAL]
+> In-place update compatibility requires:
+> 1. Exact package ID match: `in.algions.khata`.
+> 2. Strictly monotonically higher `versionCode`.
+> 3. Signature match with the certificate currently installed on the user device.
+> Never generate a new key if you intend to update an existing in-place installation!
 
 ---
 
-## 4. Configuring Release Signing
+## 4. Fail-Closed Release Signing Configuration
 
-Create `android-twa/signing.properties` (ignored by git):
+Release builds in Khata **fail closed**. If a release APK or AAB is requested (`assembleRelease` or `bundleRelease`) without valid signing credentials, Gradle immediately aborts with a security error instead of producing an unsigned artifact.
 
+### Configuring Credentials:
+Create `android-twa/signing.properties` (strictly ignored by Git):
 ```properties
-RELEASE_STORE_FILE=../release-keystore.jks
+RELEASE_STORE_FILE=release-keystore.jks
 RELEASE_STORE_PASSWORD=YourKeystorePassword
 RELEASE_KEY_ALIAS=khata-release-key
 RELEASE_KEY_PASSWORD=YourKeyPassword
 ```
-
-Alternatively, supply the signing credentials via environment variables during CI/CD:
+Or set environment variables in your secure release CI/CD environment:
 - `RELEASE_STORE_FILE`
 - `RELEASE_STORE_PASSWORD`
 - `RELEASE_KEY_ALIAS`
@@ -117,24 +124,24 @@ cd android-twa
 # Build debug APK (for local testing via USB debugging):
 ./gradlew assembleDebug
 
-# Build release APK (signed with your production key):
+# Build signed release APK (requires signing credentials):
 ./gradlew assembleRelease
 ```
 
-The resulting signed APK is generated at:
-`android-twa/app/build/outputs/apk/release/app-release.apk`
+- Debug APK: `android-twa/app/build/outputs/apk/debug/app-debug.apk`
+- Release APK: `android-twa/app/build/outputs/apk/release/app-release.apk`
 
 ---
 
 ## 6. Testing TWA & Verification Procedure
 
-1. **Install APK on Test Device:**
+1. **Install Debug APK on Test Device:**
    ```bash
    adb install -r android-twa/app/build/outputs/apk/debug/app-debug.apk
    ```
-2. **Open Khata:** Launch the app from the home screen.
+2. **Open Khata:** Launch the app from the Android home screen.
 3. **Verify Full-Screen TWA:** The app opens `https://khata.algions.in` with full-screen experience and NO visible browser URL bar (confirming Digital Asset Links auto-verification).
 4. **Test Live Website Updates:**
-   - Deploy a test change to `frontend` on Vercel.
-   - Reopen the app on the Android device.
-   - Confirm that the updated UI appears without rebuilding or reinstalling the APK!
+   - Deploy a frontend styling or feature update to Vercel.
+   - Reopen or refresh Khata on the Android device.
+   - Confirm that the updated UI appears immediately without rebuilding or reinstalling the APK!

@@ -5,8 +5,6 @@ import { env } from '../config/env.js';
 const PRODUCTION_ALLOWED_ORIGINS = new Set([
   env.FRONTEND_URL,
   'https://khata.algions.in',
-  'capacitor://localhost',
-  'https://localhost',
 ]);
 
 const DEV_ALLOWED_ORIGINS = new Set([
@@ -16,6 +14,7 @@ const DEV_ALLOWED_ORIGINS = new Set([
   'http://localhost:3000',
   'http://127.0.0.1:5173',
   'http://127.0.0.1:3000',
+  'https://localhost',
 ]);
 
 /**

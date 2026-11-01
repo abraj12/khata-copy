@@ -51,6 +51,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '005_search_indexes_and_identity_constraints.sql',
         '006_quantity_two_decimal_places.sql',
         '007_quantity_strict_scale_and_allocation_integrity.sql',
+      '008_strict_quantity_scale.sql',
+        '008_strict_quantity_scale.sql',
       ];
 
       await client.query(`
@@ -476,6 +478,20 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       expect((err as Error).message).toContain('chk_udhar_items_quantity_scale');
     }
     expect(scaleRejected).toBe(true);
+
+    // Direct SQL insertion with trailing scale precision ('1.2300') MUST be rejected by chk_udhar_items_quantity_scale
+    let trailingScaleRejected = false;
+    try {
+      await pool.query(
+        `INSERT INTO udhar_items (transaction_id, product_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [txId, prodId, 'Copper Wire 1m', '50.00', '1.2300', '100.00', '123.00']
+      );
+    } catch (err) {
+      trailingScaleRejected = true;
+      expect((err as Error).message).toContain('chk_udhar_items_quantity_scale');
+    }
+    expect(trailingScaleRejected).toBe(true);
 
     // Quantity = 0 MUST be rejected by chk_udhar_items_quantity_positive
     let zeroRejected = false;
