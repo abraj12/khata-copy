@@ -101,7 +101,29 @@ export const GstBillingView: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successRecord, setSuccessRecord] = useState<GstInvoiceRecord | null>(null);
   const [previewInvoice, setPreviewInvoice] = useState<MannatInvoiceProps | null>(null);
+  const [autoPrintAfterPreview, setAutoPrintAfterPreview] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+
+  const handleDirectPrint = (inv: GstInvoiceRecord) => {
+    setPreviewInvoice(mapRecordToInvoiceProps(inv));
+    setAutoPrintAfterPreview(true);
+  };
+
+  const handleClosePreview = () => {
+    setPreviewInvoice(null);
+    setAutoPrintAfterPreview(false);
+  };
+
+  // Trigger print dialog as soon as preview DOM is rendered
+  useEffect(() => {
+    if (previewInvoice && autoPrintAfterPreview) {
+      const timer = setTimeout(() => {
+        window.print();
+        setAutoPrintAfterPreview(false);
+      }, 200);
+      return () => clearTimeout(timer);
+    }
+  }, [previewInvoice, autoPrintAfterPreview]);
 
   // Existing products & customers lookup
   const [availableProducts, setAvailableProducts] = useState<ProductItem[]>([]);
@@ -481,7 +503,8 @@ export const GstBillingView: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Top Banner & Tab Controls */}
+      <div className="mhi-no-print space-y-6">
+        {/* Top Banner & Tab Controls */}
       <div
         className="p-4 sm:p-6 rounded-2xl border border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-4"
         style={{ background: 'var(--khata-surface)' }}
@@ -1281,9 +1304,18 @@ export const GstBillingView: React.FC = () => {
                               type="button"
                               onClick={() => setPreviewInvoice(mapRecordToInvoiceProps(inv))}
                               className="p-1.5 rounded-lg border border-[var(--khata-border)] hover:bg-[var(--khata-surface)] text-[var(--khata-text)] cursor-pointer"
-                              title="Preview / Print A4"
+                              title="Preview A4 Invoice"
                             >
                               <Eye className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDirectPrint(inv)}
+                              className="p-1.5 rounded-lg border border-[var(--khata-border)] hover:bg-[var(--khata-surface)] text-blue-600 dark:text-blue-400 cursor-pointer"
+                              title="Print A4 Invoice"
+                            >
+                              <Printer className="w-3.5 h-3.5 text-blue-600" />
                             </button>
 
                             <button
@@ -1345,11 +1377,12 @@ export const GstBillingView: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <button
                           type="button"
                           onClick={() => setPreviewInvoice(mapRecordToInvoiceProps(inv))}
-                          className="neu-btn-secondary px-3 py-1.5 flex items-center gap-1.5 text-xs font-bold"
+                          className="neu-btn-secondary px-2.5 py-1.5 flex items-center gap-1 text-xs font-bold"
+                          title="Preview Invoice"
                         >
                           <Eye className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
                           <span>View</span>
@@ -1357,9 +1390,20 @@ export const GstBillingView: React.FC = () => {
 
                         <button
                           type="button"
+                          onClick={() => handleDirectPrint(inv)}
+                          className="neu-btn-secondary px-2.5 py-1.5 flex items-center gap-1 text-xs font-bold text-blue-600 dark:text-blue-400"
+                          title="Print A4 Invoice"
+                        >
+                          <Printer className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Print</span>
+                        </button>
+
+                        <button
+                          type="button"
                           onClick={() => handleDownloadPdf(inv.id, inv.invoice_number)}
                           disabled={isDownloadingPdf}
-                          className="neu-btn-primary px-3 py-1.5 flex items-center gap-1.5 text-xs font-bold"
+                          className="neu-btn-primary px-2.5 py-1.5 flex items-center gap-1 text-xs font-bold"
+                          title="Download PDF"
                         >
                           <Download className="w-3.5 h-3.5" />
                           <span>PDF</span>
@@ -1457,6 +1501,7 @@ export const GstBillingView: React.FC = () => {
           </div>
         </div>
       )}
+      </div>
 
       {/* Fullscreen A4 Invoice Preview Modal */}
       {previewInvoice && (
@@ -1467,7 +1512,7 @@ export const GstBillingView: React.FC = () => {
             </span>
             <button
               type="button"
-              onClick={() => setPreviewInvoice(null)}
+              onClick={handleClosePreview}
               className="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white transition flex items-center gap-1 text-xs font-bold cursor-pointer"
             >
               <X className="w-4 h-4" />

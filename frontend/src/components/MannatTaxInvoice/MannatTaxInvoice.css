@@ -45,6 +45,7 @@
   flex-direction: column;
   overflow: hidden;
   background: #fff;
+  color: #111;
   font-size: 9pt;
   line-height: 1.18;
 }
@@ -394,7 +395,7 @@
 }
 
 @media print {
-  /* 1. Global Reset: Hide whole web app except the invoice */
+  /* 1. Reset text shadow & box shadow */
   *, *::before, *::after {
     box-shadow: none !important;
     text-shadow: none !important;
@@ -404,31 +405,48 @@
     margin: 0 !important;
     padding: 0 !important;
     background: #fff !important;
+    color: #000 !important;
     width: 210mm !important;
-    height: 100% !important;
+    min-height: 100% !important;
+    height: auto !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
     overflow: visible !important;
   }
 
-  /* Hide navigation, sidebar, app layout, search bars, buttons outside print container */
-  body > *:not(#root),
-  #root > div:not(.mhi-print-modal-container),
-  nav,
-  aside,
-  header,
+  /* 2. Unconstrain all top-level React app wrappers so invoice is NEVER hidden or clipped */
+  #root,
+  #root > div,
+  main:not(.mhi-page) {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    display: block !important;
+  }
+
+  /* 3. Explicitly hide non-printable app UI elements outside the invoice */
   .mhi-no-print,
   .mhi-toolbar,
   .mhi-modal-header,
-  button {
+  nav,
+  aside,
+  header:not(.mhi-shop-header),
+  footer:not(.mhi-invoice-footer) {
     display: none !important;
   }
 
-  /* 2. Neutralize the modal backdrop and overlay */
+  /* 4. Neutralize the modal backdrop and overlay */
   .mhi-print-modal-container {
     position: static !important;
     inset: auto !important;
-    background: #fff !important;
+    background: transparent !important;
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
     padding: 0 !important;
@@ -439,15 +457,31 @@
     display: block !important;
   }
 
+  .mhi-print-modal-container > div {
+    overflow: visible !important;
+    height: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
   .mhi-root {
     background: #fff !important;
+    color: #000 !important;
     margin: 0 !important;
     padding: 0 !important;
     width: 210mm !important;
     height: auto !important;
+    overflow: visible !important;
   }
 
-  /* 3. A4 Page Container: EXACTLY 288mm total height (4mm top + 280mm frame + 4mm bottom) */
+  .mhi-preview-container {
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  /* 5. A4 Page Container: EXACTLY 288mm total height (4mm top + 280mm frame + 4mm bottom) */
   /* Mathematical Guarantee: 288mm < 297mm A4 height -> Will NEVER spill onto Page 2 */
   .mhi-page {
     box-sizing: border-box !important;
@@ -455,11 +489,14 @@
     height: 288mm !important;
     max-height: 288mm !important;
     margin: 0 !important;
+    margin-bottom: 0 !important;
     padding: 4mm 4mm !important;
     background: #fff !important;
+    color: #000 !important;
     box-shadow: none !important;
     border: none !important;
     transform: none !important;
+    transform-origin: top left !important;
     page-break-inside: avoid !important;
     page-break-after: avoid !important;
     break-inside: avoid !important;
@@ -467,7 +504,7 @@
     overflow: hidden !important;
   }
 
-  /* 4. Invoice Outer Border Frame */
+  /* 6. Invoice Outer Border Frame */
   .mhi-invoice {
     box-sizing: border-box !important;
     width: 100% !important;
@@ -480,8 +517,15 @@
     page-break-inside: avoid !important;
     break-inside: avoid !important;
     background: #fff !important;
+    color: #000 !important;
     font-size: 8.5pt !important;
     line-height: 1.15 !important;
+  }
+
+  .mhi-invoice * {
+    color: #000 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 
   /* 5. Shop Header */

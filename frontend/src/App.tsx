@@ -54,11 +54,13 @@ export function KhataDashboard() {
       className="min-h-screen flex flex-col"
       style={{ backgroundColor: 'var(--khata-bg)', color: 'var(--khata-text)' }}
     >
-      <Navbar
-        currentTab={currentTab}
-        onTabChange={handleTabChange}
-        onOpenAppearance={() => setIsAppearanceOpen(true)}
-      />
+      <div className="mhi-no-print">
+        <Navbar
+          currentTab={currentTab}
+          onTabChange={handleTabChange}
+          onOpenAppearance={() => setIsAppearanceOpen(true)}
+        />
+      </div>
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {currentTab === 'khata' && <KhataLedgerView />}
@@ -67,17 +69,19 @@ export function KhataDashboard() {
       </main>
 
       <footer
-        className="py-4 border-t border-[var(--khata-border)] text-center text-xs font-medium text-[var(--khata-text-muted)] px-4"
+        className="mhi-no-print py-4 border-t border-[var(--khata-border)] text-center text-xs font-medium text-[var(--khata-text-muted)] px-4"
         style={{ background: 'var(--khata-surface)' }}
       >
         Designed and managed by Algions AI Labs Pvt. Ltd.
       </footer>
 
       {/* Persistent Appearance & Accessibility Modal */}
-      <AppearanceAccessibilityModal
-        isOpen={isAppearanceOpen}
-        onClose={() => setIsAppearanceOpen(false)}
-      />
+      <div className="mhi-no-print">
+        <AppearanceAccessibilityModal
+          isOpen={isAppearanceOpen}
+          onClose={() => setIsAppearanceOpen(false)}
+        />
+      </div>
     </div>
   );
 }
