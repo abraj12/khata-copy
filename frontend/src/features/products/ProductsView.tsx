@@ -657,6 +657,7 @@ export const ProductsView: React.FC = () => {
                             <img
                               src={resolveImageUrl(item.image_url)}
                               alt={item.name}
+                              crossOrigin="anonymous"
                               className="w-full h-full object-cover group-hover:scale-110 transition-transform"
                               onError={(e) => {
                                 const fallback = `${API_BASE_URL}/api/v1/products/${item.id}/image`;
@@ -852,6 +853,7 @@ export const ProductsView: React.FC = () => {
                     <img
                       src={resolveImageUrl(editingProduct.image_url)}
                       alt={editingProduct.name}
+                      crossOrigin="anonymous"
                       onClick={() =>
                         setLightboxProduct({
                           id: editingProduct.id,
@@ -994,6 +996,7 @@ export const ProductsView: React.FC = () => {
             <img
               src={resolveImageUrl(lightboxProduct.url)}
               alt={lightboxProduct.name}
+              crossOrigin="anonymous"
               className="max-w-full max-h-[75vh] object-contain rounded-lg shadow-2xl"
               onError={(e) => {
                 if (lightboxProduct.id) {

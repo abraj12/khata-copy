@@ -24,6 +24,7 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
     helmet({
       contentSecurityPolicy: false, // CSP is configured on frontend layer / Vercel
       crossOriginEmbedderPolicy: false,
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
     })
   );
 

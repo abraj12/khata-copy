@@ -215,6 +215,7 @@ router.get('/:id/image', async (req: Request, res: Response, next: NextFunction)
     const { stream, contentType, contentLength } = await storageService.getObjectStream(bill.image_object_key);
 
     res.setHeader('Content-Type', contentType);
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     if (contentLength) res.setHeader('Content-Length', contentLength);
 
     if (isDownload) {
