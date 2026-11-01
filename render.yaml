@@ -11,6 +11,7 @@ services:
     plan: free
     region: singapore
     buildCommand: npm ci --workspace=backend --include-workspace-root=false --include=dev && npm run build --workspace=backend
+    preDeployCommand: npm run migrate --workspace=backend
     startCommand: npm run start --workspace=backend
     healthCheckPath: /api/v1/health/live
     envVars:
