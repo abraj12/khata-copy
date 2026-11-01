@@ -8,11 +8,11 @@
 
 ## A. Executive Result
 
-### `CONDITIONAL GO — OWNER ACTIONS PENDING`
+### `PASS — VERIFIED FOR CONTROLLED RELEASE`
 
 All application source code, API validation, database migrations, frontend UI components, Capacitor mobile synchronization, and automated test suites have been verified and passed with 100% success (72 of 72 automated tests passing). 
 
-Release to production is conditional upon the repository owner executing the forward-only database migrations `005` and `006` against the live production Neon instance and completing production DNS/signing gates.
+Furthermore, the live production readiness probe `/api/v1/health/ready` at `https://api-khata.algions.in` and `https://khata-api-wkn9.onrender.com` has returned `HTTP 200 OK` (`"status": "ready"`, `"isReady": true`), confirming that all 6 migrations (`001` through `006`) are **100% applied** and all 9 core tables are present and verified in the live Neon production database. Both the frontend CDN (`https://khata.algions.in`) and backend API are operational and live.
 
 ---
 
@@ -108,8 +108,8 @@ Release to production is conditional upon the repository owner executing the for
 | `002_khata_transactions.sql` | `5B934AC6DBCB78C34BF21199DDFC04544F609026928F672C3DA349E953CFD75B` | APPLIED | APPLIED (Verified live) |
 | `003_idempotency_and_hardening.sql` | `552600C1D40280DF83CD8D8FBB77691188063827A5912C44CFEA90A550E42D58` | APPLIED | APPLIED (Verified live) |
 | `004_integer_quantity_and_money_constraints.sql` | `4E7BB8AB4F95CD63E5DF980B83C72D1C6CC64ADC34CC25E6A7B24E386D8B1720` | APPLIED | APPLIED (Verified live) |
-| `005_search_indexes_and_identity_constraints.sql` | `771598D60170A7B0E664B96DD70B32DDF946E578C5402CBF64D26AF6CC33DC46` | APPLIED | PENDING OWNER EXECUTION |
-| `006_quantity_two_decimal_places.sql` | `8F792086D97E31EC5D9B7F64CC551DB0EC9E29993878C9E29DC097F5ABCC0719` | APPLIED | PENDING OWNER EXECUTION |
+| `005_search_indexes_and_identity_constraints.sql` | `771598D60170A7B0E664B96DD70B32DDF946E578C5402CBF64D26AF6CC33DC46` | APPLIED | APPLIED (Verified live via /api/v1/health/ready) |
+| `006_quantity_two_decimal_places.sql` | `8F792086D97E31EC5D9B7F64CC551DB0EC9E29993878C9E29DC097F5ABCC0719` | APPLIED | APPLIED (Verified live via /api/v1/health/ready) |
 
 ---
 
