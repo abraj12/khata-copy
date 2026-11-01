@@ -1,6 +1,7 @@
 import PDFDocument from 'pdfkit';
 import path from 'path';
 import fs from 'fs';
+import { NASREEN_SIGNATURE_BASE64 } from './gstInvoices.signature.js';
 
 export interface GstInvoicePdfItem {
   name: string;
@@ -302,9 +303,28 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       doc.font('Helvetica-Bold').fontSize(10).text('For M/s Mannat Hardware Store', footerMidX, footerY + 18, { align: 'right', width: rightW - 8 });
 
       // Embed signature
-      const sigPath = path.resolve('backend/assets/nasreen-signature.png');
-      if (fs.existsSync(sigPath)) {
-        doc.image(sigPath, left + width - 110, footerY + 30, { width: 90, height: 26 });
+      try {
+        let sigBuffer: Buffer | null = null;
+        const candidatePaths = [
+          path.resolve('backend/assets/nasreen-signature.png'),
+          path.resolve('assets/nasreen-signature.png'),
+          path.resolve(process.cwd(), 'backend/assets/nasreen-signature.png'),
+          path.resolve(process.cwd(), 'assets/nasreen-signature.png'),
+        ];
+        for (const p of candidatePaths) {
+          if (fs.existsSync(p)) {
+            sigBuffer = fs.readFileSync(p);
+            break;
+          }
+        }
+        if (!sigBuffer && NASREEN_SIGNATURE_BASE64) {
+          sigBuffer = Buffer.from(NASREEN_SIGNATURE_BASE64, 'base64');
+        }
+        if (sigBuffer) {
+          doc.image(sigBuffer, left + width - 110, footerY + 28, { width: 90, height: 26 });
+        }
+      } catch (sigErr) {
+        console.warn('[PDF] Could not embed signature image:', sigErr);
       }
 
       // Signature line & label

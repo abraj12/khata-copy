@@ -879,48 +879,87 @@ export const GstBillingView: React.FC = () => {
                         )}
                       </div>
 
-                      {/* Row 1: Description of Goods & Catalogue Quick-Fill */}
-                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                        <div className={availableProducts.length > 0 ? 'sm:col-span-7' : 'sm:col-span-12'}>
-                          <label className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1">
-                            Description of Goods <span className="text-rose-500">*</span>
+                      {/* Row 1: Description of Goods with Integrated Product Selection Option */}
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-1">
+                          <label className="text-[11px] font-bold text-[var(--khata-text-muted)] flex items-center gap-1.5">
+                            <span>Description of Goods</span>
+                            <span className="text-rose-500">*</span>
                           </label>
-                          <input
-                            type="text"
-                            value={item.description}
-                            onChange={(e) => handleItemChange(item.id, 'description', e.target.value)}
-                            placeholder="e.g. HDF BOARD 12mm HDF (OSB) 2.44 x 1.22"
-                            className="neu-input w-full font-medium"
-                          />
+
+                          {/* Option to select product directly in description */}
+                          {availableProducts.length > 0 && (
+                            <div className="flex items-center gap-1.5 text-xs">
+                              <Package className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
+                              <select
+                                onChange={(e) => {
+                                  const selectedProd = availableProducts.find(
+                                    (p) => p.id === Number(e.target.value)
+                                  );
+                                  if (selectedProd) {
+                                    handleSelectProduct(item.id, selectedProd);
+                                  }
+                                }}
+                                value={item.productId || ''}
+                                className="neu-input py-1 px-2 text-xs font-semibold rounded-lg border border-[var(--khata-border)] cursor-pointer"
+                                style={{ background: 'var(--khata-surface)', color: 'var(--khata-accent)' }}
+                              >
+                                <option value="">🔍 Select Product from Catalogue...</option>
+                                {availableProducts.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.name} {p.hsn_code ? `[HSN: ${p.hsn_code}]` : ''} (₹{p.buying_price})
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
                         </div>
 
-                        {availableProducts.length > 0 && (
-                          <div className="sm:col-span-5">
-                            <label className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1">
-                              Catalogue Quick-Fill
-                            </label>
-                            <select
-                              onChange={(e) => {
-                                const selectedProd = availableProducts.find(
-                                  (p) => p.id === Number(e.target.value)
-                                );
-                                if (selectedProd) {
-                                  handleSelectProduct(item.id, selectedProd);
-                                }
-                              }}
-                              defaultValue=""
-                              className="neu-input w-full text-xs font-medium"
-                              style={{ background: 'var(--khata-surface)', color: 'var(--khata-text)' }}
-                            >
-                              <option value="" disabled>
-                                🔍 Select from Products...
+                        {/* Description input with integrated autocomplete datalist */}
+                        <div className="relative">
+                          <input
+                            type="text"
+                            list={`product-options-${item.id}`}
+                            value={item.description}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              const matched = availableProducts.find((p) => p.name === val);
+                              if (matched) {
+                                handleSelectProduct(item.id, matched);
+                              } else {
+                                handleItemChange(item.id, 'description', val);
+                              }
+                            }}
+                            placeholder="Type description or select a product above / start typing for catalogue..."
+                            className="neu-input w-full font-medium"
+                          />
+                          <datalist id={`product-options-${item.id}`}>
+                            {availableProducts.map((p) => (
+                              <option key={p.id} value={p.name}>
+                                {p.hsn_code ? `HSN: ${p.hsn_code} | ` : ''}₹{p.buying_price}
                               </option>
-                              {availableProducts.map((p) => (
-                                <option key={p.id} value={p.id}>
-                                  {p.name} {p.hsn_code ? `[HSN: ${p.hsn_code}]` : ''} (₹{p.buying_price})
-                                </option>
-                              ))}
-                            </select>
+                            ))}
+                          </datalist>
+                        </div>
+
+                        {/* Linked product indicator */}
+                        {item.productId && (
+                          <div className="flex items-center justify-between text-[11px] px-2.5 py-1 rounded-md bg-[var(--khata-surface)] border border-[var(--khata-border)] text-[var(--khata-accent)]">
+                            <span className="flex items-center gap-1 font-semibold truncate">
+                              <Package className="w-3 h-3 flex-shrink-0" />
+                              <span>Linked Product: {availableProducts.find((p) => p.id === item.productId)?.name || 'Custom Product'}</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setItems((prev) =>
+                                  prev.map((i) => (i.id === item.id ? { ...i, productId: null } : i))
+                                );
+                              }}
+                              className="text-[10px] text-[var(--khata-text-muted)] hover:text-rose-500 font-bold ml-2 underline cursor-pointer"
+                            >
+                              Unlink
+                            </button>
                           </div>
                         )}
                       </div>

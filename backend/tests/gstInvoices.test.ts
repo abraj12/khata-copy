@@ -394,6 +394,8 @@ describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
     expect(pdfBuffer.length).toBeGreaterThan(1000);
     // Standard PDF header signature
     expect(pdfBuffer.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+    // Verifies that the authorized signature image is embedded in the PDF
+    expect(pdfBuffer.toString('latin1')).toContain('/Image');
   });
 
   it('9. Lists invoices with pagination and search', async () => {
