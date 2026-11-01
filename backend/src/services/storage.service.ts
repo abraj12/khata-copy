@@ -98,6 +98,8 @@ export class StorageService {
           accessKeyId: env.R2_ACCESS_KEY_ID!,
           secretAccessKey: env.R2_SECRET_ACCESS_KEY!,
         },
+        requestChecksumCalculation: 'WHEN_REQUIRED',
+        responseChecksumValidation: 'WHEN_REQUIRED',
       });
     }
   }
@@ -172,8 +174,6 @@ export class StorageService {
     const command = new PutObjectCommand({
       Bucket: env.R2_BUCKET_NAME!,
       Key: objectKey,
-      ContentType: cleanContentType,
-      ContentLength: sizeBytes,
     });
 
     const expiresIn = 300; // 5 minutes
@@ -183,9 +183,7 @@ export class StorageService {
       uploadUrl,
       objectKey,
       expiresIn,
-      headers: {
-        'Content-Type': cleanContentType,
-      },
+      headers: {},
     };
   }
 
