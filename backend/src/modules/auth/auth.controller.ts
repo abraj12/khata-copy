@@ -138,7 +138,22 @@ export class AuthController {
 
     if (!req.session.csrfToken) {
       req.session.csrfToken = generateCsrfToken();
-      await new Promise<void>((resolve) => req.session.save(() => resolve()));
+      try {
+        await new Promise<void>((resolve, reject) => {
+          req.session.save((err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+      } catch (saveErr) {
+        console.error('[AUTH ERROR] CSRF token session save failure:', saveErr);
+        res.status(503).json({
+          success: false,
+          code: 'SESSION_STORE_UNAVAILABLE',
+          message: 'Failed to persist session token. Service temporarily unavailable.',
+        });
+        return;
+      }
     }
 
     res.status(200).json({

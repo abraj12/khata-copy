@@ -32,6 +32,8 @@ export const EXPECTED_MIGRATIONS = [
   '001_auth_tables.sql',
   '002_khata_transactions.sql',
   '003_idempotency_and_hardening.sql',
+  '004_integer_quantity_and_money_constraints.sql',
+  '005_search_indexes_and_identity_constraints.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [
@@ -147,11 +149,12 @@ export async function checkDatabaseReadiness(): Promise<ReadinessReport> {
       checks,
     };
   } catch (err) {
+    console.error('[DATABASE READINESS ERROR]', (err as Error).message);
     return {
       isReady: false,
       latencyMs: Date.now() - start,
       checks,
-      error: (err as Error).message,
+      error: 'Database connection or query failed',
     };
   }
 }

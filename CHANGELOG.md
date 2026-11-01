@@ -4,6 +4,24 @@ All notable changes to the Khata project are documented in this file.
 
 ---
 
+## [1.4.0] - 2026-11-01
+
+### Added
+- **Accessible Searchable Combobox Pickers:** Introduced `frontend/src/components/SearchablePicker.tsx` replacing native select dropdowns in the New Udhar form for both Customer selection and Product selection. Features search icon, clear query button, keyboard navigation (Up/Down/Enter/Escape), ARIA live region, desktop popover dropdown, and mobile bottom sheet with body scroll-lock.
+- **Debounced Remote Search Hook (`useRemoteSearch`):** Implemented `frontend/src/hooks/useRemoteSearch.ts` with 280ms debouncing, in-flight cancellation via `AbortController`, monotonic request ID tracking against race conditions, bounded pagination ("Load More"), and error/retry states.
+- **Server-Side Search & Bounded Pagination APIs:**
+  - `GET /api/v1/khata/customers`: supports `search`, `limit`, and `offset` with Indian phone digits normalization and composite indexes.
+  - `GET /api/v1/products`: supports `search`, `limit`, and `offset` with wildcard escaping and pagination metadata.
+- **Database Migration 005:** Added `backend/migrations/005_search_indexes_and_identity_constraints.sql` introducing composite indexes on `customers (normalized_name, id)`, `customers (normalized_phone)`, `products (name, id)`, and `udhar_transactions (customer_id, transaction_date DESC, id DESC)`.
+- **Backend & Readiness Security Hardening:**
+  - Checked out single dedicated PostgreSQL client for advisory lock acquisition and release in `loginAttemptStore.ts`.
+  - Propagated CSRF session save failures with HTTP 503 in `auth.controller.ts`.
+  - Masked raw database traces, passwords, and connection strings in `errorHandler.ts` and `/api/v1/health/ready`.
+  - Added production guard in `env.ts` rejecting `sslmode=disable`.
+- **Search API Automated Test Suite:** Added 9 automated tests in `backend/tests/search.api.test.ts` verifying case-insensitive product search, bounded pagination, wildcard escaping, phone normalization, stable ordering, default parameters, and aggregate independence. All 58 backend tests passing.
+
+---
+
 ## [1.3.0] - 2026-11-01
 
 ### Added

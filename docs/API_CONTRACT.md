@@ -59,7 +59,7 @@ All API endpoints return JSON conforming to standard canonical envelopes:
 ### 2.2 Deep Readiness Probe
 - **Method & Route:** `GET /api/v1/health/ready`
 - **Authentication:** Public
-- **Checks Performed:** PostgreSQL connectivity, `schema_migrations` table existence, migration files verified (`001`, `002`, `003`), 9 core tables verified.
+- **Checks Performed:** PostgreSQL connectivity, `schema_migrations` table existence, migration files verified (`001` through `005`), 9 core tables verified. In production, database credentials, server traces, and raw connection strings are strictly masked.
 - **Response (200 OK):**
 ```json
 {
@@ -71,13 +71,45 @@ All API endpoints return JSON conforming to standard canonical envelopes:
       "connection": true,
       "schemaMigrationsTable": true,
       "migrationsApplied": {
-        "expected": ["001_auth_tables.sql", "002_khata_transactions.sql", "003_idempotency_and_hardening.sql"],
-        "found": ["001_auth_tables.sql", "002_khata_transactions.sql", "003_idempotency_and_hardening.sql"],
+        "expected": [
+          "001_auth_tables.sql",
+          "002_khata_transactions.sql",
+          "003_idempotency_and_hardening.sql",
+          "004_integer_quantity_and_money_constraints.sql",
+          "005_search_indexes_and_identity_constraints.sql"
+        ],
+        "found": [
+          "001_auth_tables.sql",
+          "002_khata_transactions.sql",
+          "003_idempotency_and_hardening.sql",
+          "004_integer_quantity_and_money_constraints.sql",
+          "005_search_indexes_and_identity_constraints.sql"
+        ],
         "missing": []
       },
       "coreTables": {
-        "expected": ["session", "login_attempts", "products", "customers", "udhar_transactions", "udhar_items", "payments", "payment_allocations", "idempotency_keys"],
-        "found": ["session", "login_attempts", "products", "customers", "udhar_transactions", "udhar_items", "payments", "payment_allocations", "idempotency_keys"],
+        "expected": [
+          "session",
+          "login_attempts",
+          "products",
+          "customers",
+          "udhar_transactions",
+          "udhar_items",
+          "payments",
+          "payment_allocations",
+          "idempotency_keys"
+        ],
+        "found": [
+          "session",
+          "login_attempts",
+          "products",
+          "customers",
+          "udhar_transactions",
+          "udhar_items",
+          "payments",
+          "payment_allocations",
+          "idempotency_keys"
+        ],
         "missing": []
       }
     }
@@ -145,21 +177,37 @@ All API endpoints return JSON conforming to standard canonical envelopes:
 
 ## 4. Products Module Endpoints
 
-### 4.1 List Products
+### 4.1 List Products (Searchable & Bounded Pagination)
 - **Method & Route:** `GET /api/v1/products`
-- **Query Params:** `search` (optional string)
+- **Query Params:**
+  - `search` (optional string): Case-insensitive partial name match with wildcard escaping (`%`, `_`).
+  - `limit` (optional integer): Page size, default `25`, maximum `50`.
+  - `offset` (optional integer): Pagination offset, default `0`.
 - **Response (200 OK):**
 ```json
 {
   "success": true,
+  "products": [
+    {
+      "id": 1,
+      "name": "Fevicol SH 1kg",
+      "buying_price": "400.00",
+      "created_at": "2026-11-01T00:00:00.000Z",
+      "updated_at": "2026-11-01T00:00:00.000Z",
+      "archived_at": null
+    }
+  ],
+  "pagination": {
+    "limit": 25,
+    "offset": 0,
+    "hasMore": false,
+    "nextOffset": null
+  },
   "data": [
     {
-      "id": "prd_01hxyz...",
-      "name": "Basmati Rice 1kg",
-      "unit": "kg",
-      "default_price": "120.00",
-      "is_active": true,
-      "created_at": "2026-11-01T00:00:00.000Z"
+      "id": 1,
+      "name": "Fevicol SH 1kg",
+      "buying_price": "400.00"
     }
   ]
 }
@@ -170,152 +218,144 @@ All API endpoints return JSON conforming to standard canonical envelopes:
 - **Request Body:**
 ```json
 {
-  "name": "Toor Dal 1kg",
-  "unit": "kg",
-  "default_price": 160.00
+  "name": "Fevicol SH 1kg",
+  "buying_price": 400.00
 }
 ```
+- **Validation:** Buying price must be non-negative with $\le 2$ decimal places. Rejects exponential notation.
 - **Response (201 Created):**
 ```json
 {
   "success": true,
   "data": {
-    "id": "prd_01hxyz...",
-    "name": "Toor Dal 1kg",
-    "unit": "kg",
-    "default_price": "160.00",
-    "is_active": true
+    "id": 1,
+    "name": "Fevicol SH 1kg",
+    "buying_price": "400.00"
   }
 }
 ```
 
 ### 4.3 Update Product
-- **Method & Route:** `PUT /api/v1/products/:id`
-- **Request Body:** Fields to update (`name`, `unit`, `default_price`).
+- **Method & Route:** `PATCH /api/v1/products/:id`
+- **Request Body:** Fields to update (`name`, `buying_price`).
 - **Response (200 OK):** Updated product object.
 
-### 4.4 Soft-Delete Product
+### 4.4 Archive Product
 - **Method & Route:** `DELETE /api/v1/products/:id`
-- **Response (200 OK):** `{ "success": true, "data": { "id": "...", "is_active": false } }`
+- **Response (200 OK):** `{ "success": true, "message": "Product archived." }`
 
 ---
 
-## 5. Customers Module Endpoints
+## 5. Khata Module Endpoints
 
-### 5.1 List Customers
-- **Method & Route:** `GET /api/v1/customers`
-- **Query Params:** `search` (optional)
+### 5.1 List Customers (Searchable & Bounded Pagination)
+- **Method & Route:** `GET /api/v1/khata/customers`
+- **Query Params:**
+  - `search` (optional string): Matches normalized name or phone digits.
+  - `limit` (optional integer): Page size, default `25`, maximum `50`.
+  - `offset` (optional integer): Pagination offset, default `0`.
 - **Response (200 OK):**
 ```json
 {
   "success": true,
-  "data": [
+  "customers": [
     {
-      "id": "cst_01hxyz...",
-      "name": "Ramesh Kumar",
+      "id": 5,
+      "name": "Ramesh Patel",
       "phone": "9876543210",
-      "address": "Shop #4, Main Market",
-      "balance": "3450.00",
-      "created_at": "2026-10-31T12:00:00.000Z"
+      "totalUdhar": "3400.00",
+      "totalReceived": "1500.00",
+      "outstanding": "1900.00",
+      "created_at": "2026-11-01T00:00:00.000Z"
     }
-  ]
+  ],
+  "pagination": {
+    "limit": 25,
+    "offset": 0,
+    "hasMore": false,
+    "nextOffset": null
+  },
+  "data": [ ... ]
 }
 ```
 
-### 5.2 Create Customer
-- **Method & Route:** `POST /api/v1/customers`
-- **Request Body:**
-```json
-{
-  "name": "Suresh Sharma",
-  "phone": "9811223344",
-  "address": "House 12, Civil Lines",
-  "notes": "Regular dairy customer"
-}
-```
-- **Response (201 Created):**
+### 5.2 Global Ledger Summary
+- **Method & Route:** `GET /api/v1/khata/summary`
+- **Response (200 OK):**
 ```json
 {
   "success": true,
-  "data": {
-    "id": "cst_01hxyz...",
-    "name": "Suresh Sharma",
-    "phone": "9811223344",
-    "balance": "0.00"
+  "summary": {
+    "totalCustomers": 12,
+    "totalOutstanding": "22000.00",
+    "totalReceived": "32000.00"
   }
 }
 ```
+
+### 5.3 Customer Ledger Detail & History
+- **Method & Route:** `GET /api/v1/khata/customers/:customerId/history`
+- **Response (200 OK):** Customer details, transactions array with snapshots, payments array with allocations.
 
 ---
 
-## 6. Khata Ledger Endpoints
+## 6. Khata Transactions & Payment Allocation
 
-### 6.1 Create Udhar (Credit Sale)
-- **Method & Route:** `POST /api/v1/khata/udhar`
-- **Headers:** `Idempotency-Key` (recommended)
+### 6.1 Create Udhar Transaction (Atomic Multi-Line)
+- **Method & Route:** `POST /api/v1/khata/transactions`
+- **Headers:** `Idempotency-Key: <key>`
 - **Request Body:**
 ```json
 {
-  "customerId": "cst_01hxyz...",
-  "transactionDate": "2026-11-01",
-  "notes": "Weekly ration items",
+  "customer": {
+    "id": 5,
+    "name": "Ramesh Patel",
+    "phone": "9876543210"
+  },
   "items": [
     {
-      "productId": "prd_01hxyz...",
-      "itemName": "Basmati Rice 1kg",
-      "quantity": 2,
-      "unitPrice": 120.00
+      "productId": 1,
+      "quantity": 3,
+      "sellingPrice": 550.00
     },
     {
-      "itemName": "Mustard Oil 1L",
-      "quantity": 1,
-      "unitPrice": 175.50
+      "productId": 2,
+      "quantity": 5,
+      "sellingPrice": 350.00
     }
-  ]
+  ],
+  "initialPayment": 1000.00,
+  "note": "Hardware construction materials",
+  "idempotencyKey": "tx_uuid..."
 }
 ```
+- **Validation Rules:**
+  - `quantity`: Positive integer $[1, 1000000]$. Rejects `1.5`, `2.00`.
+  - `sellingPrice`: Strict decimal $\ge 0$ with $\le 2$ decimal places.
+  - `initialPayment`: Optional non-negative decimal not exceeding transaction total.
 - **Response (201 Created):**
 ```json
 {
   "success": true,
   "data": {
-    "id": "udh_01hxyz...",
-    "customerId": "cst_01hxyz...",
-    "transactionDate": "2026-11-01",
-    "totalAmount": "415.50",
-    "remainingAmount": "415.50",
-    "status": "UNPAID",
-    "items": [
-      {
-        "id": "itm_01...",
-        "itemName": "Basmati Rice 1kg",
-        "quantity": "2",
-        "unitPrice": "120.00",
-        "subtotal": "240.00"
-      },
-      {
-        "id": "itm_02...",
-        "itemName": "Mustard Oil 1L",
-        "quantity": "1",
-        "unitPrice": "175.50",
-        "subtotal": "175.50"
-      }
-    ]
+    "transactionId": 14,
+    "customerId": 5,
+    "totalAmount": "3400.00",
+    "initialPayment": "1000.00",
+    "outstanding": "2400.00"
   }
 }
 ```
 
-### 6.2 Settle Payment (Record Payment with FIFO Allocation)
-- **Method & Route:** `POST /api/v1/khata/payments`
-- **Headers:** `Idempotency-Key` (recommended)
+### 6.2 Record Customer Payment (FIFO Allocation)
+- **Method & Route:** `POST /api/v1/khata/customers/:customerId/payments`
+- **Headers:** `Idempotency-Key: <key>`
 - **Request Body:**
 ```json
 {
-  "customerId": "cst_01hxyz...",
-  "amount": 415.50,
-  "paymentMode": "UPI",
-  "notes": "Paid via GooglePay",
-  "referenceNumber": "UPI/20261101/9981"
+  "amount": 500.00,
+  "note": "Cash partial payment",
+  "idempotencyKey": "pay_uuid..."
 }
 ```
 - **Response (201 Created):**
@@ -323,19 +363,12 @@ All API endpoints return JSON conforming to standard canonical envelopes:
 {
   "success": true,
   "data": {
-    "payment": {
-      "id": "pay_01hxyz...",
-      "customerId": "cst_01hxyz...",
-      "amount": "415.50",
-      "paymentMode": "UPI",
-      "paymentDate": "2026-11-01T04:15:00.000Z"
-    },
+    "paymentId": 8,
+    "amount": "500.00",
     "allocations": [
       {
-        "udharTransactionId": "udh_01hxyz...",
-        "amountAllocated": "415.50",
-        "remainingAmountAfter": "0.00",
-        "statusAfter": "PAID"
+        "transactionId": 14,
+        "amount": "500.00"
       }
     ]
   }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { apiClient } from '../../lib/apiClient.js';
 import {
   Users,
@@ -16,9 +16,12 @@ import {
   FileText,
   DollarSign,
   Trash2,
+  Loader2,
 } from 'lucide-react';
 import Decimal from 'decimal.js';
 import { formatCurrency, formatQuantity, safeDecimal, parseStrictDecimal, parseStrictInteger } from '../../lib/formatters.js';
+import { SearchablePicker } from '../../components/SearchablePicker.js';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 
 interface SummaryData {
   totalCustomers: number | string;
@@ -107,9 +110,18 @@ interface CustomerHistoryData {
 }
 
 interface UdharFormLine {
+  lineId: string;
   productId: number | '';
+  selectedProduct: ProductReference | null;
   quantity: string;
   sellingPrice: string;
+}
+
+function generateLineId(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `line_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 }
 
 function generateIdempotencyKey(prefix: string): string {
@@ -127,19 +139,26 @@ export const KhataLedgerView: React.FC = () => {
     totalReceived: '0.00',
   });
   const [customers, setCustomers] = useState<CustomerListItem[]>([]);
-  const [activeProducts, setActiveProducts] = useState<ProductReference[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [customerPagination, setCustomerPagination] = useState<{
+    limit: number;
+    offset: number;
+    hasMore: boolean;
+    nextOffset: number | null;
+  }>({ limit: 25, offset: 0, hasMore: false, nextOffset: null });
+  const [isLoadingCustomers, setIsLoadingCustomers] = useState(true);
+  const [isLoadingMoreCustomers, setIsLoadingMoreCustomers] = useState(false);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 280);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // New Udhar Modal state
   const [isNewUdharOpen, setIsNewUdharOpen] = useState(false);
   const [udharIdempotencyKey, setUdharIdempotencyKey] = useState<string>('');
-  const [selectedExistingCustomerId, setSelectedExistingCustomerId] = useState<number | ''>('');
+  const [selectedExistingCustomer, setSelectedExistingCustomer] = useState<CustomerListItem | null>(null);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
   const [udharLines, setUdharLines] = useState<UdharFormLine[]>([
-    { productId: '', quantity: '1', sellingPrice: '' },
+    { lineId: generateLineId(), productId: '', selectedProduct: null, quantity: '1', sellingPrice: '' },
   ]);
   const [initialPayment, setInitialPayment] = useState('');
   const [transactionNote, setTransactionNote] = useState('');
@@ -166,34 +185,114 @@ export const KhataLedgerView: React.FC = () => {
     setTimeout(() => setNotification(null), 4000);
   };
 
-  // Fetch initial summary & customer list
-  const fetchOverviewData = async () => {
+  // Fetch initial summary & customer ledger with server-side pagination (products fetched on-demand)
+  const fetchSummary = async () => {
     try {
-      setIsLoading(true);
-      const [sumRes, custRes, prodRes] = await Promise.all([
-        apiClient<{ success: boolean; summary?: SummaryData; data?: SummaryData }>('/api/v1/khata/summary'),
-        apiClient<{ success: boolean; customers?: CustomerListItem[]; data?: CustomerListItem[] }>('/api/v1/khata/customers'),
-        apiClient<{ success: boolean; data?: ProductReference[] }>('/api/v1/products'),
-      ]);
-
+      const sumRes = await apiClient<{ success: boolean; summary?: SummaryData; data?: SummaryData }>(
+        '/api/v1/khata/summary'
+      );
       const sumData = sumRes.data.summary || sumRes.data.data || {
         totalCustomers: 0,
         totalOutstanding: '0.00',
         totalReceived: '0.00',
       };
       setSummary(sumData);
-      setCustomers(custRes.data.customers || custRes.data.data || []);
-      setActiveProducts(prodRes.data.data || []);
     } catch (err) {
-      showNotification('error', (err as Error).message || 'Failed to load Khata data.');
+      showNotification('error', (err as Error).message || 'Failed to load Khata summary.');
+    }
+  };
+
+  const fetchCustomers = async (queryText: string, offset: number = 0, append: boolean = false) => {
+    try {
+      if (append) {
+        setIsLoadingMoreCustomers(true);
+      } else {
+        setIsLoadingCustomers(true);
+      }
+
+      const res = await apiClient<{
+        success: boolean;
+        customers?: CustomerListItem[];
+        data?: CustomerListItem[];
+        pagination?: { limit: number; offset: number; hasMore: boolean; nextOffset: number | null };
+      }>(
+        `/api/v1/khata/customers?search=${encodeURIComponent(queryText)}&limit=25&offset=${offset}`
+      );
+
+      const items = res.data.customers || res.data.data || [];
+      const pagination = res.data.pagination || {
+        limit: 25,
+        offset,
+        hasMore: false,
+        nextOffset: null,
+      };
+
+      if (append) {
+        setCustomers((prev) => [...prev, ...items]);
+      } else {
+        setCustomers(items);
+      }
+      setCustomerPagination(pagination);
+    } catch (err) {
+      showNotification('error', (err as Error).message || 'Failed to load customers.');
     } finally {
-      setIsLoading(false);
+      setIsLoadingCustomers(false);
+      setIsLoadingMoreCustomers(false);
     }
   };
 
   useEffect(() => {
-    fetchOverviewData();
+    fetchSummary();
   }, []);
+
+  useEffect(() => {
+    fetchCustomers(debouncedSearch, 0, false);
+  }, [debouncedSearch]);
+
+  const handleLoadMoreCustomers = () => {
+    if (customerPagination.hasMore && customerPagination.nextOffset !== null && !isLoadingMoreCustomers) {
+      fetchCustomers(debouncedSearch, customerPagination.nextOffset, true);
+    }
+  };
+
+  // Search fetchers for SearchablePicker components
+  const handleSearchCustomerPicker = useCallback(
+    async (queryText: string, offset: number, signal: AbortSignal) => {
+      const res = await apiClient<{
+        success: boolean;
+        customers?: CustomerListItem[];
+        data?: CustomerListItem[];
+        pagination?: { limit: number; offset: number; hasMore: boolean; nextOffset: number | null };
+      }>(
+        `/api/v1/khata/customers?search=${encodeURIComponent(queryText)}&limit=25&offset=${offset}`,
+        { signal }
+      );
+      const items = res.data.customers || res.data.data || [];
+      const hasMore = Boolean(res.data.pagination?.hasMore);
+      const nextOffset = res.data.pagination?.nextOffset ?? (hasMore ? offset + items.length : null);
+      return { items, hasMore, nextOffset };
+    },
+    []
+  );
+
+  const handleSearchProductPicker = useCallback(
+    async (queryText: string, offset: number, signal: AbortSignal) => {
+      const res = await apiClient<{
+        success: boolean;
+        products?: ProductReference[];
+        data?: ProductReference[];
+        pagination?: { limit: number; offset: number; hasMore: boolean; nextOffset: number | null };
+      }>(
+        `/api/v1/products?search=${encodeURIComponent(queryText)}&limit=25&offset=${offset}`,
+        { signal }
+      );
+      const items = res.data.products || res.data.data || [];
+      const hasMore = Boolean(res.data.pagination?.hasMore);
+      const nextOffset = res.data.pagination?.nextOffset ?? (hasMore ? offset + items.length : null);
+      return { items, hasMore, nextOffset };
+    },
+    []
+  );
 
   // Fetch individual customer history with race-condition prevention & AbortController
   const fetchCustomerHistory = async (customerId: number) => {
@@ -281,22 +380,78 @@ export const KhataLedgerView: React.FC = () => {
     return Decimal.max(0, calculatedTotalAmount.minus(initPay));
   }, [calculatedTotalAmount, initialPayment]);
 
-  // Form row actions
+  // Form row actions with stable lineId
   const handleAddLine = () => {
-    setUdharLines((prev) => [...prev, { productId: '', quantity: '1', sellingPrice: '' }]);
+    setUdharLines((prev) => [
+      ...prev,
+      { lineId: generateLineId(), productId: '', selectedProduct: null, quantity: '1', sellingPrice: '' },
+    ]);
   };
 
-  const handleRemoveLine = (index: number) => {
+  const handleRemoveLine = (lineId: string) => {
     if (udharLines.length <= 1) return;
-    setUdharLines((prev) => prev.filter((_, i) => i !== index));
+    setUdharLines((prev) => prev.filter((line) => line.lineId !== lineId));
   };
 
-  const handleLineChange = (index: number, field: keyof UdharFormLine, value: string | number) => {
-    setUdharLines((prev) => {
-      const updated = [...prev];
-      updated[index] = { ...updated[index], [field]: value };
-      return updated;
-    });
+  const handleLineFieldChange = (
+    lineId: string,
+    field: 'quantity' | 'sellingPrice',
+    value: string
+  ) => {
+    setUdharLines((prev) =>
+      prev.map((line) => {
+        if (line.lineId === lineId) {
+          return { ...line, [field]: value };
+        }
+        return line;
+      })
+    );
+  };
+
+  const handleProductSelect = (lineId: string, product: ProductReference) => {
+    setUdharLines((prev) =>
+      prev.map((line) => {
+        if (line.lineId === lineId) {
+          return {
+            ...line,
+            productId: product.id,
+            selectedProduct: product,
+            // Keep sellingPrice intact — owner specifies custom selling price
+          };
+        }
+        return line;
+      })
+    );
+  };
+
+  const handleProductClear = (lineId: string) => {
+    setUdharLines((prev) =>
+      prev.map((line) => {
+        if (line.lineId === lineId) {
+          return {
+            ...line,
+            productId: '',
+            selectedProduct: null,
+          };
+        }
+        return line;
+      })
+    );
+  };
+
+  const handleSelectCustomer = (customer: CustomerListItem) => {
+    setSelectedExistingCustomer(customer);
+    setNewCustomerName('');
+    setNewCustomerPhone('');
+  };
+
+  const handleClearCustomer = () => {
+    setSelectedExistingCustomer(null);
+  };
+
+  const handleCreateCustomerFromPicker = (queryName: string) => {
+    setSelectedExistingCustomer(null);
+    setNewCustomerName(queryName);
   };
 
   // Submit New Udhar
@@ -306,13 +461,12 @@ export const KhataLedgerView: React.FC = () => {
 
     // Validate customer
     let customerPayload: { id: number | null; name: string; phone: string | null };
-    if (selectedExistingCustomerId) {
-      const cust = customers.find((c) => c.id === selectedExistingCustomerId);
-      if (!cust) {
-        setUdharFormError('Selected customer not found.');
-        return;
-      }
-      customerPayload = { id: cust.id, name: cust.name, phone: cust.phone };
+    if (selectedExistingCustomer) {
+      customerPayload = {
+        id: selectedExistingCustomer.id,
+        name: selectedExistingCustomer.name,
+        phone: selectedExistingCustomer.phone,
+      };
     } else {
       if (!newCustomerName.trim()) {
         setUdharFormError('Customer name is required for new customers.');
@@ -330,12 +484,19 @@ export const KhataLedgerView: React.FC = () => {
     for (let i = 0; i < udharLines.length; i++) {
       const line = udharLines[i];
       if (!line.productId) {
-        setUdharFormError(`Please select a product for line #${i + 1}.`);
+        setUdharFormError(`Please select a reference product for item line #${i + 1}.`);
         return;
       }
       try {
         const qty = parseStrictInteger(line.quantity, { fieldName: `Line #${i + 1} quantity` });
-        const priceDec = parseStrictDecimal(line.sellingPrice, { maxDecimalPlaces: 2, fieldName: `Line #${i + 1} selling price` });
+        if (qty < 1 || qty > 1000000) {
+          setUdharFormError(`Line #${i + 1} quantity must be a whole number between 1 and 1,000,000.`);
+          return;
+        }
+        const priceDec = parseStrictDecimal(line.sellingPrice, {
+          maxDecimalPlaces: 2,
+          fieldName: `Line #${i + 1} selling price`,
+        });
         if (priceDec.lessThan(0)) {
           setUdharFormError(`Line #${i + 1} selling price cannot be negative.`);
           return;
@@ -359,7 +520,10 @@ export const KhataLedgerView: React.FC = () => {
     let initPaymentDec = new Decimal(0);
     if (initialPayment && initialPayment.trim()) {
       try {
-        initPaymentDec = parseStrictDecimal(initialPayment, { maxDecimalPlaces: 2, fieldName: 'Initial payment' });
+        initPaymentDec = parseStrictDecimal(initialPayment, {
+          maxDecimalPlaces: 2,
+          fieldName: 'Initial payment',
+        });
       } catch (valErr) {
         setUdharFormError((valErr as Error).message);
         return;
@@ -402,15 +566,17 @@ export const KhataLedgerView: React.FC = () => {
       // Clear pending operation state on confirmed success
       setIsNewUdharOpen(false);
       setUdharIdempotencyKey('');
-      setSelectedExistingCustomerId('');
+      setSelectedExistingCustomer(null);
       setNewCustomerName('');
       setNewCustomerPhone('');
-      setUdharLines([{ productId: '', quantity: '1', sellingPrice: '' }]);
+      setUdharLines([
+        { lineId: generateLineId(), productId: '', selectedProduct: null, quantity: '1', sellingPrice: '' },
+      ]);
       setInitialPayment('');
       setTransactionNote('');
 
       showNotification('success', 'Udhar transaction recorded successfully.');
-      await fetchOverviewData();
+      await Promise.all([fetchSummary(), fetchCustomers(debouncedSearch, 0, false)]);
 
       const createdCustId = res.data?.data?.customerId || res.data?.customerId;
       if (createdCustId) {
@@ -472,7 +638,11 @@ export const KhataLedgerView: React.FC = () => {
       setPaymentNote('');
       setPaymentIdempotencyKey(generateIdempotencyKey('pay'));
       showNotification('success', `Payment of ${formatCurrency(payDec)} recorded and allocated.`);
-      await Promise.all([fetchCustomerHistory(activeCustomerDetailId), fetchOverviewData()]);
+      await Promise.all([
+        fetchCustomerHistory(activeCustomerDetailId),
+        fetchSummary(),
+        fetchCustomers(debouncedSearch, 0, false),
+      ]);
     } catch (err) {
       // Retain the idempotency key for safe retry!
       setPaymentError((err as Error).message || 'Failed to record payment.');
@@ -492,13 +662,6 @@ export const KhataLedgerView: React.FC = () => {
       return next;
     });
   };
-
-  // Filter customers by name or phone
-  const filteredCustomers = customers.filter(
-    (c) =>
-      c.name.toLowerCase().includes(search.toLowerCase()) ||
-      (c.phone && c.phone.includes(search))
-  );
 
   return (
     <div className="space-y-6">
@@ -617,80 +780,104 @@ export const KhataLedgerView: React.FC = () => {
 
       {/* Customer List Card */}
       <div className="neu-card overflow-hidden">
-        {isLoading ? (
-          <div className="p-8 text-center text-sm text-[var(--khata-text-muted)] font-medium">
-            Loading Khata ledger...
+        {isLoadingCustomers ? (
+          <div className="p-8 text-center text-sm text-[var(--khata-text-muted)] font-medium flex items-center justify-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin text-[var(--khata-accent)]" />
+            <span>Loading Khata ledger...</span>
           </div>
-        ) : filteredCustomers.length === 0 ? (
+        ) : customers.length === 0 ? (
           <div className="p-8 text-center text-sm text-[var(--khata-text-muted)]">
             {search
               ? 'No customers found matching search.'
               : 'No Udhar customers yet. Click "New Udhar" above to record customer credit.'}
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
-                  <th className="py-3.5 px-4 sm:px-6">Customer</th>
-                  <th className="py-3.5 px-4 sm:px-6 text-right">Total Udhar</th>
-                  <th className="py-3.5 px-4 sm:px-6 text-right">Total Received</th>
-                  <th className="py-3.5 px-4 sm:px-6 text-right">Outstanding Due</th>
-                  <th className="py-3.5 px-4 sm:px-6 text-center">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--khata-border)] text-sm">
-                {filteredCustomers.map((c) => {
-                  const outDec = safeDecimal(c.outstanding);
-                  const isSettled = outDec.lessThanOrEqualTo(0);
-                  return (
-                    <tr
-                      key={c.id}
-                      onClick={() => handleOpenCustomerDetail(c.id)}
-                      className="hover:bg-[var(--khata-surface-inset)]/70 cursor-pointer transition-colors"
-                      tabIndex={0}
-                      role="button"
-                      aria-label={`View ledger for ${c.name}`}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          handleOpenCustomerDetail(c.id);
-                        }
-                      }}
-                    >
-                      <td className="py-3.5 px-4 sm:px-6">
-                        <div className="font-semibold text-[var(--khata-text)]">{c.name}</div>
-                        {c.phone && (
-                          <div className="text-xs text-[var(--khata-text-muted)] font-mono">{c.phone}</div>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4 sm:px-6 text-right tabular-numbers font-medium text-[var(--khata-text)]">
-                        {formatCurrency(c.totalUdhar)}
-                      </td>
-                      <td className="py-3.5 px-4 sm:px-6 text-right tabular-numbers font-medium text-[var(--khata-success)]">
-                        {formatCurrency(c.totalReceived)}
-                      </td>
-                      <td
-                        className={`py-3.5 px-4 sm:px-6 text-right tabular-numbers font-bold ${
-                          isSettled ? 'text-[var(--khata-text-muted)]' : 'text-[var(--khata-danger)]'
-                        }`}
+          <div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
+                    <th className="py-3.5 px-4 sm:px-6">Customer</th>
+                    <th className="py-3.5 px-4 sm:px-6 text-right">Total Udhar</th>
+                    <th className="py-3.5 px-4 sm:px-6 text-right">Total Received</th>
+                    <th className="py-3.5 px-4 sm:px-6 text-right">Outstanding Due</th>
+                    <th className="py-3.5 px-4 sm:px-6 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--khata-border)] text-sm">
+                  {customers.map((c) => {
+                    const outDec = safeDecimal(c.outstanding);
+                    const isSettled = outDec.lessThanOrEqualTo(0);
+                    return (
+                      <tr
+                        key={c.id}
+                        onClick={() => handleOpenCustomerDetail(c.id)}
+                        className="hover:bg-[var(--khata-surface-inset)]/70 cursor-pointer transition-colors"
+                        tabIndex={0}
+                        role="button"
+                        aria-label={`View ledger for ${c.name}`}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            handleOpenCustomerDetail(c.id);
+                          }
+                        }}
                       >
-                        {formatCurrency(c.outstanding)}
-                      </td>
-                      <td className="py-3.5 px-4 sm:px-6 text-center">
-                        <span
-                          className={`neu-badge ${
-                            isSettled ? 'neu-badge-success' : 'neu-badge-danger'
+                        <td className="py-3.5 px-4 sm:px-6">
+                          <div className="font-semibold text-[var(--khata-text)]">{c.name}</div>
+                          {c.phone && (
+                            <div className="text-xs text-[var(--khata-text-muted)] font-mono">{c.phone}</div>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 sm:px-6 text-right tabular-numbers font-medium text-[var(--khata-text)]">
+                          {formatCurrency(c.totalUdhar)}
+                        </td>
+                        <td className="py-3.5 px-4 sm:px-6 text-right tabular-numbers font-medium text-[var(--khata-success)]">
+                          {formatCurrency(c.totalReceived)}
+                        </td>
+                        <td
+                          className={`py-3.5 px-4 sm:px-6 text-right tabular-numbers font-bold ${
+                            isSettled ? 'text-[var(--khata-text-muted)]' : 'text-[var(--khata-danger)]'
                           }`}
                         >
-                          {isSettled ? 'Settled' : 'Pending'}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                          {formatCurrency(c.outstanding)}
+                        </td>
+                        <td className="py-3.5 px-4 sm:px-6 text-center">
+                          <span
+                            className={`neu-badge ${
+                              isSettled ? 'neu-badge-success' : 'neu-badge-danger'
+                            }`}
+                          >
+                            {isSettled ? 'Settled' : 'Pending'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Bounded pagination "Load more" button for ledger customers */}
+            {customerPagination.hasMore && (
+              <div className="p-3 text-center border-t border-[var(--khata-border)] bg-[var(--khata-surface)]">
+                <button
+                  type="button"
+                  onClick={handleLoadMoreCustomers}
+                  disabled={isLoadingMoreCustomers}
+                  className="neu-btn-secondary text-xs px-5 py-2 font-bold inline-flex items-center gap-1.5 min-h-[38px]"
+                >
+                  {isLoadingMoreCustomers ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--khata-accent)]" />
+                      <span>Loading more customers...</span>
+                    </>
+                  ) : (
+                    <span>Load More Customers</span>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -740,45 +927,89 @@ export const KhataLedgerView: React.FC = () => {
                 className="p-4 rounded-xl border border-[var(--khata-border)] space-y-3"
                 style={{ backgroundColor: 'var(--khata-surface-raised)' }}
               >
-                <span className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider block">
-                  Customer Identification
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider block">
+                    Customer Identification
+                  </span>
+                  {selectedExistingCustomer && (
+                    <span className="text-[11px] font-semibold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                      Existing Customer Selected
+                    </span>
+                  )}
+                </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-3">
                   <div>
                     <label className="block text-xs font-semibold text-[var(--khata-text)] mb-1">
-                      Existing Customer
+                      Existing Customer (Searchable)
                     </label>
-                    <select
-                      value={selectedExistingCustomerId}
-                      onChange={(e) => {
-                        const val = e.target.value ? Number(e.target.value) : '';
-                        setSelectedExistingCustomerId(val);
-                        if (val) {
-                          setNewCustomerName('');
-                          setNewCustomerPhone('');
-                        }
-                      }}
-                      className="neu-input w-full text-sm font-medium"
-                    >
-                      <option value="">-- Or enter new customer below --</option>
-                      {customers.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name} {c.phone ? `(${c.phone})` : ''} — Due: {formatCurrency(c.outstanding)}
-                        </option>
-                      ))}
-                    </select>
+                    <SearchablePicker<CustomerListItem>
+                      mode="customer"
+                      value={selectedExistingCustomer?.id || ''}
+                      selectedOption={selectedExistingCustomer}
+                      placeholder="Search existing customer by name or phone..."
+                      searchPlaceholder="Type customer name or mobile number..."
+                      onSearch={handleSearchCustomerPicker}
+                      onSelect={handleSelectCustomer}
+                      onClear={handleClearCustomer}
+                      getOptionKey={(c) => c.id}
+                      getOptionLabel={(c) =>
+                        `${c.name}${c.phone ? ` (${c.phone})` : ''} — Due: ${formatCurrency(c.outstanding)}`
+                      }
+                      renderOption={(c) => (
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 w-full">
+                          <div>
+                            <span className="font-semibold text-[var(--khata-text)]">{c.name}</span>
+                            {c.phone && (
+                              <span className="text-xs text-[var(--khata-text-muted)] ml-2 font-mono">
+                                {c.phone}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-xs font-bold text-[var(--khata-danger)] tabular-numbers">
+                            Due: {formatCurrency(c.outstanding)}
+                          </span>
+                        </div>
+                      )}
+                      onCreateNew={handleCreateCustomerFromPicker}
+                      emptyMessage="No customer found with that name or phone."
+                    />
                   </div>
 
-                  {!selectedExistingCustomerId && (
-                    <>
+                  {selectedExistingCustomer ? (
+                    <div
+                      className="p-3 rounded-xl border border-[var(--khata-accent)]/30 flex items-center justify-between"
+                      style={{ backgroundColor: 'var(--khata-surface-inset)' }}
+                    >
+                      <div>
+                        <div className="text-xs font-bold text-[var(--khata-text)]">
+                          {selectedExistingCustomer.name}
+                        </div>
+                        <div className="text-[11px] text-[var(--khata-text-muted)]">
+                          {selectedExistingCustomer.phone ? `Phone: ${selectedExistingCustomer.phone} • ` : ''}
+                          Current Outstanding:{' '}
+                          <span className="font-bold text-[var(--khata-danger)]">
+                            {formatCurrency(selectedExistingCustomer.outstanding)}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleClearCustomer}
+                        className="text-xs text-rose-500 hover:underline font-semibold"
+                      >
+                        Change / Clear
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                       <div>
                         <label className="block text-xs font-semibold text-[var(--khata-text)] mb-1">
                           New Customer Name <span className="text-rose-500">*</span>
                         </label>
                         <input
                           type="text"
-                          required={!selectedExistingCustomerId}
+                          required={!selectedExistingCustomer}
                           value={newCustomerName}
                           onChange={(e) => setNewCustomerName(e.target.value)}
                           placeholder="e.g. Ramesh Kumar"
@@ -797,7 +1028,7 @@ export const KhataLedgerView: React.FC = () => {
                           className="neu-input w-full text-sm font-medium"
                         />
                       </div>
-                    </>
+                    </div>
                   )}
                 </div>
               </div>
@@ -821,39 +1052,50 @@ export const KhataLedgerView: React.FC = () => {
                 <div className="space-y-2.5">
                   {udharLines.map((line, idx) => (
                     <div
-                      key={idx}
-                      className="grid grid-cols-12 gap-2.5 items-center p-3.5 rounded-xl border border-[var(--khata-border)] shadow-sm"
+                      key={line.lineId}
+                      className="grid grid-cols-12 gap-2.5 items-start p-3.5 rounded-xl border border-[var(--khata-border)] shadow-sm"
                       style={{ backgroundColor: 'var(--khata-surface-raised)' }}
                     >
-                      {/* Product Selector */}
+                      {/* Product Selector with SearchablePicker */}
                       <div className="col-span-12 sm:col-span-5">
-                        <label className="block text-[11px] font-semibold text-[var(--khata-text-muted)] mb-0.5">
+                        <label className="block text-[11px] font-semibold text-[var(--khata-text-muted)] mb-1">
                           Product #{idx + 1}
                         </label>
-                        <select
-                          required
+                        <SearchablePicker<ProductReference>
+                          mode="product"
                           value={line.productId}
-                          onChange={(e) =>
-                            handleLineChange(
-                              idx,
-                              'productId',
-                              e.target.value ? Number(e.target.value) : ''
-                            )
-                          }
-                          className="neu-input w-full text-sm font-medium"
-                        >
-                          <option value="">Select Reference Product...</option>
-                          {activeProducts.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.name} (Ref: {formatCurrency(p.buying_price)})
-                            </option>
-                          ))}
-                        </select>
+                          selectedOption={line.selectedProduct}
+                          placeholder="Search reference product..."
+                          searchPlaceholder="Type product name to search..."
+                          onSearch={handleSearchProductPicker}
+                          onSelect={(prod) => handleProductSelect(line.lineId, prod)}
+                          onClear={() => handleProductClear(line.lineId)}
+                          getOptionKey={(p) => p.id}
+                          getOptionLabel={(p) => `${p.name} (Ref: ${formatCurrency(p.buying_price)})`}
+                          renderOption={(p) => (
+                            <div className="flex items-center justify-between gap-2 w-full">
+                              <span className="font-semibold text-[var(--khata-text)]">{p.name}</span>
+                              <span className="text-[11px] text-[var(--khata-text-muted)] font-mono">
+                                Ref: {formatCurrency(p.buying_price)}
+                              </span>
+                            </div>
+                          )}
+                          emptyMessage="No product found in catalogue."
+                          required
+                        />
+                        {line.selectedProduct && (
+                          <div className="text-[11px] text-[var(--khata-text-muted)] mt-1 flex items-center gap-1">
+                            <span>Ref buying price:</span>
+                            <span className="font-semibold text-[var(--khata-text)] font-mono">
+                              {formatCurrency(line.selectedProduct.buying_price)}
+                            </span>
+                          </div>
+                        )}
                       </div>
 
-                      {/* Quantity */}
+                      {/* Quantity (Strict Integer) */}
                       <div className="col-span-6 sm:col-span-2">
-                        <label className="block text-[11px] font-semibold text-[var(--khata-text-muted)] mb-0.5">
+                        <label className="block text-[11px] font-semibold text-[var(--khata-text-muted)] mb-1">
                           Quantity
                         </label>
                         <input
@@ -864,15 +1106,15 @@ export const KhataLedgerView: React.FC = () => {
                           inputMode="numeric"
                           required
                           value={line.quantity}
-                          onChange={(e) => handleLineChange(idx, 'quantity', e.target.value)}
+                          onChange={(e) => handleLineFieldChange(line.lineId, 'quantity', e.target.value)}
                           placeholder="Qty"
-                          className="neu-input w-full text-sm font-medium tabular-numbers"
+                          className="neu-input w-full text-sm font-medium tabular-numbers min-h-[44px]"
                         />
                       </div>
 
                       {/* Custom Selling Price */}
                       <div className="col-span-6 sm:col-span-3">
-                        <label className="block text-[11px] font-semibold text-[var(--khata-text-muted)] mb-0.5">
+                        <label className="block text-[11px] font-semibold text-[var(--khata-text-muted)] mb-1">
                           Custom Selling ₹
                         </label>
                         <input
@@ -880,14 +1122,14 @@ export const KhataLedgerView: React.FC = () => {
                           inputMode="decimal"
                           required
                           value={line.sellingPrice}
-                          onChange={(e) => handleLineChange(idx, 'sellingPrice', e.target.value)}
+                          onChange={(e) => handleLineFieldChange(line.lineId, 'sellingPrice', e.target.value)}
                           placeholder="Selling ₹"
-                          className="neu-input w-full text-sm font-medium tabular-numbers"
+                          className="neu-input w-full text-sm font-medium tabular-numbers min-h-[44px]"
                         />
                       </div>
 
                       {/* Line Total & Remove */}
-                      <div className="col-span-12 sm:col-span-2 flex items-center justify-between sm:justify-end gap-2 pt-2 sm:pt-4 border-t sm:border-t-0 border-[var(--khata-border)]/50">
+                      <div className="col-span-12 sm:col-span-2 flex items-center justify-between sm:justify-end gap-2 pt-2 sm:pt-6 border-t sm:border-t-0 border-[var(--khata-border)]/50">
                         <div className="sm:hidden text-xs text-[var(--khata-text-muted)] font-medium">Line Total:</div>
                         <span className="text-xs font-bold text-[var(--khata-text)] tabular-numbers">
                           {formatCurrency(lineCalculations[idx])}
@@ -895,7 +1137,7 @@ export const KhataLedgerView: React.FC = () => {
                         {udharLines.length > 1 && (
                           <button
                             type="button"
-                            onClick={() => handleRemoveLine(idx)}
+                            onClick={() => handleRemoveLine(line.lineId)}
                             className="p-1.5 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-danger)] transition min-h-[36px]"
                             title="Remove line"
                             aria-label={`Remove line ${idx + 1}`}

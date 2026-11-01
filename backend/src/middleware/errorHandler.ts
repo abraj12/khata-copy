@@ -1,8 +1,9 @@
+import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { env } from '../config/env.js';
 
 export function errorHandler(
-  err: Error & { status?: number; statusCode?: number; type?: string },
+  err: Error & { status?: number; statusCode?: number; type?: string; code?: string; candidates?: unknown[] },
   req: Request,
   res: Response,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -10,18 +11,25 @@ export function errorHandler(
 ): void {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
 
+  const requestId = (req.headers['x-request-id'] as string) || crypto.randomUUID();
+
   // Handle CORS unauthorized origin errors
   if (err.message && err.message.includes('CORS origin')) {
     res.status(403).json({
       success: false,
+      code: 'CORS_FORBIDDEN',
       message: 'CSRF/CORS validation error: Origin not permitted.',
+      requestId,
     });
     return;
   }
+
   if (err.type === 'entity.parse.failed' || err instanceof SyntaxError) {
     res.status(400).json({
       success: false,
+      code: 'MALFORMED_JSON',
       message: 'Malformed request payload. Invalid JSON format.',
+      requestId,
     });
     return;
   }
@@ -30,21 +38,50 @@ export function errorHandler(
   if (err.type === 'entity.too.large') {
     res.status(413).json({
       success: false,
+      code: 'PAYLOAD_TOO_LARGE',
       message: 'Request payload exceeds allowed limit.',
+      requestId,
     });
     return;
   }
 
   const statusCode = err.status || err.statusCode || 500;
+  const errorCode = err.code || (
+    statusCode === 400 ? 'VALIDATION_ERROR' :
+    statusCode === 401 ? 'UNAUTHORIZED' :
+    statusCode === 403 ? 'FORBIDDEN' :
+    statusCode === 404 ? 'NOT_FOUND' :
+    statusCode === 409 ? 'CONFLICT' :
+    statusCode === 429 ? 'TOO_MANY_REQUESTS' :
+    'INTERNAL_SERVER_ERROR'
+  );
 
-  if (env.NODE_ENV !== 'production') {
-    console.error('[UNHANDLED ERROR]', err);
+  // Redact raw database or connection string leaks from messages
+  let publicMessage = err.message || 'Internal Server Error';
+  if (
+    publicMessage.includes('password') ||
+    publicMessage.includes('postgresql://') ||
+    publicMessage.includes('syntax error at or near') ||
+    publicMessage.includes('pg_') ||
+    (statusCode >= 500 && env.NODE_ENV === 'production')
+  ) {
+    publicMessage = 'An unexpected internal server error occurred.';
   }
 
-  res.status(statusCode).json({
+  if (env.NODE_ENV !== 'production' || statusCode >= 500) {
+    console.error(`[UNHANDLED ERROR] [${requestId}]`, err);
+  }
+
+  const responseBody: Record<string, unknown> = {
     success: false,
-    message: statusCode >= 500 && env.NODE_ENV === 'production'
-      ? 'An unexpected internal server error occurred.'
-      : err.message || 'Internal Server Error',
-  });
+    code: errorCode,
+    message: publicMessage,
+    requestId,
+  };
+
+  if (err.candidates) {
+    responseBody.candidates = err.candidates;
+  }
+
+  res.status(statusCode).json(responseBody);
 }

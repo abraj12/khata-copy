@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { Decimal } from 'decimal.js';
 import { appPool } from '../../config/database.js';
-import { validateMoneyInput, validateQuantityInput } from '../../utils/validation.js';
+import { validateMoneyInput, validateQuantityInput, escapeLike } from '../../utils/validation.js';
 
 // Configure Decimal globally for money arithmetic
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
@@ -20,6 +20,22 @@ export interface KhataOverviewSummary {
   totalCustomers: number;
   totalOutstanding: string;
   totalReceived: string;
+}
+
+export interface ListCustomersOptions {
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface PaginatedCustomersResult {
+  customers: CustomerSummaryItem[];
+  pagination: {
+    limit: number;
+    offset: number;
+    hasMore: boolean;
+    nextOffset: number | null;
+  };
 }
 
 export interface CreateTransactionItemInput {
@@ -126,9 +142,13 @@ export class KhataService {
   }
 
   /**
-   * Searchable Customer List with independent pre-aggregated totals
+   * Searchable Customer List with independent pre-aggregated totals and bounded pagination
    */
-  public async listCustomers(search?: string): Promise<CustomerSummaryItem[]> {
+  public async listCustomers(optionsOrSearch?: string | ListCustomersOptions): Promise<PaginatedCustomersResult> {
+    const opts = typeof optionsOrSearch === 'string' ? { search: optionsOrSearch } : optionsOrSearch || {};
+    const limit = Math.min(Math.max(1, opts.limit || 25), 50);
+    const offset = Math.max(0, opts.offset || 0);
+
     let sql = `
       WITH customer_tx AS (
         SELECT
@@ -168,16 +188,35 @@ export class KhataService {
     `;
 
     const params: unknown[] = [];
-    if (search && search.trim()) {
-      params.push(`%${search.trim().toLowerCase()}%`);
-      sql += ` WHERE (c.normalized_name ILIKE $1 OR c.phone ILIKE $1) `;
+    if (opts.search && opts.search.trim()) {
+      const raw = opts.search.trim();
+      const escaped = escapeLike(raw.toLowerCase());
+      params.push(`%${escaped}%`);
+
+      const digits = raw.replace(/\D/g, '');
+      let cleanPhoneDigits = digits;
+      if (cleanPhoneDigits.startsWith('91') && cleanPhoneDigits.length === 12) {
+        cleanPhoneDigits = cleanPhoneDigits.slice(2);
+      } else if (cleanPhoneDigits.startsWith('0') && cleanPhoneDigits.length === 11) {
+        cleanPhoneDigits = cleanPhoneDigits.slice(1);
+      }
+
+      if (cleanPhoneDigits.length >= 3) {
+        params.push(`%${escapeLike(cleanPhoneDigits)}%`);
+        sql += ` WHERE (c.normalized_name ILIKE $1 OR c.phone ILIKE $1 OR c.normalized_phone ILIKE $2) `;
+      } else {
+        sql += ` WHERE (c.normalized_name ILIKE $1 OR c.phone ILIKE $1) `;
+      }
     }
 
-    sql += ` ORDER BY tx.last_activity DESC NULLS LAST, c.name ASC `;
+    sql += ` ORDER BY tx.last_activity DESC NULLS LAST, c.name ASC, c.id ASC LIMIT ${params.length + 1} OFFSET ${params.length + 2}`;
+    params.push(limit + 1, offset);
 
     const result = await appPool.query(sql, params);
+    const hasMore = result.rows.length > limit;
+    const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
 
-    return result.rows.map((row) => {
+    const customers = rows.map((row) => {
       const udhar = new Decimal(row.total_udhar || '0').toFixed(2);
       const received = new Decimal(row.total_received || '0').toFixed(2);
       const outstanding = new Decimal(row.outstanding || '0').toFixed(2);
@@ -192,6 +231,16 @@ export class KhataService {
         lastActivity: row.last_activity,
       };
     });
+
+    return {
+      customers,
+      pagination: {
+        limit,
+        offset,
+        hasMore,
+        nextOffset: hasMore ? offset + limit : null,
+      },
+    };
   }
 
   /**

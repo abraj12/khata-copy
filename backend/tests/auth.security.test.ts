@@ -49,8 +49,10 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '001_auth_tables.sql' },
             { version: '002_khata_transactions.sql' },
             { version: '003_idempotency_and_hardening.sql' },
+            { version: '004_integer_quantity_and_money_constraints.sql' },
+            { version: '005_search_indexes_and_identity_constraints.sql' },
           ],
-          rowCount: 3,
+          rowCount: 5,
         } as any;
       }
       return { rows: [], rowCount: 0 } as any;

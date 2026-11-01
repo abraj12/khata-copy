@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { apiClient } from '../../lib/apiClient.js';
-import { Tag, Plus, Search, Edit2, Archive, AlertTriangle, CheckCircle, X } from 'lucide-react';
+import { Tag, Plus, Search, Edit2, Archive, AlertTriangle, CheckCircle, X, Loader2 } from 'lucide-react';
 import { formatCurrency, safeDecimal, parseStrictDecimal } from '../../lib/formatters.js';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 
 interface Product {
   id: number;
@@ -14,8 +15,21 @@ interface Product {
 
 export const ProductsView: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
+  const [pagination, setPagination] = useState<{
+    limit: number;
+    offset: number;
+    hasMore: boolean;
+    nextOffset: number | null;
+  }>({
+    limit: 25,
+    offset: 0,
+    hasMore: false,
+    nextOffset: null,
+  });
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 280);
 
   // Create state
   const [isAdding, setIsAdding] = useState(false);
@@ -44,21 +58,46 @@ export const ProductsView: React.FC = () => {
     setTimeout(() => setNotification(null), 4000);
   };
 
-  const fetchProducts = async () => {
+  const fetchProducts = async (searchQuery: string = '', offset: number = 0, append: boolean = false) => {
     try {
-      setIsLoading(true);
-      const res = await apiClient<{ success: boolean; data: Product[] }>('/api/v1/products');
-      setProducts(res.data.data || []);
+      if (append) {
+        setIsLoadingMore(true);
+      } else {
+        setIsLoading(true);
+      }
+      const res = await apiClient<{
+        success: boolean;
+        products?: Product[];
+        data?: Product[];
+        pagination?: { limit: number; offset: number; hasMore: boolean; nextOffset: number | null };
+      }>(
+        `/api/v1/products?search=${encodeURIComponent(searchQuery)}&limit=25&offset=${offset}`
+      );
+      const items = res.data.products || res.data.data || [];
+      const pag = res.data.pagination || { limit: 25, offset, hasMore: false, nextOffset: null };
+      if (append) {
+        setProducts((prev) => [...prev, ...items]);
+      } else {
+        setProducts(items);
+      }
+      setPagination(pag);
     } catch (err) {
       showNotification('error', (err as Error).message || 'Failed to load products.');
     } finally {
       setIsLoading(false);
+      setIsLoadingMore(false);
     }
   };
 
   useEffect(() => {
-    fetchProducts();
-  }, []);
+    fetchProducts(debouncedSearch, 0, false);
+  }, [debouncedSearch]);
+
+  const handleLoadMore = () => {
+    if (pagination.hasMore && pagination.nextOffset !== null && !isLoadingMore) {
+      fetchProducts(debouncedSearch, pagination.nextOffset, true);
+    }
+  };
 
   const validatePrice = (priceStr: string): boolean => {
     try {
@@ -96,7 +135,7 @@ export const ProductsView: React.FC = () => {
       setNewPrice('');
       setIsAdding(false);
       showNotification('success', 'Product added successfully.');
-      await fetchProducts();
+      await fetchProducts(debouncedSearch, 0, false);
     } catch (err) {
       setCreateError((err as Error).message || 'Failed to add product.');
     } finally {
@@ -138,7 +177,7 @@ export const ProductsView: React.FC = () => {
       });
       setEditingProduct(null);
       showNotification('success', 'Product updated successfully.');
-      await fetchProducts();
+      await fetchProducts(debouncedSearch, 0, false);
     } catch (err) {
       setEditError((err as Error).message || 'Failed to update product.');
     } finally {
@@ -157,17 +196,13 @@ export const ProductsView: React.FC = () => {
       });
       setArchivingProduct(null);
       showNotification('success', `Product "${archivingProduct.name}" archived.`);
-      await fetchProducts();
+      await fetchProducts(debouncedSearch, 0, false);
     } catch (err) {
       setArchiveError((err as Error).message || 'Failed to archive product.');
     } finally {
       setIsSubmittingArchive(false);
     }
   };
-
-  const filtered = products.filter((p) =>
-    p.name.toLowerCase().includes(search.toLowerCase())
-  );
 
   return (
     <div className="space-y-6">
@@ -315,62 +350,86 @@ export const ProductsView: React.FC = () => {
       {/* Products Table Card */}
       <div className="neu-card overflow-hidden">
         {isLoading ? (
-          <div className="p-8 text-center text-sm text-[var(--khata-text-muted)] font-medium">
-            Loading reference products...
+          <div className="p-8 text-center text-sm text-[var(--khata-text-muted)] font-medium flex items-center justify-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin text-[var(--khata-accent)]" />
+            <span>Loading reference products...</span>
           </div>
-        ) : filtered.length === 0 ? (
+        ) : products.length === 0 ? (
           <div className="p-8 text-center text-sm text-[var(--khata-text-muted)]">
             {search ? 'No products match your search.' : 'No active products yet. Click "Add Product" above to create one.'}
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
-                  <th className="py-3.5 px-4 sm:px-6">Product Name</th>
-                  <th className="py-3.5 px-4 sm:px-6 text-right">Owner Buying Price</th>
-                  <th className="py-3.5 px-4 sm:px-6 text-center w-28">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--khata-border)] text-sm">
-                {filtered.map((item) => (
-                  <tr
-                    key={item.id}
-                    className="hover:bg-[var(--khata-surface-inset)]/60 transition-colors"
-                  >
-                    <td className="py-3.5 px-4 sm:px-6 font-semibold text-[var(--khata-text)]">
-                      {item.name}
-                    </td>
-                    <td className="py-3.5 px-4 sm:px-6 text-right font-semibold text-[var(--khata-accent)] tabular-numbers">
-                      {formatCurrency(item.buying_price)}
-                    </td>
-                    <td className="py-3.5 px-4 sm:px-6 text-center">
-                      <div className="flex items-center justify-center gap-2">
-                        <button
-                          onClick={() => handleStartEdit(item)}
-                          className="p-1.5 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-accent)] hover:bg-[var(--khata-surface-inset)] transition"
-                          title="Edit product"
-                          aria-label={`Edit ${item.name}`}
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            setArchivingProduct(item);
-                            setArchiveError(null);
-                          }}
-                          className="p-1.5 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-danger)] hover:bg-[var(--khata-surface-inset)] transition"
-                          title="Archive product"
-                          aria-label={`Archive ${item.name}`}
-                        >
-                          <Archive className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
+          <div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
+                    <th className="py-3.5 px-4 sm:px-6">Product Name</th>
+                    <th className="py-3.5 px-4 sm:px-6 text-right">Owner Buying Price</th>
+                    <th className="py-3.5 px-4 sm:px-6 text-center w-28">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-[var(--khata-border)] text-sm">
+                  {products.map((item) => (
+                    <tr
+                      key={item.id}
+                      className="hover:bg-[var(--khata-surface-inset)]/60 transition-colors"
+                    >
+                      <td className="py-3.5 px-4 sm:px-6 font-semibold text-[var(--khata-text)]">
+                        {item.name}
+                      </td>
+                      <td className="py-3.5 px-4 sm:px-6 text-right font-semibold text-[var(--khata-accent)] tabular-numbers">
+                        {formatCurrency(item.buying_price)}
+                      </td>
+                      <td className="py-3.5 px-4 sm:px-6 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => handleStartEdit(item)}
+                            className="p-1.5 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-accent)] hover:bg-[var(--khata-surface-inset)] transition"
+                            title="Edit product"
+                            aria-label={`Edit ${item.name}`}
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setArchivingProduct(item);
+                              setArchiveError(null);
+                            }}
+                            className="p-1.5 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-danger)] hover:bg-[var(--khata-surface-inset)] transition"
+                            title="Archive product"
+                            aria-label={`Archive ${item.name}`}
+                          >
+                            <Archive className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Bounded pagination "Load more" button */}
+            {pagination.hasMore && (
+              <div className="p-3 text-center border-t border-[var(--khata-border)] bg-[var(--khata-surface)]">
+                <button
+                  type="button"
+                  onClick={handleLoadMore}
+                  disabled={isLoadingMore}
+                  className="neu-btn-secondary text-xs px-5 py-2 font-bold inline-flex items-center gap-1.5 min-h-[38px]"
+                >
+                  {isLoadingMore ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--khata-accent)]" />
+                      <span>Loading more products...</span>
+                    </>
+                  ) : (
+                    <span>Load More Products</span>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

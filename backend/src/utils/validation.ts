@@ -9,6 +9,13 @@ export class FinancialValidationError extends Error {
 }
 
 /**
+ * Escapes PostgreSQL LIKE/ILIKE wildcards (%, _, \) to prevent query manipulation
+ */
+export function escapeLike(str: string): string {
+  return str.replace(/([%_\\])/g, '\\$1');
+}
+
+/**
  * Validates that money inputs (buying price, selling price, payments) are non-negative,
  * have AT MOST 2 decimal places, and contain no malformed characters, exponents, or excess precision.
  */

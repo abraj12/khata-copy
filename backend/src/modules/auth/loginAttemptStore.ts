@@ -181,8 +181,9 @@ export class LoginAttemptStore {
       return;
     }
 
+    const client = await appPool.connect();
     try {
-      const lockRes = await appPool.query(
+      const lockRes = await client.query(
         'SELECT pg_try_advisory_lock($1) AS acquired',
         [LoginAttemptStore.CLEANUP_LOCK_ID]
       );
@@ -190,11 +191,13 @@ export class LoginAttemptStore {
         try {
           await this.pruneOldAttempts();
         } finally {
-          await appPool.query('SELECT pg_advisory_unlock($1)', [LoginAttemptStore.CLEANUP_LOCK_ID]);
+          await client.query('SELECT pg_advisory_unlock($1)', [LoginAttemptStore.CLEANUP_LOCK_ID]);
         }
       }
     } catch (err) {
       console.warn('[LOCKOUT MAINTENANCE WARNING] Background login attempt pruning skipped:', (err as Error).message);
+    } finally {
+      client.release();
     }
   }
 

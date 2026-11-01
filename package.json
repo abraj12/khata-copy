@@ -30,5 +30,8 @@
     "express-session"
   ],
   "author": "Algions",
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "vitest": "^2.1.9"
+  }
 }

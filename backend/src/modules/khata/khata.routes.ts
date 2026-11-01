@@ -34,13 +34,19 @@ const recordPaymentSchema = z.object({
   idempotencyKey: z.string().nullable().optional(),
 });
 
+const customerSearchQuerySchema = z.object({
+  search: z.string().max(100).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(25),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
 /**
  * GET /api/v1/khata / GET /api/v1/ledger - Backward-compatible root endpoint
  */
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const customers = await khataService.listCustomers();
-    res.json({ success: true, customers });
+    const { customers, pagination } = await khataService.listCustomers({ limit: 50, offset: 0 });
+    res.json({ success: true, customers, pagination });
   } catch (err) {
     next(err);
   }
@@ -63,9 +69,18 @@ router.get('/summary', async (req: Request, res: Response, next: NextFunction) =
  */
 router.get('/customers', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const search = req.query.search as string | undefined;
-    const customers = await khataService.listCustomers(search);
-    res.json({ success: true, customers });
+    const parsed = customerSearchQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        message: parsed.error.errors[0]?.message || 'Invalid search query parameters.',
+      });
+      return;
+    }
+
+    const { customers, pagination } = await khataService.listCustomers(parsed.data);
+    res.json({ success: true, customers, pagination });
   } catch (err) {
     next(err);
   }

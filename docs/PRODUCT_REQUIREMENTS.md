@@ -57,14 +57,17 @@ The customers directory tracks individual balances and counter-party contact inf
 ### 3.3 Khata Ledger & Transaction Workflows
 
 #### A. Record Credit Transaction (Add Udhar)
-1. Shopkeeper selects an existing customer.
-2. Shopkeeper adds one or more line items (either selected from the product catalog or entered as a custom line item).
-3. Each line item specifies: `product_id` (optional for custom items), `item_name`, `quantity` ($> 0$), `unit_price` ($> 0$).
-4. Line subtotal is computed as: $\text{Subtotal} = \text{round}(\text{quantity} \times \text{unit\_price}, 2)$.
-5. Total transaction amount is the exact sum of line subtotals.
-6. An atomic PostgreSQL transaction creates:
-   - One record in `udhar_transactions` with `total_amount`, `remaining_amount = total_amount`, `transaction_date`, `status = 'UNPAID'`.
-   - Associated records in `udhar_items` linking each line item to the transaction.
+1. Shopkeeper identifies counter-party via the accessible **Searchable Customer Picker** (or enters a new customer name and optional phone).
+2. For existing customers, the picker performs debounced server-side search matching name and normalized phone digits, showing live outstanding dues.
+3. Shopkeeper adds one or more item lines. Each item line uses an independent **Searchable Product Picker** with debounced server-side lookup.
+4. Product buying price is displayed strictly as reference text (`Ref: ₹...`) and **never auto-populates or overrides** the custom selling price.
+5. Each line specifies:
+   - `quantity`: Strict positive integer between 1 and 1,000,000. Fractions (`1.5`, `2.00`) are rejected.
+   - `sellingPrice`: Strict decimal $\ge 0$ with at most 2 decimal places.
+6. Line subtotal is computed as: $\text{Subtotal} = \text{Decimal}(\text{quantity}) \times \text{Decimal}(\text{sellingPrice})$.
+7. Transaction total is the exact sum of line subtotals.
+8. Optional initial payment is recorded and deducted immediately via FIFO allocation.
+9. An atomic PostgreSQL transaction creates the transaction, items snapshot, optional payment, allocations, and idempotency key record.
 
 #### B. Settle Payment (Record Payment)
 1. Shopkeeper selects customer and enters payment `amount`, `payment_mode` (`CASH`, `UPI`, `BANK_TRANSFER`, `CHEQUE`), and optional `notes` or `reference_number`.

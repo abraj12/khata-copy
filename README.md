@@ -26,7 +26,7 @@ npm ci
 # 2. Compile both backend and frontend workspaces
 npm run build
 
-# 3. Execute automated test suites (47 tests: financial, auth, database guard)
+# 3. Execute automated test suites (58 tests: financial, auth, search, database guard)
 npm test
 ```
 

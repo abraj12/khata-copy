@@ -158,6 +158,9 @@ export function loadAndValidateEnv(overrides: Partial<Record<string, string | un
         '[SECURITY FATAL] In production, OWNER_PHONE must be explicitly configured with the owner canonical phone number.'
       );
     }
+    if (env.DATABASE_URL.includes('sslmode=disable') || env.DATABASE_URL_POOLED.includes('sslmode=disable')) {
+      throw new Error('[SECURITY FATAL] In production, database connection cannot use sslmode=disable.');
+    }
     if (
       !env.DATABASE_URL_POOLED ||
       env.DATABASE_URL_POOLED.includes('dummy') ||

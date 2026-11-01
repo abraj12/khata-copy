@@ -1,5 +1,5 @@
 import { appPool } from '../../config/database.js';
-import { validateMoneyInput } from '../../utils/validation.js';
+import { validateMoneyInput, escapeLike } from '../../utils/validation.js';
 
 export interface ProductRecord {
   id: number;
@@ -10,29 +10,60 @@ export interface ProductRecord {
   archived_at: string | null;
 }
 
+export interface ListProductsOptions {
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface PaginatedProductsResult {
+  products: ProductRecord[];
+  pagination: {
+    limit: number;
+    offset: number;
+    hasMore: boolean;
+    nextOffset: number | null;
+  };
+}
+
 export class ProductsService {
   /**
-   * Lists all active products, with optional search filter
+   * Lists active products with case-insensitive search and bounded pagination
    */
-  public async listActiveProducts(search?: string): Promise<ProductRecord[]> {
-    if (search && search.trim()) {
-      const result = await appPool.query(
-        `SELECT id, name, buying_price, created_at, updated_at, archived_at
-         FROM products
-         WHERE archived_at IS NULL AND name ILIKE $1
-         ORDER BY name ASC`,
-        [`%${search.trim()}%`]
-      );
-      return result.rows;
+  public async listActiveProducts(optionsOrSearch?: string | ListProductsOptions): Promise<PaginatedProductsResult> {
+    const opts = typeof optionsOrSearch === 'string' ? { search: optionsOrSearch } : optionsOrSearch || {};
+    const limit = Math.min(Math.max(1, opts.limit || 25), 50);
+    const offset = Math.max(0, opts.offset || 0);
+
+    let sql = `
+      SELECT id, name, buying_price, created_at, updated_at, archived_at
+      FROM products
+      WHERE archived_at IS NULL
+    `;
+    const params: unknown[] = [];
+
+    if (opts.search && opts.search.trim()) {
+      const cleanSearch = escapeLike(opts.search.trim());
+      params.push(`%${cleanSearch}%`);
+      sql += ` AND name ILIKE $${params.length}`;
     }
 
-    const result = await appPool.query(
-      `SELECT id, name, buying_price, created_at, updated_at, archived_at
-       FROM products
-       WHERE archived_at IS NULL
-       ORDER BY name ASC`
-    );
-    return result.rows;
+    sql += ` ORDER BY name ASC, id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit + 1, offset);
+
+    const result = await appPool.query(sql, params);
+    const hasMore = result.rows.length > limit;
+    const products = hasMore ? result.rows.slice(0, limit) : result.rows;
+
+    return {
+      products,
+      pagination: {
+        limit,
+        offset,
+        hasMore,
+        nextOffset: hasMore ? offset + limit : null,
+      },
+    };
   }
 
   /**
