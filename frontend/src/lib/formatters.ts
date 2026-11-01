@@ -124,11 +124,67 @@ export function formatMoneyString(value: unknown): string {
 }
 
 /**
- * Formats quantity values with up to 3 decimal places, trimming trailing zeros.
- * Example: formatQuantity('2.500') => "2.5"
+ * Strict validator and parser for integer quantities (hardware items).
+ * Rejects fractional decimals (e.g. 1.5, 0.5, 2.00), non-numeric text, negative values,
+ * and zero with the exact message: "Quantity must be a whole number."
+ */
+export function parseStrictInteger(
+  value: unknown,
+  options: {
+    min?: number;
+    max?: number;
+    fieldName?: string;
+  } = {}
+): number {
+  const { min = 1, max = 1000000, fieldName = 'Quantity' } = options;
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
+    throw new DecimalValidationError(`${fieldName} cannot be empty.`);
+  }
+
+  const str = String(value).trim();
+  // Check if string contains any decimal point or invalid characters
+  if (str.includes('.') || !/^\d+$/.test(str)) {
+    throw new DecimalValidationError('Quantity must be a whole number.');
+  }
+
+  const n = parseInt(str, 10);
+  if (isNaN(n)) {
+    throw new DecimalValidationError('Quantity must be a whole number.');
+  }
+  if (n < min) {
+    throw new DecimalValidationError(`${fieldName} must be at least ${min}.`);
+  }
+  if (n > max) {
+    throw new DecimalValidationError(`${fieldName} cannot exceed ${max.toLocaleString()}.`);
+  }
+
+  return n;
+}
+
+/**
+ * Validates integer quantity, returning null if valid or error message if invalid.
+ */
+export function validateStrictInteger(
+  value: unknown,
+  options: {
+    min?: number;
+    max?: number;
+    fieldName?: string;
+  } = {}
+): string | null {
+  try {
+    parseStrictInteger(value, options);
+    return null;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
+/**
+ * Formats integer quantity values for hardware items (whole units).
+ * Example: formatQuantity('5') => "5"
  */
 export function formatQuantity(value: unknown): string {
   const d = safeDecimal(value);
-  const str = d.toFixed(3);
-  return str.replace(/\.?0+$/, '');
+  return d.trunc().toFixed(0);
 }

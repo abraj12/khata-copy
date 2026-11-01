@@ -1,4 +1,5 @@
 import { appPool } from '../../config/database.js';
+import { validateMoneyInput } from '../../utils/validation.js';
 
 export interface ProductRecord {
   id: number;
@@ -48,18 +49,14 @@ export class ProductsService {
   }
 
   /**
-   * Creates a new reference product
+   * Creates a new reference product with strict money validation
    */
   public async createProduct(name: string, buyingPrice: string | number): Promise<ProductRecord> {
     const trimmed = name.trim();
     if (!trimmed) throw new Error('Product name cannot be empty.');
 
-    const priceNum = Number(buyingPrice);
-    if (isNaN(priceNum) || priceNum < 0) {
-      throw new Error('Buying price must be a valid non-negative number.');
-    }
-
-    const formattedPrice = priceNum.toFixed(2);
+    const priceDec = validateMoneyInput(buyingPrice, 'Buying price');
+    const formattedPrice = priceDec.toFixed(2);
 
     const result = await appPool.query(
       `INSERT INTO products (name, buying_price, created_at, updated_at)
@@ -71,7 +68,7 @@ export class ProductsService {
   }
 
   /**
-   * Updates an existing product's name and/or buying price
+   * Updates an existing product's name and/or buying price with strict money validation
    */
   public async updateProduct(
     id: number,
@@ -84,11 +81,8 @@ export class ProductsService {
     let newPrice = existing.buying_price;
 
     if (data.buyingPrice !== undefined) {
-      const p = Number(data.buyingPrice);
-      if (isNaN(p) || p < 0) {
-        throw new Error('Buying price must be a valid non-negative number.');
-      }
-      newPrice = p.toFixed(2);
+      const priceDec = validateMoneyInput(data.buyingPrice, 'Buying price');
+      newPrice = priceDec.toFixed(2);
     }
 
     const result = await appPool.query(

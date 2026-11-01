@@ -4,6 +4,16 @@ All notable changes to the Khata project are documented in this file.
 
 ---
 
+## [1.3.0] - 2026-11-01
+
+### Added
+- **Hardware Retail Integer Quantity Enforcement:** Strictly constrained hardware item quantities to whole numbers ($1 \le \text{quantity} \le 1,000,000$). Rejects any fractional/decimal inputs (`1.5`, `0.5`, `2.00`) with explicit error message: `"Quantity must be a whole number."`
+- **Strict Money Precision Validation:** Enforced maximum 2 decimal places (`/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/`) across buying prices, selling prices, and payments in both frontend and backend. Rejects exponential notation, excess precision, and negative values.
+- **Database Migration 004 & Preflight Audit Script:** Added `backend/migrations/004_integer_quantity_and_money_constraints.sql` and `backend/scripts/preflight-quantity-check.ts` to audit `udhar_items` for fractional quantities before applying type conversion to `INTEGER`.
+- **Dual Custom Domain CSP & Client Configuration:** Updated `vercel.json` and `frontend/vercel.json` CSP `connect-src` to permit both `https://api-khata.algions.in` and `https://khata-api-wkn9.onrender.com`. Configured `frontend/src/lib/apiClient.ts` to support both `VITE_API_BASE_URL` and `VITE_API_URL`.
+
+---
+
 ## [1.2.0] - 2026-11-01
 
 ### Added

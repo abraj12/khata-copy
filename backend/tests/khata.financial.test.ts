@@ -666,4 +666,77 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
     const lineTotal2 = new Decimal('0.35').times(new Decimal('0.10')).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
     expect(lineTotal2).toBe('0.04');
   });
+  // TEST CASE 12: Hardware Item Integer Quantity Enforcement
+  it('12. Integer Quantity Enforcement: Rejects fractional decimals with "Quantity must be a whole number."', async () => {
+    const prod = await productsService.createProduct('Hammer 500g', '250.00');
+    const prodId = parseInt(prod.id.toString(), 10);
+
+    // Rejection of fractional strings
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Ramesh Patel' },
+        items: [{ productId: prodId, quantity: '1.5', sellingPrice: '300.00' }],
+      })
+    ).rejects.toThrow('Quantity must be a whole number.');
+
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Ramesh Patel' },
+        items: [{ productId: prodId, quantity: '0.5', sellingPrice: '300.00' }],
+      })
+    ).rejects.toThrow('Quantity must be a whole number.');
+
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Ramesh Patel' },
+        items: [{ productId: prodId, quantity: '2.00', sellingPrice: '300.00' }],
+      })
+    ).rejects.toThrow('Quantity must be a whole number.');
+
+    // Acceptance of valid whole integer quantity
+    const tx = await khataService.createTransaction({
+      customer: { name: 'Ramesh Patel' },
+      items: [{ productId: prodId, quantity: '3', sellingPrice: '300.00' }],
+    });
+    expect(tx.success).toBe(true);
+    expect(tx.totalAmount).toBe('900.00');
+    expect(tx.remainingDue).toBe('900.00');
+  });
+
+  // TEST CASE 13: Strict Money Precision (Max 2 Decimal Places)
+  it('13. Strict Money Precision: Rejects prices/payments with >2 decimal places', async () => {
+    // Products buying price >2 decimal places rejected
+    await expect(
+      productsService.createProduct('Drill Bit 6mm', '45.555')
+    ).rejects.toThrow(/at most 2 decimal places/);
+
+    const prod = await productsService.createProduct('Drill Bit 6mm', '45.50');
+    const prodId = parseInt(prod.id.toString(), 10);
+
+    // Selling price >2 decimal places rejected
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Suresh Raina' },
+        items: [{ productId: prodId, quantity: '2', sellingPrice: '60.123' }],
+      })
+    ).rejects.toThrow(/at most 2 decimal places/);
+
+    // Valid transaction
+    const tx = await khataService.createTransaction({
+      customer: { name: 'Suresh Raina' },
+      items: [{ productId: prodId, quantity: '2', sellingPrice: '60.50' }],
+    });
+    expect(tx.success).toBe(true);
+    expect(tx.totalAmount).toBe('121.00');
+
+    // Payment amount >2 decimal places rejected
+    await expect(
+      khataService.recordPayment(tx.customerId, '50.123')
+    ).rejects.toThrow(/at most 2 decimal places/);
+
+    // Valid payment accepted
+    const payRes = await khataService.recordPayment(tx.customerId, '50.50');
+    expect(payRes.success).toBe(true);
+    expect(payRes.amount).toBe('50.50');
+  });
 });

@@ -3,7 +3,7 @@
 **Document Status:** Canonical & Implemented  
 **Last Verified:** 2026-11-01  
 **Database Engine:** PostgreSQL 16 (Neon Serverless)  
-**Schema Version:** 003  
+**Schema Version:** 004  
 
 ---
 
@@ -53,8 +53,19 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 1. **`001_auth_tables.sql`**: Configures PostgreSQL sessions and brute-force login lockout tracking.
 2. **`002_khata_transactions.sql`**: Configures product catalog, customer directory, Udhar credit transactions, payments, and FIFO payment allocations.
 3. **`003_idempotency_and_hardening.sql`**: Adds idempotency store, performance indexes, and strict financial constraints.
+4. **`004_integer_quantity_and_money_constraints.sql`**: Converts `udhar_items.quantity` to `INTEGER` [1, 1000000] and enforces strict 2-decimal scale checks across all money columns.
 
-### How to Run Migrations
+### Preflight Safety Audit & How to Run Migrations
+
+```bash
+# 1. Run read-only preflight check (verifies no fractional quantities exist):
+npm run preflight:quantity --workspace=backend
+
+# 2. Execute migrations with advisory lock:
+npm run migrate --workspace=backend
+```
+
+### Migration Commands
 ```bash
 # From repository root:
 npm run migrate --workspace=backend

@@ -5,7 +5,10 @@
  * - No auth tokens or session IDs saved in localStorage / sessionStorage
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? '' : 'https://api-khata.algions.in');
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.DEV ? '' : 'https://api-khata.algions.in');
 
 let inMemoryCsrfToken: string | null = null;
 

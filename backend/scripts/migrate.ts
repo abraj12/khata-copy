@@ -104,6 +104,15 @@ async function runMigrations() {
         continue;
       }
 
+      if (file.includes('004_integer_quantity')) {
+        console.log('[MIGRATION] Performing preflight fractional quantity audit on udhar_items...');
+        const fracRes = await client.query('SELECT id, quantity FROM udhar_items WHERE quantity <> TRUNC(quantity)');
+        if (fracRes.rows.length > 0) {
+          throw new Error(`[PREFLIGHT ERROR] Found ${fracRes.rows.length} row(s) in udhar_items with non-integer quantities. Migration aborted to prevent data loss.`);
+        }
+        console.log('\x1b[32m[PREFLIGHT PASSED] 0 fractional rows found in udhar_items.\x1b[0m');
+      }
+
       console.log(`[MIGRATION] Applying migration: ${file}...`);
       const filePath = path.join(migrationsDir, file);
       const sql = fs.readFileSync(filePath, 'utf-8');

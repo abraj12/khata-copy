@@ -18,7 +18,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import Decimal from 'decimal.js';
-import { formatCurrency, formatQuantity, safeDecimal, parseStrictDecimal } from '../../lib/formatters.js';
+import { formatCurrency, formatQuantity, safeDecimal, parseStrictDecimal, parseStrictInteger } from '../../lib/formatters.js';
 
 interface SummaryData {
   totalCustomers: number | string;
@@ -260,10 +260,10 @@ export const KhataLedgerView: React.FC = () => {
   const lineCalculations = useMemo(() => {
     return udharLines.map((line) => {
       try {
-        const q = parseStrictDecimal(line.quantity, { maxDecimalPlaces: 3 });
+        const q = parseStrictInteger(line.quantity);
         const p = parseStrictDecimal(line.sellingPrice, { maxDecimalPlaces: 2 });
-        if (q.greaterThan(0) && p.greaterThanOrEqualTo(0)) {
-          return q.times(p).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+        if (q > 0 && p.greaterThanOrEqualTo(0)) {
+          return new Decimal(q).times(p).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
         }
         return new Decimal(0);
       } catch {
@@ -334,11 +334,7 @@ export const KhataLedgerView: React.FC = () => {
         return;
       }
       try {
-        const qtyDec = parseStrictDecimal(line.quantity, { maxDecimalPlaces: 3, fieldName: `Line #${i + 1} quantity` });
-        if (qtyDec.lessThanOrEqualTo(0)) {
-          setUdharFormError(`Line #${i + 1} quantity must be greater than zero.`);
-          return;
-        }
+        const qty = parseStrictInteger(line.quantity, { fieldName: `Line #${i + 1} quantity` });
         const priceDec = parseStrictDecimal(line.sellingPrice, { maxDecimalPlaces: 2, fieldName: `Line #${i + 1} selling price` });
         if (priceDec.lessThan(0)) {
           setUdharFormError(`Line #${i + 1} selling price cannot be negative.`);
@@ -346,7 +342,7 @@ export const KhataLedgerView: React.FC = () => {
         }
         validatedItems.push({
           productId: Number(line.productId),
-          quantity: qtyDec.toNumber(),
+          quantity: qty,
           sellingPrice: priceDec.toNumber(),
         });
       } catch (valErr) {
@@ -861,8 +857,11 @@ export const KhataLedgerView: React.FC = () => {
                           Quantity
                         </label>
                         <input
-                          type="text"
-                          inputMode="decimal"
+                          type="number"
+                          step="1"
+                          min="1"
+                          max="1000000"
+                          inputMode="numeric"
                           required
                           value={line.quantity}
                           onChange={(e) => handleLineChange(idx, 'quantity', e.target.value)}

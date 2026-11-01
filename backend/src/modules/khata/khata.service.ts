@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { Decimal } from 'decimal.js';
 import { appPool } from '../../config/database.js';
+import { validateMoneyInput, validateQuantityInput } from '../../utils/validation.js';
 
 // Configure Decimal globally for money arithmetic
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
@@ -500,15 +501,8 @@ export class KhataService {
 
       for (const item of input.items) {
         const prodId = Number(item.productId);
-        const qtyDec = new Decimal(item.quantity);
-        const sellPriceDec = new Decimal(item.sellingPrice);
-
-        if (qtyDec.isNaN() || qtyDec.lessThanOrEqualTo(0)) {
-          throw new Error(`Quantity for product ID ${prodId} must be greater than zero.`);
-        }
-        if (sellPriceDec.isNaN() || sellPriceDec.lessThan(0)) {
-          throw new Error(`Selling price for product ID ${prodId} must be non-negative.`);
-        }
+        const qty = validateQuantityInput(item.quantity, `Item for product ID ${prodId} quantity`);
+        const sellPriceDec = validateMoneyInput(item.sellingPrice, `Selling price for product ID ${prodId}`);
 
         const prodRes = await client.query(
           'SELECT id, name, buying_price, archived_at FROM products WHERE id = $1',
@@ -524,14 +518,14 @@ export class KhataService {
           throw new Error(`Product "${product.name}" is archived and cannot be selected for new Udhar.`);
         }
 
-        const lineTotalDec = qtyDec.times(sellPriceDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+        const lineTotalDec = new Decimal(qty).times(sellPriceDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
         serverComputedTotal = serverComputedTotal.plus(lineTotalDec);
 
         verifiedItems.push({
           productId: prodId,
           nameSnapshot: product.name,
           buyingPriceSnapshot: new Decimal(product.buying_price).toFixed(2),
-          quantity: qtyDec.toFixed(3),
+          quantity: String(qty),
           sellingPrice: sellPriceDec.toFixed(2),
           lineTotal: lineTotalDec.toFixed(2),
         });
@@ -571,10 +565,7 @@ export class KhataService {
       // 5. Initial Payment Handling (if provided)
       let initialPaymentRecorded = '0.00';
       if (input.initialPayment !== undefined && input.initialPayment !== null && input.initialPayment !== '') {
-        const initPayDec = new Decimal(input.initialPayment).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-        if (initPayDec.isNaN() || initPayDec.lessThan(0)) {
-          throw new Error('Initial payment must be a valid non-negative number.');
-        }
+        const initPayDec = validateMoneyInput(input.initialPayment, 'Initial payment');
 
         if (initPayDec.greaterThan(serverComputedTotal)) {
           throw new Error(
@@ -654,8 +645,8 @@ export class KhataService {
     note?: string | null,
     idempotencyKey?: string | null
   ) {
-    const payDec = new Decimal(rawAmount).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    if (payDec.isNaN() || payDec.lessThanOrEqualTo(0)) {
+    const payDec = validateMoneyInput(rawAmount, 'Payment amount');
+    if (payDec.isZero()) {
       throw new Error('Payment amount must be greater than zero.');
     }
 
