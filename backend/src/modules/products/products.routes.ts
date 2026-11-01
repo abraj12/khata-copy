@@ -254,7 +254,15 @@ router.post(
         referenceId: id,
       });
 
-      const updated = await productsService.attachProductImage(id, objectKey);
+      let updated;
+      try {
+        updated = await productsService.attachProductImage(id, objectKey);
+      } catch (attachErr) {
+        // Safe cleanup: delete orphaned R2 object if DB attachment fails
+        await storageService.deleteObject(objectKey);
+        throw attachErr;
+      }
+
       res.json({ success: true, data: updated });
     } catch (err) {
       next(err);

@@ -86,12 +86,19 @@ router.post(
         referenceId: 'tmp',
       });
 
-      const newBill = await offlineBillsService.createOfflineBill({
-        customerName,
-        customerPhone,
-        imageObjectKey: objectKey,
-        originalFilename,
-      });
+      let newBill;
+      try {
+        newBill = await offlineBillsService.createOfflineBill({
+          customerName,
+          customerPhone,
+          imageObjectKey: objectKey,
+          originalFilename,
+        });
+      } catch (createErr) {
+        // Safe cleanup: delete orphaned R2 object if DB insertion fails
+        await storageService.deleteObject(objectKey);
+        throw createErr;
+      }
 
       res.status(201).json({ success: true, data: newBill });
     } catch (err) {

@@ -254,12 +254,15 @@ export const ProductsView: React.FC = () => {
       const createdProduct = createRes.data.data;
 
       // If user selected an image, upload and attach it
+      let imageUploadFailed = false;
+      let imageUploadErrorMsg = '';
       if (createImageFile && createdProduct?.id) {
         try {
           await uploadAndAttachProductImage(createdProduct.id, createImageFile);
         } catch (imgErr) {
+          imageUploadFailed = true;
+          imageUploadErrorMsg = (imgErr as Error).message || 'Image upload failed';
           console.error('Product created but image upload failed:', imgErr);
-          showNotification('error', `Product created, but image upload failed: ${(imgErr as Error).message}`);
         }
       }
 
@@ -267,7 +270,14 @@ export const ProductsView: React.FC = () => {
       setNewPrice('');
       handleClearCreateImage();
       setIsAdding(false);
-      showNotification('success', 'Product added successfully.');
+      if (imageUploadFailed) {
+        showNotification(
+          'error',
+          `Product "${createdProduct.name}" created, but image upload failed: ${imageUploadErrorMsg}. You can attach the photo via Edit.`
+        );
+      } else {
+        showNotification('success', 'Product added successfully.');
+      }
       await fetchProducts(debouncedSearch, 0, false);
     } catch (err) {
       setCreateError((err as Error).message || 'Failed to add product.');
@@ -357,13 +367,27 @@ export const ProductsView: React.FC = () => {
       });
 
       // If new image was chosen, upload and attach it
+      let editImageFailed = false;
+      let editImageErrorMsg = '';
       if (editImageFile) {
-        await uploadAndAttachProductImage(editingProduct.id, editImageFile);
+        try {
+          await uploadAndAttachProductImage(editingProduct.id, editImageFile);
+        } catch (imgErr) {
+          editImageFailed = true;
+          editImageErrorMsg = (imgErr as Error).message || 'Image upload failed';
+        }
       }
 
-      setEditingProduct(null);
-      handleClearEditImage();
-      showNotification('success', 'Product updated successfully.');
+      if (editImageFailed) {
+        setEditingProduct((prev) =>
+          prev ? { ...prev, name: editName.trim(), buying_price: safeDecimal(editPrice).toFixed(2) } : null
+        );
+        setEditError(`Product details saved, but image upload failed: ${editImageErrorMsg}. Please retry uploading image.`);
+      } else {
+        setEditingProduct(null);
+        handleClearEditImage();
+        showNotification('success', 'Product updated successfully.');
+      }
       await fetchProducts(debouncedSearch, 0, false);
     } catch (err) {
       setEditError((err as Error).message || 'Failed to update product.');
@@ -657,7 +681,7 @@ export const ProductsView: React.FC = () => {
                             <img
                               src={resolveImageUrl(item.image_url)}
                               alt={item.name}
-                              crossOrigin="anonymous"
+                              crossOrigin="use-credentials"
                               className="w-full h-full object-cover group-hover:scale-110 transition-transform"
                               onError={(e) => {
                                 const fallback = `${API_BASE_URL}/api/v1/products/${item.id}/image`;
@@ -853,7 +877,7 @@ export const ProductsView: React.FC = () => {
                     <img
                       src={resolveImageUrl(editingProduct.image_url)}
                       alt={editingProduct.name}
-                      crossOrigin="anonymous"
+                      crossOrigin="use-credentials"
                       onClick={() =>
                         setLightboxProduct({
                           id: editingProduct.id,
@@ -996,7 +1020,7 @@ export const ProductsView: React.FC = () => {
             <img
               src={resolveImageUrl(lightboxProduct.url)}
               alt={lightboxProduct.name}
-              crossOrigin="anonymous"
+              crossOrigin="use-credentials"
               className="max-w-full max-h-[75vh] object-contain rounded-lg shadow-2xl"
               onError={(e) => {
                 if (lightboxProduct.id) {

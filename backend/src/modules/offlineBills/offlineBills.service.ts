@@ -44,22 +44,16 @@ export class OfflineBillsService {
       return rows.map((r) => ({ ...r, image_url: null }));
     }
 
-    return Promise.all(
-      rows.map(async (r) => {
-        let imageUrl: string | null = null;
-        if (r.image_object_key) {
-          try {
-            imageUrl = await storageService.getPresignedViewUrl(r.image_object_key);
-          } catch (err) {
-            console.warn('[OFFLINE BILLS] Failed to generate presigned URL for', r.image_object_key, (err as Error).message);
-          }
-        }
-        return {
-          ...r,
-          image_url: imageUrl,
-        };
-      })
-    );
+    return rows.map((r) => {
+      let imageUrl: string | null = null;
+      if (r.image_object_key) {
+        imageUrl = `/api/v1/offline-bills/${r.id}/image`;
+      }
+      return {
+        ...r,
+        image_url: imageUrl,
+      };
+    });
   }
 
   /**

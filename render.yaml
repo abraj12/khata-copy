@@ -11,7 +11,6 @@ services:
     plan: free
     region: singapore
     buildCommand: npm ci --workspace=backend --include-workspace-root=false --include=dev && npm run build --workspace=backend
-    preDeployCommand: npm run migrate --workspace=backend
     startCommand: npm run start --workspace=backend
     healthCheckPath: /api/v1/health/live
     envVars:
@@ -57,3 +56,13 @@ services:
         value: "30"
       - key: TRUST_PROXY
         value: "1"
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false

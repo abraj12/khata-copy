@@ -30,6 +30,7 @@ describe('Product Images API Test Suite', () => {
 
   beforeEach(async () => {
     vi.restoreAllMocks();
+    storageService.setClient({ send: vi.fn().mockResolvedValue({}) } as any);
 
     vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
       const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
@@ -264,6 +265,88 @@ describe('Product Images API Test Suite', () => {
       expect(res.body.success).toBe(true);
       expect(deletedKey).toBe('products/10/old.jpg');
       expect(res.body.data.image_object_key).toBeNull();
+      expect(res.body.data.id).toBe(10);
+    });
+  });
+  describe('4. Server-Side Proxy Upload (POST /api/v1/products/:id/image/upload)', () => {
+    it('rejects unauthenticated multipart upload with 401', async () => {
+      const validJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x31, 0x32]);
+      const res = await request(app)
+        .post('/api/v1/products/10/image/upload')
+        .attach('image', validJpeg, 'test.jpg');
+
+      expect(res.status).toBe(401);
+    });
+
+    it('rejects multipart upload without image file', async () => {
+      vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
+        const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
+        if (sqlText.includes('information_schema.tables')) {
+          return { rows: [{ table_name: 'products' }, { table_name: 'session' }], rowCount: 2 } as any;
+        }
+        if (sqlText.includes('FROM products') && sqlText.includes('WHERE id = $1')) {
+          return {
+            rows: [{ id: 10, name: 'Tata Tea Gold', buying_price: '180.00', archived_at: null, image_object_key: null }],
+            rowCount: 1,
+          } as any;
+        }
+        return { rows: [], rowCount: 0 } as any;
+      });
+
+      const res = await request(app)
+        .post('/api/v1/products/10/image/upload')
+        .set('Cookie', authCookie)
+        .set('x-csrf-token', csrfToken);
+
+      expect(res.status).toBe(400);
+      expect(res.body.message).toContain('No image file provided');
+    });
+
+    it('successfully uploads valid JPEG buffer and attaches to product', async () => {
+      const validJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x31, 0x32]);
+
+      vi.spyOn(storageService, 'uploadBufferToR2').mockResolvedValue(undefined as any);
+      vi.spyOn(storageService, 'verifyObject').mockResolvedValue({
+        contentLength: validJpeg.length,
+        contentType: 'image/jpeg',
+      });
+
+      const updatedProduct = {
+        id: 10,
+        name: 'Tata Tea Gold',
+        buying_price: '180.00',
+        image_object_key: 'products/10/uploaded.jpg',
+        image_content_type: 'image/jpeg',
+        image_size_bytes: String(validJpeg.length),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
+        const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
+        if (sqlText.includes('information_schema.tables')) {
+          return { rows: [{ table_name: 'products' }, { table_name: 'session' }], rowCount: 2 } as any;
+        }
+        if (sqlText.includes('FROM products') && sqlText.includes('WHERE id = $1')) {
+          return {
+            rows: [{ id: 10, name: 'Tata Tea Gold', buying_price: '180.00', archived_at: null, image_object_key: null }],
+            rowCount: 1,
+          } as any;
+        }
+        if (sqlText.includes('UPDATE products')) {
+          return { rows: [updatedProduct], rowCount: 1 } as any;
+        }
+        return { rows: [], rowCount: 0 } as any;
+      });
+
+      const res = await request(app)
+        .post('/api/v1/products/10/image/upload')
+        .set('Cookie', authCookie)
+        .set('x-csrf-token', csrfToken)
+        .attach('image', validJpeg, { filename: 'test.jpg', contentType: 'image/jpeg' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
       expect(res.body.data.id).toBe(10);
     });
   });

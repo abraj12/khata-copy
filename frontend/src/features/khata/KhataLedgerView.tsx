@@ -1126,6 +1126,7 @@ export const KhataLedgerView: React.FC = () => {
                                   <img
                                     src={resolveImageUrl(p.image_url)}
                                     alt={p.name}
+                                    crossOrigin="use-credentials"
                                     className="w-7 h-7 rounded object-cover flex-shrink-0 border border-[var(--khata-border)]"
                                   />
                                 ) : (
@@ -1149,6 +1150,7 @@ export const KhataLedgerView: React.FC = () => {
                               <img
                                 src={resolveImageUrl(line.selectedProduct.image_url)}
                                 alt={line.selectedProduct.name}
+                                crossOrigin="use-credentials"
                                 className="w-6 h-6 rounded object-cover border border-[var(--khata-border)] flex-shrink-0"
                               />
                             )}

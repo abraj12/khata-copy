@@ -2,15 +2,17 @@
  * Khata Application Service Worker
  *
  * Designed for reliable business application operation in TWA and PWA modes:
- * 1. Network-first for navigation/HTML documents: Guarantees that freshly deployed website
+ * 1. ONLY INTERCEPTS SAME-ORIGIN REQUESTS: External requests (Cloudflare R2,
+ *    Render API backend, etc.) are NEVER intercepted or cached by the Service Worker.
+ * 2. Network-first for navigation/HTML documents: Guarantees that freshly deployed website
  *    updates become visible immediately on refresh/reopen without requiring an APK rebuild.
- * 2. Cache-first for immutable versioned static assets (/assets/*) with network fallback.
- * 3. STRICT EXCLUSION FOR ALL API CALLS (/api/*): Financial transactions, customer data,
- *    and authentication sessions are NEVER cached in Service Worker storage.
- * 4. Safe cache invalidation and client claim on activation.
+ * 3. Cache-first for immutable versioned static assets (/assets/*) with network fallback.
+ * 4. STRICT EXCLUSION FOR ALL API CALLS (/api/*): Financial transactions, customer data,
+ *    offline bills, and authentication sessions are NEVER cached in Service Worker storage.
+ * 5. Safe cache invalidation and client claim on activation.
  */
 
-const CACHE_VERSION = 'khata-static-v1.0.1';
+const CACHE_VERSION = 'khata-static-v1.0.2';
 const STATIC_CACHE_NAME = `khata-assets-${CACHE_VERSION}`;
 // Matches Vite's hashed asset filenames (e.g. /assets/index-D1wM4r-5.js, /assets/index-DwglHT6G.css, /assets/font-Dx9f2Ab3.woff2)
 const IMMUTABLE_ASSET_REGEX = /^\/assets\/[\w.-]+[-.][A-Za-z0-9_-]{8,}\.(?:js|css|woff2?|png|jpe?g|gif|svg|webp|ico)$/i;
@@ -42,18 +44,24 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // 1. Never intercept or cache non-GET requests (mutations, login, etc.)
+  // 1. Never intercept or cache non-GET requests (mutations, login, uploads, etc.)
   if (request.method !== 'GET') {
     return;
   }
 
-  // 2. Strict exclusion for all API endpoints and health probes
-  // Financial, customer, session, and CSRF requests MUST always reach the server
+  // 2. Strict origin check: ONLY handle requests to this PWA's own origin.
+  // Never intercept or cache external domains (R2 storage, Render API, etc.)
+  if (url.origin !== self.location.origin) {
+    return;
+  }
+
+  // 3. Strict exclusion for all API endpoints and health probes
+  // Financial, customer, session, CSRF, and bill requests MUST always reach the server
   if (url.pathname.startsWith('/api/')) {
     return;
   }
 
-  // 3. Document / Navigation requests: Network-First with cache fallback
+  // 4. Document / Navigation requests: Network-First with cache fallback
   // This guarantees that any new index.html deployed to Vercel is fetched immediately
   if (request.mode === 'navigate' || request.destination === 'document') {
     event.respondWith(
@@ -83,7 +91,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 4. Versioned immutable static assets: Cache-First with network fallback
+  // 5. Versioned immutable static assets: Cache-First with network fallback
   if (IMMUTABLE_ASSET_REGEX.test(url.pathname)) {
     event.respondWith(
       caches.match(request).then((cachedResponse) => {
@@ -104,7 +112,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 5. All other static GET requests (icons, manifest): Stale-while-revalidate
+  // 6. All other same-origin static GET requests (manifest, favicon, app icons): Stale-while-revalidate
   event.respondWith(
     caches.match(request).then((cachedResponse) => {
       const fetchPromise = fetch(request)
@@ -124,9 +132,12 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Skip waiting message listener
+// Skip waiting / Cache clear message listener
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
+  }
+  if (event.data && event.data.type === 'CLEAR_CACHE') {
+    caches.keys().then((names) => Promise.all(names.map((n) => caches.delete(n))));
   }
 });

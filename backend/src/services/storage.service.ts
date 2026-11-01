@@ -240,32 +240,29 @@ export class StorageService {
         );
       }
 
-      // 2. Read first 16 bytes to verify magic bytes / file signature
-      try {
-        const getRange = await this.s3Client!.send(
-          new GetObjectCommand({
-            Bucket: env.R2_BUCKET_NAME!,
-            Key: objectKey,
-            Range: 'bytes=0-15',
-          })
-        );
+      // 2. Read first 16 bytes to verify magic bytes / file signature (fail-closed)
+      const getRange = await this.s3Client!.send(
+        new GetObjectCommand({
+          Bucket: env.R2_BUCKET_NAME!,
+          Key: objectKey,
+          Range: 'bytes=0-15',
+        })
+      );
 
-        if (getRange.Body) {
-          const chunk = await getRange.Body.transformToByteArray();
-          const validSignature = validateImageMagicBytes(chunk, contentType);
-          if (!validSignature) {
-            // Delete invalid spoofed object immediately
-            await this.deleteObject(objectKey);
-            throw new AppError(
-              'Uploaded file contents do not match a valid JPEG, PNG, or WebP image signature.',
-              400,
-              'INVALID_IMAGE_SIGNATURE'
-            );
-          }
-        }
-      } catch (err: unknown) {
-        if (err instanceof AppError) throw err;
-        console.warn('[STORAGE] Magic bytes range check skipped/failed:', (err as Error).message);
+      if (!getRange.Body) {
+        throw new AppError('Unable to inspect uploaded image contents from storage.', 502, 'STORAGE_VERIFICATION_FAILED');
+      }
+
+      const chunk = await getRange.Body.transformToByteArray();
+      const validSignature = validateImageMagicBytes(chunk, contentType);
+      if (!validSignature) {
+        // Delete invalid spoofed object immediately
+        await this.deleteObject(objectKey);
+        throw new AppError(
+          'Uploaded file contents do not match a valid JPEG, PNG, or WebP image signature.',
+          400,
+          'INVALID_IMAGE_SIGNATURE'
+        );
       }
 
       return {
@@ -274,10 +271,14 @@ export class StorageService {
       };
     } catch (err: unknown) {
       if (err instanceof AppError) throw err;
+      const errorName = (err as Error)?.name || '';
+      if (errorName === 'NotFound' || errorName === 'NoSuchKey') {
+        throw new AppError('Uploaded image not found in storage.', 404, 'OBJECT_NOT_FOUND');
+      }
       throw new AppError(
-        'Uploaded image could not be verified in storage. Please retry.',
-        400,
-        'OBJECT_NOT_FOUND'
+        `Storage service verification failed: ${(err as Error).message}`,
+        502,
+        'STORAGE_ERROR'
       );
     }
   }

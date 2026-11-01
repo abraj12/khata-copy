@@ -1,11 +1,7 @@
-import { apiClient, getCsrfToken, fetchCsrfToken } from '../../lib/apiClient.js';
+import { apiClient, getCsrfToken, fetchCsrfToken, API_BASE_URL } from '../../lib/apiClient.js';
 import type { UploadIntentData } from '../products/productsApi.js';
 export { resolveImageUrl } from '../products/productsApi.js';
 
-const API_BASE_URL =
-  (import.meta as unknown as { env: Record<string, string> }).env.VITE_API_BASE_URL ||
-  (import.meta as unknown as { env: Record<string, string> }).env.VITE_API_URL ||
-  'https://api-khata.algions.in';
 
 export interface OfflineBillRecord {
   id: number;

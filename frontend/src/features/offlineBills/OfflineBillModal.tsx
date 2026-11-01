@@ -197,8 +197,10 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
         if ((err as Error).name === 'AbortError') return;
         console.error('Failed to load offline bills:', err);
       } finally {
-        setIsLoadingBills(false);
-        setIsLoadingMore(false);
+        if (billsAbortRef.current === controller) {
+          setIsLoadingBills(false);
+          setIsLoadingMore(false);
+        }
       }
     },
     []
@@ -556,6 +558,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
                             <img
                               src={resolveImageUrl(bill.image_url)}
                               alt={bill.customer_name}
+                              crossOrigin="use-credentials"
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                             />
                           ) : (
@@ -677,6 +680,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
             <img
               src={lightboxBill.url}
               alt={lightboxBill.title}
+              crossOrigin="use-credentials"
               className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl"
             />
           </div>
