@@ -73,9 +73,11 @@ describe('Search & Bounded Pagination Test Suite', () => {
 
   describe('Customer Search & Pagination', () => {
     it('4. Searches customers by name and phone with digit normalization', async () => {
+      let executedSql = '';
       let executedParams: unknown[] = [];
 
       vi.spyOn(appPool, 'query').mockImplementation(async (sql, params) => {
+        executedSql = sql as string;
         executedParams = (params as unknown[]) || [];
         return {
           rows: [
@@ -102,6 +104,8 @@ describe('Search & Bounded Pagination Test Suite', () => {
       expect(res.customers[0].outstanding).toBe('1000.00');
       // Params must include escaped search and extracted digits
       expect(executedParams).toContain('%9876543210%');
+      expect(executedSql).toContain('LIMIT $3 OFFSET $4');
+      expect(executedParams).toHaveLength(4);
     });
 
     it('5. Enforces upper bound limit of 50 on pagination', async () => {
@@ -132,16 +136,20 @@ describe('Search & Bounded Pagination Test Suite', () => {
       expect(executedSql).toContain('ORDER BY name ASC, id ASC');
     });
 
-    it('7. Enforces stable customer ordering (last_activity DESC, name ASC, id ASC)', async () => {
+    it('7. Enforces stable customer ordering (last_activity DESC, name ASC, id ASC) and parameterized LIMIT/OFFSET', async () => {
       let executedSql = '';
+      let executedParams: unknown[] = [];
 
-      vi.spyOn(appPool, 'query').mockImplementation(async (sql) => {
+      vi.spyOn(appPool, 'query').mockImplementation(async (sql, params) => {
         executedSql = sql as string;
+        executedParams = (params as unknown[]) || [];
         return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] };
       });
 
       await khataService.listCustomers();
       expect(executedSql).toContain('ORDER BY tx.last_activity DESC NULLS LAST, c.name ASC, c.id ASC');
+      expect(executedSql).toContain('LIMIT $1 OFFSET $2');
+      expect(executedParams).toEqual([26, 0]);
     });
 
     it('8. Uses default pagination parameters (limit 25, offset 0)', async () => {

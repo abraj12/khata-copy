@@ -209,7 +209,7 @@ export class KhataService {
       }
     }
 
-    sql += ` ORDER BY tx.last_activity DESC NULLS LAST, c.name ASC, c.id ASC LIMIT ${params.length + 1} OFFSET ${params.length + 2}`;
+    sql += ` ORDER BY tx.last_activity DESC NULLS LAST, c.name ASC, c.id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limit + 1, offset);
 
     const result = await appPool.query(sql, params);
