@@ -957,116 +957,73 @@ export const GstBillingView: React.FC = () => {
                         )}
                       </div>
 
-                      {/* Row 1: Product Selection & Description of Goods side by side */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {/* Column 1: Select Product from Catalogue */}
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="text-[11px] font-bold text-[var(--khata-text-muted)] flex items-center gap-1.5">
-                              <Package className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
-                              <span>Select Product</span>
-                            </label>
+                      {/* Description of Goods with Integrated Catalogue Autocomplete */}
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[11px] font-bold text-[var(--khata-text-muted)] flex items-center gap-1">
+                            <Package className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
+                            <span>Description of Goods</span>
+                            <span className="text-rose-500">*</span>
+                          </label>
+
+                          <div className="flex items-center gap-2">
                             {item.productId ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setItems((prev) =>
-                                    prev.map((i) => (i.id === item.id ? { ...i, productId: null } : i))
-                                  );
-                                }}
-                                className="text-[10px] text-rose-500 hover:underline font-bold cursor-pointer"
-                                title="Unlink catalogue product"
-                              >
-                                Clear Selection
-                              </button>
+                              <div className="flex items-center gap-1.5 text-[10px]">
+                                <span className="text-[var(--khata-accent)] font-semibold truncate max-w-[200px]">
+                                  ✓ Linked: {availableProducts.find((p) => p.id === item.productId)?.name || 'Catalogue Product'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setItems((prev) =>
+                                      prev.map((i) => (i.id === item.id ? { ...i, productId: null } : i))
+                                    );
+                                  }}
+                                  className="text-rose-500 hover:underline font-bold cursor-pointer"
+                                  title="Unlink product"
+                                >
+                                  (Unlink)
+                                </button>
+                              </div>
+                            ) : isLoadingProducts ? (
+                              <span className="text-[10px] text-[var(--khata-text-muted)] flex items-center gap-1">
+                                <Loader2 className="w-3 h-3 animate-spin text-[var(--khata-accent)]" />
+                                <span>Loading catalogue...</span>
+                              </span>
                             ) : availableProducts.length > 0 ? (
                               <span className="text-[10px] text-[var(--khata-text-muted)]">
-                                {availableProducts.length} in catalogue
+                                {availableProducts.length} catalogue products available
                               </span>
                             ) : null}
                           </div>
-
-                          <div className="relative">
-                            <select
-                              value={item.productId || ''}
-                              onChange={(e) => {
-                                const prodId = Number(e.target.value);
-                                if (!prodId) {
-                                  setItems((prev) =>
-                                    prev.map((i) => (i.id === item.id ? { ...i, productId: null } : i))
-                                  );
-                                  return;
-                                }
-                                const selectedProd = availableProducts.find((p) => p.id === prodId);
-                                if (selectedProd) {
-                                  handleSelectProduct(item.id, selectedProd);
-                                }
-                              }}
-                              disabled={isLoadingProducts}
-                              className="neu-input w-full font-semibold text-xs cursor-pointer truncate"
-                              style={{ background: 'var(--khata-surface)', color: 'var(--khata-text)' }}
-                            >
-                              <option value="">
-                                {isLoadingProducts
-                                  ? '⏳ Loading products from catalogue...'
-                                  : availableProducts.length === 0
-                                  ? '⚠️ No products found in catalogue (Type description)'
-                                  : '🔍 -- Pick a Product from Catalogue --'}
-                              </option>
-                              {availableProducts.map((p) => (
-                                <option key={p.id} value={p.id}>
-                                  {p.name} {p.hsn_code ? `[HSN: ${p.hsn_code}]` : ''} (₹{p.buying_price})
-                                </option>
-                              ))}
-                            </select>
-                            {isLoadingProducts && (
-                              <div className="absolute right-8 top-1/2 -translate-y-1/2">
-                                <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--khata-accent)]" />
-                              </div>
-                            )}
-                          </div>
                         </div>
 
-                        {/* Column 2: Description of Goods */}
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="text-[11px] font-bold text-[var(--khata-text-muted)] flex items-center gap-1">
-                              <span>Description of Goods</span>
-                              <span className="text-rose-500">*</span>
-                            </label>
-                            {item.productId && (
-                              <span className="text-[10px] text-[var(--khata-accent)] font-semibold flex items-center gap-1 truncate">
-                                ✓ Linked to product #{item.productId}
-                              </span>
-                            )}
-                          </div>
-                          <div className="relative">
-                            <input
-                              type="text"
-                              list={`product-options-${item.id}`}
-                              value={item.description}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                const matched = availableProducts.find(
-                                  (p) => p.name.toLowerCase() === val.toLowerCase()
-                                );
-                                if (matched) {
-                                  handleSelectProduct(item.id, matched);
-                                } else {
-                                  handleItemChange(item.id, 'description', val);
-                                }
-                              }}
-                              placeholder="e.g. HDF BOARD 12mm 2.44 × 1.22 (auto-filled or type custom)"
-                              className="neu-input w-full font-medium text-xs"
-                            />
-                            <datalist id={`product-options-${item.id}`}>
-                              {availableProducts.map((p) => (
-                                <option key={p.id} value={p.name}>
-                                  {p.hsn_code ? `HSN: ${p.hsn_code} | ` : ''}₹{p.buying_price}
-                                </option>
-                              ))}
-                            </datalist>
-                          </div>
+                        <div className="relative">
+                          <input
+                            type="text"
+                            list={`product-options-${item.id}`}
+                            value={item.description}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              const matched = availableProducts.find(
+                                (p) => p.name.toLowerCase() === val.toLowerCase()
+                              );
+                              if (matched) {
+                                handleSelectProduct(item.id, matched);
+                              } else {
+                                handleItemChange(item.id, 'description', val);
+                              }
+                            }}
+                            placeholder="Type to search product from catalogue or enter custom description..."
+                            className="neu-input w-full font-medium text-xs"
+                          />
+                          <datalist id={`product-options-${item.id}`}>
+                            {availableProducts.map((p) => (
+                              <option key={p.id} value={p.name}>
+                                {p.hsn_code ? `HSN: ${p.hsn_code} | ` : ''}₹{p.buying_price}
+                              </option>
+                            ))}
+                          </datalist>
                         </div>
                       </div>
 
