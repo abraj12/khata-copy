@@ -81,9 +81,15 @@ export class StorageService {
 
   private initClient() {
     if (isR2Configured(env)) {
-      const endpoint =
-        env.R2_ENDPOINT ||
-        (env.R2_ACCOUNT_ID ? `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com` : undefined);
+      let endpoint = env.R2_ENDPOINT;
+      if (endpoint) {
+        endpoint = endpoint.trim().replace(/\/+$/, '');
+        if (env.R2_BUCKET_NAME && endpoint.endsWith(`/${env.R2_BUCKET_NAME}`)) {
+          endpoint = endpoint.slice(0, -(env.R2_BUCKET_NAME.length + 1));
+        }
+      } else if (env.R2_ACCOUNT_ID) {
+        endpoint = `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
+      }
 
       this.s3Client = new S3Client({
         region: 'auto',

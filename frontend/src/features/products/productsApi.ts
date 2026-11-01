@@ -41,17 +41,26 @@ export async function uploadFileToPresignedUrl(
   file: File,
   headers: Record<string, string> = {}
 ): Promise<void> {
-  const response = await fetch(uploadUrl, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': file.type,
-      ...headers,
-    },
-    body: file,
-  });
+  try {
+    const response = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': file.type,
+        ...headers,
+      },
+      body: file,
+    });
 
-  if (!response.ok) {
-    throw new Error(`Direct upload to storage failed with status ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Direct upload to storage failed with status ${response.status}`);
+    }
+  } catch (err) {
+    if ((err as Error).message === 'Failed to fetch') {
+      throw new Error(
+        'Upload blocked by browser. Please configure the CORS policy in your Cloudflare R2 bucket settings.'
+      );
+    }
+    throw err;
   }
 }
 
