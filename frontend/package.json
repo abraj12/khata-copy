@@ -9,14 +9,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview",
-    "cap:sync": "cap sync android",
-    "cap:open": "cap open android"
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@capacitor/android": "^7.0.1",
-    "@capacitor/cli": "^7.0.1",
-    "@capacitor/core": "^7.0.1",
     "@fontsource/montserrat": "^5.3.0",
     "decimal.js": "^10.6.0",
     "lucide-react": "^1.16.0",

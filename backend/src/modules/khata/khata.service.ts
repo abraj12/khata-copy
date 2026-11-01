@@ -1,3 +1,4 @@
+import { AppError } from '../../utils/errors.js';
 import crypto from 'crypto';
 import { Decimal } from 'decimal.js';
 import { appPool } from '../../config/database.js';
@@ -76,10 +77,7 @@ export class KhataService {
   public normalizeCustomerPhone(phone?: string | null): string | null {
     if (phone === null || phone === undefined) return null;
     if (typeof phone !== 'string') {
-      const err = new Error('Customer phone must be a string.');
-      (err as unknown as { status: number; code: string }).status = 400;
-      (err as unknown as { status: number; code: string }).code = 'INVALID_PHONE_FORMAT';
-      throw err;
+      throw new AppError('Customer phone must be a string.', 400, 'INVALID_PHONE_FORMAT');
     }
     const trimmed = phone.trim();
     if (trimmed === '') return null;
@@ -97,10 +95,7 @@ export class KhataService {
       return `+91${cleaned}`;
     }
 
-    const err = new Error('Invalid phone number format. Must be a valid 10-digit Indian mobile number.');
-    (err as unknown as { status: number; code: string }).status = 400;
-    (err as unknown as { status: number; code: string }).code = 'INVALID_PHONE_FORMAT';
-    throw err;
+    throw new AppError('Invalid phone number format. Must be a valid 10-digit Indian mobile number.', 400, 'INVALID_PHONE_FORMAT');
   }
 
   /**
@@ -426,7 +421,7 @@ export class KhataService {
    */
   public async createTransaction(input: CreateTransactionInput) {
     if (!input.items || input.items.length === 0) {
-      throw new Error('At least one item is required for an Udhar transaction.');
+      throw new AppError('At least one item is required for an Udhar transaction.', 400, 'VALIDATION_ERROR');
     }
 
     const client = await appPool.connect();
@@ -451,9 +446,7 @@ export class KhataService {
             await client.query('COMMIT');
             return row.response_body;
           } else {
-            const conflictErr = new Error('Idempotency key reused with different request payload.');
-            (conflictErr as unknown as { status: number }).status = 409;
-            throw conflictErr;
+            throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
           }
         }
       }
@@ -461,7 +454,7 @@ export class KhataService {
       // 1. Resolve Customer safely
       let customerId: number;
       const rawName = input.customer.name.trim();
-      if (!rawName) throw new Error('Customer name is required.');
+      if (!rawName) throw new AppError('Customer name is required.', 400, 'VALIDATION_ERROR');
 
       const normName = this.normalizeName(rawName);
       const normPhone = this.normalizeCustomerPhone(input.customer.phone);
@@ -473,19 +466,15 @@ export class KhataService {
           [input.customer.id]
         );
         if (custRes.rows.length === 0) {
-          const notFoundErr = new Error('Selected customer not found.');
-          (notFoundErr as unknown as { status: number; code: string }).status = 404;
-          (notFoundErr as unknown as { status: number; code: string }).code = 'CUSTOMER_NOT_FOUND';
-          throw notFoundErr;
+          throw new AppError('Selected customer not found.', 404, 'CUSTOMER_NOT_FOUND');
         }
         const existing = custRes.rows[0];
         if (normPhone && existing.normalized_phone && existing.normalized_phone !== normPhone) {
-          const conflictErr = new Error(
-            `Customer #${existing.id} already has phone ${existing.phone}. Cannot overwrite with ${input.customer.phone}.`
+          throw new AppError(
+            `Customer #${existing.id} already has phone ${existing.phone}. Cannot overwrite with ${input.customer.phone}.`,
+            409,
+            'PHONE_CONFLICT'
           );
-          (conflictErr as unknown as { status: number; code: string }).status = 409;
-          (conflictErr as unknown as { status: number; code: string }).code = 'PHONE_CONFLICT';
-          throw conflictErr;
         }
 
         // If existing customer had no phone and new valid phone is supplied, attach it safely under row lock
@@ -495,12 +484,11 @@ export class KhataService {
             [normPhone, existing.id]
           );
           if (phoneConflict.rows.length > 0) {
-            const conflictErr = new Error(
-              `Phone number ${input.customer.phone} is already attached to customer #${phoneConflict.rows[0].id} (${phoneConflict.rows[0].name}).`
+            throw new AppError(
+              `Phone number ${input.customer.phone} is already attached to customer #${phoneConflict.rows[0].id} (${phoneConflict.rows[0].name}).`,
+              409,
+              'PHONE_ALREADY_ATTACHED'
             );
-            (conflictErr as unknown as { status: number; code: string }).status = 409;
-            (conflictErr as unknown as { status: number; code: string }).code = 'PHONE_ALREADY_ATTACHED';
-            throw conflictErr;
           }
           await client.query(
             'UPDATE customers SET phone = $1, normalized_phone = $2, updated_at = NOW() WHERE id = $3',
@@ -519,12 +507,11 @@ export class KhataService {
           if (phoneRes.rows.length === 1) {
             matchedCustomer = phoneRes.rows[0];
           } else if (phoneRes.rows.length > 1) {
-            const conflictErr = new Error(
-              `Multiple customer records found with phone ${input.customer.phone}. Please resolve duplicate customer records.`
+            throw new AppError(
+              `Multiple customer records found with phone ${input.customer.phone}. Please resolve duplicate customer records.`,
+              409,
+              'AMBIGUOUS_CUSTOMER_MATCH'
             );
-            (conflictErr as unknown as { status: number; code: string }).status = 409;
-            (conflictErr as unknown as { status: number; code: string }).code = 'AMBIGUOUS_CUSTOMER_MATCH';
-            throw conflictErr;
           }
         }
 
@@ -548,25 +535,23 @@ export class KhataService {
             customerId = parseInt(existingCust.id, 10);
           } else if (nameMatches.rows.length > 0 && nameMatches.rows.some((c) => c.phone !== null)) {
             // Name matches someone with a different phone -> reject to prevent accidental merge
-            const conflictErr = new Error(
-              `A customer named "${rawName}" already exists with a different phone number. Please select the customer explicitly or verify identity.`
+            throw new AppError(
+              `A customer named "${rawName}" already exists with a different phone number. Please select the customer explicitly or verify identity.`,
+              409,
+              'CUSTOMER_NAME_CONFLICT'
             );
-            (conflictErr as unknown as { status: number; code: string }).status = 409;
-            (conflictErr as unknown as { status: number; code: string }).code = 'CUSTOMER_NAME_CONFLICT';
-            throw conflictErr;
           } else if (nameMatches.rows.length > 1) {
             // Multiple customers with the same name -> ambiguous
-            const conflictErr = new Error(
-              `Multiple customers found matching "${rawName}". Please specify customer ID or phone to disambiguate.`
+            throw new AppError(
+              `Multiple customers found matching "${rawName}". Please specify customer ID or phone to disambiguate.`,
+              409,
+              'AMBIGUOUS_CUSTOMER_MATCH',
+              nameMatches.rows.map((r) => ({
+                id: parseInt(r.id, 10),
+                name: r.name,
+                phone: r.phone,
+              }))
             );
-            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).status = 409;
-            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).code = 'AMBIGUOUS_CUSTOMER_MATCH';
-            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).candidates = nameMatches.rows.map((r) => ({
-              id: parseInt(r.id, 10),
-              name: r.name,
-              phone: r.phone,
-            }));
-            throw conflictErr;
           } else {
             // 0 matches: safe to insert new customer with the phone
             const newCust = await client.query(
@@ -588,17 +573,16 @@ export class KhataService {
             customerId = parseInt(nameMatches.rows[0].id, 10);
           } else if (nameMatches.rows.length > 1) {
             // Ambiguous matches: reject with 409 AMBIGUOUS_CUSTOMER_MATCH
-            const conflictErr = new Error(
-              `Multiple customers found matching "${rawName}". Please specify customer ID or phone.`
+            throw new AppError(
+              `Multiple customers found matching "${rawName}". Please specify customer ID or phone.`,
+              409,
+              'AMBIGUOUS_CUSTOMER_MATCH',
+              nameMatches.rows.map((r) => ({
+                id: parseInt(r.id, 10),
+                name: r.name,
+                phone: r.phone,
+              }))
             );
-            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).status = 409;
-            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).code = 'AMBIGUOUS_CUSTOMER_MATCH';
-            (conflictErr as unknown as { status: number; code: string; candidates: unknown[] }).candidates = nameMatches.rows.map((r) => ({
-              id: parseInt(r.id, 10),
-              name: r.name,
-              phone: r.phone,
-            }));
-            throw conflictErr;
           } else {
             // 0 matches: create new customer without phone
             const newCust = await client.query(
@@ -635,12 +619,12 @@ export class KhataService {
         );
 
         if (prodRes.rows.length === 0) {
-          throw new Error(`Product with ID ${prodId} does not exist.`);
+          throw new AppError(`Product with ID ${prodId} does not exist.`, 404, 'PRODUCT_NOT_FOUND');
         }
 
         const product = prodRes.rows[0];
         if (product.archived_at) {
-          throw new Error(`Product "${product.name}" is archived and cannot be selected for new Udhar.`);
+          throw new AppError(`Product "${product.name}" is archived and cannot be selected for new Udhar.`, 400, 'PRODUCT_ARCHIVED');
         }
 
         const lineTotalDec = qtyDec.times(sellPriceDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
@@ -657,7 +641,7 @@ export class KhataService {
       }
 
       if (serverComputedTotal.lessThanOrEqualTo(0)) {
-        throw new Error('Transaction total must be greater than zero.');
+        throw new AppError('Transaction total must be greater than zero.', 400, 'VALIDATION_ERROR');
       }
 
       // 3. Insert udhar_transactions
@@ -693,8 +677,10 @@ export class KhataService {
         const initPayDec = validateMoneyInput(input.initialPayment, 'Initial payment');
 
         if (initPayDec.greaterThan(serverComputedTotal)) {
-          throw new Error(
-            `Initial payment (₹${initPayDec.toFixed(2)}) cannot exceed transaction total (₹${serverComputedTotal.toFixed(2)}).`
+          throw new AppError(
+            `Initial payment (₹${initPayDec.toFixed(2)}) cannot exceed transaction total (₹${serverComputedTotal.toFixed(2)}).`,
+            400,
+            'PAYMENT_EXCEEDS_TOTAL'
           );
         }
 
@@ -708,9 +694,9 @@ export class KhataService {
           const paymentId = parseInt(payRes.rows[0].id, 10);
 
           await client.query(
-            `INSERT INTO payment_allocations (payment_id, transaction_id, amount, created_at)
-             VALUES ($1, $2, $3, NOW())`,
-            [paymentId, transactionId, initPayDec.toFixed(2)]
+            `INSERT INTO payment_allocations (payment_id, transaction_id, customer_id, amount, created_at)
+             VALUES ($1, $2, $3, $4, NOW())`,
+            [paymentId, transactionId, customerId, initPayDec.toFixed(2)]
           );
 
           initialPaymentRecorded = initPayDec.toFixed(2);
@@ -752,8 +738,30 @@ export class KhataService {
 
       await client.query('COMMIT');
       return responsePayload;
-    } catch (err) {
+    } catch (err: unknown) {
       await client.query('ROLLBACK');
+      const pgErr = err as { code?: string; constraint?: string };
+      if (input.idempotencyKey && pgErr?.code === '23505' && pgErr?.constraint?.includes('idempotency')) {
+        const existingKeyRes = await appPool.query(
+          'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
+          [input.idempotencyKey]
+        );
+        if (existingKeyRes.rows.length > 0) {
+          const row = existingKeyRes.rows[0];
+          const currentHash = this.hashPayload({
+            customer: input.customer,
+            items: input.items,
+            initialPayment: input.initialPayment,
+            note: input.note,
+          });
+          if (row.request_hash === currentHash) {
+            return row.response_body;
+          } else {
+            throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
+          }
+        }
+        throw new AppError('A request with this idempotency key is currently processing. Please retry in a moment.', 409, 'IDEMPOTENCY_IN_FLIGHT');
+      }
       throw err;
     } finally {
       client.release();
@@ -772,7 +780,7 @@ export class KhataService {
   ) {
     const payDec = validateMoneyInput(rawAmount, 'Payment amount');
     if (payDec.isZero()) {
-      throw new Error('Payment amount must be greater than zero.');
+      throw new AppError('Payment amount must be greater than zero.', 400, 'VALIDATION_ERROR');
     }
 
     const client = await appPool.connect();
@@ -792,9 +800,7 @@ export class KhataService {
             await client.query('COMMIT');
             return row.response_body;
           } else {
-            const conflictErr = new Error('Idempotency key reused with different request payload.');
-            (conflictErr as unknown as { status: number }).status = 409;
-            throw conflictErr;
+            throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
           }
         }
       }
@@ -805,7 +811,7 @@ export class KhataService {
         [customerId]
       );
       if (custRes.rows.length === 0) {
-        throw new Error('Customer not found.');
+        throw new AppError('Customer not found.', 404, 'CUSTOMER_NOT_FOUND');
       }
 
       // 2. Compute current total outstanding for customer using independent aggregates
@@ -825,8 +831,10 @@ export class KhataService {
       const currentOutstandingDec = Decimal.max(0, totalUdharDec.minus(totalAllocatedDec));
 
       if (payDec.greaterThan(currentOutstandingDec)) {
-        throw new Error(
-          `Payment amount (₹${payDec.toFixed(2)}) cannot exceed customer total outstanding due (₹${currentOutstandingDec.toFixed(2)}).`
+        throw new AppError(
+          `Payment amount (₹${payDec.toFixed(2)}) cannot exceed customer total outstanding due (₹${currentOutstandingDec.toFixed(2)}).`,
+          400,
+          'PAYMENT_EXCEEDS_BALANCE'
         );
       }
 
@@ -884,9 +892,9 @@ export class KhataService {
         const allocationAmount = Decimal.min(remainingToAllocate, txDue);
 
         await client.query(
-          `INSERT INTO payment_allocations (payment_id, transaction_id, amount, created_at)
-           VALUES ($1, $2, $3, NOW())`,
-          [paymentId, tx.id, allocationAmount.toFixed(2)]
+          `INSERT INTO payment_allocations (payment_id, transaction_id, customer_id, amount, created_at)
+           VALUES ($1, $2, $3, $4, NOW())`,
+          [paymentId, tx.id, customerId, allocationAmount.toFixed(2)]
         );
 
         allocationDetails.push({
@@ -927,8 +935,25 @@ export class KhataService {
 
       await client.query('COMMIT');
       return responsePayload;
-    } catch (err) {
+    } catch (err: unknown) {
       await client.query('ROLLBACK');
+      const pgErr = err as { code?: string; constraint?: string };
+      if (idempotencyKey && pgErr?.code === '23505' && pgErr?.constraint?.includes('idempotency')) {
+        const existingKeyRes = await appPool.query(
+          'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
+          [idempotencyKey]
+        );
+        if (existingKeyRes.rows.length > 0) {
+          const row = existingKeyRes.rows[0];
+          const currentHash = this.hashPayload({ customerId, amount: payDec.toFixed(2), note: note || null });
+          if (row.request_hash === currentHash) {
+            return row.response_body;
+          } else {
+            throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
+          }
+        }
+        throw new AppError('A request with this idempotency key is currently processing. Please retry in a moment.', 409, 'IDEMPOTENCY_IN_FLIGHT');
+      }
       throw err;
     } finally {
       client.release();

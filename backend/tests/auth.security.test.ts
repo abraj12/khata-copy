@@ -52,6 +52,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '004_integer_quantity_and_money_constraints.sql' },
             { version: '005_search_indexes_and_identity_constraints.sql' },
             { version: '006_quantity_two_decimal_places.sql' },
+            { version: '007_quantity_strict_scale_and_allocation_integrity.sql' },
           ],
           rowCount: 6,
         } as any;
@@ -586,5 +587,20 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     expect(res.body.database.checks.schemaMigrationsTable).toBe(true);
     expect(res.body.database.checks.migrationsApplied.missing.length).toBe(0);
     expect(res.body.database.checks.coreTables.missing.length).toBe(0);
+  });
+
+  // TEST CASE 36: LoginAttemptStore background pruning handles connection failure safely
+  it('36. LoginAttemptStore background pruning handles connection failure gracefully without unhandled rejections', async () => {
+    const store = new LoginAttemptStore(false);
+    vi.spyOn(appPool, 'connect').mockRejectedValueOnce(new Error('Simulated database connection failure'));
+
+    // maybePruneOldAttempts must resolve safely without throwing
+    await expect(store.maybePruneOldAttempts()).resolves.toBeUndefined();
+
+    // Check lockout must remain resilient even if connection acquisition fails
+    vi.spyOn(appPool, 'connect').mockRejectedValueOnce(new Error('Simulated connection failure on cleanup'));
+    const status = await store.checkLockout('192.168.1.100', '9876543210');
+    expect(status).toBeDefined();
+    expect(status.isLocked).toBe(false);
   });
 });

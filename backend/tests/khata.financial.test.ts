@@ -56,6 +56,7 @@ interface PaymentAllocRow {
   id: string;
   payment_id: string;
   transaction_id: string;
+  customer_id?: string;
   amount: string;
   created_at: string;
 }
@@ -108,8 +109,15 @@ class MockDatabaseState {
     }
 
     if (s.startsWith('INSERT INTO IDEMPOTENCY_KEYS')) {
+      const key = params[0] as string;
+      if (this.idempotencyKeys.some((k) => k.key === key)) {
+        const err = new Error('duplicate key value violates unique constraint "idempotency_keys_key_key"');
+        (err as any).code = '23505';
+        (err as any).constraint = 'idempotency_keys_key_key';
+        throw err;
+      }
       const row: IdempotencyRow = {
-        key: params[0] as string,
+        key,
         action: params[1] as string,
         request_hash: params[2] as string,
         response_status: params[3] as number,
@@ -251,11 +259,13 @@ class MockDatabaseState {
 
     if (s.startsWith('INSERT INTO PAYMENT_ALLOCATIONS')) {
       const id = (this.nextId++).toString();
+      const hasCustomerId = s.includes('CUSTOMER_ID');
       const row: PaymentAllocRow = {
         id,
         payment_id: params[0]?.toString() as string,
         transaction_id: params[1]?.toString() as string,
-        amount: params[2] as string,
+        customer_id: hasCustomerId ? (params[2]?.toString() as string) : undefined,
+        amount: (hasCustomerId ? params[3] : params[2]) as string,
         created_at: new Date().toISOString(),
       };
       this.paymentAllocations.push(row);
@@ -693,42 +703,42 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
 
     // --- ACCEPTANCE: Valid quantities (0 < qty <= 1,000,000 with at most 2dp) ---
 
-    // Whole integer — must still be accepted
+    // Whole integer ï¿½ must still be accepted
     const txInt = await khataService.createTransaction({
       customer: { name: 'Ramesh Patel' },
       items: [{ productId: prodId, quantity: '3', sellingPrice: '300.00' }],
     });
     expect(txInt.success).toBe(true);
-    expect(txInt.totalAmount).toBe('900.00'); // 3 × 300.00
+    expect(txInt.totalAmount).toBe('900.00'); // 3 ï¿½ 300.00
 
-    // 1 decimal place — accepted
+    // 1 decimal place ï¿½ accepted
     const tx1dp = await khataService.createTransaction({
       customer: { name: 'Ramesh Patel' },
       items: [{ productId: prodId, quantity: '1.5', sellingPrice: '200.00' }],
     });
     expect(tx1dp.success).toBe(true);
-    expect(tx1dp.totalAmount).toBe('300.00'); // 1.5 × 200.00
+    expect(tx1dp.totalAmount).toBe('300.00'); // 1.5 ï¿½ 200.00
 
-    // 2 decimal places — accepted
+    // 2 decimal places ï¿½ accepted
     const tx2dp = await khataService.createTransaction({
       customer: { name: 'Ramesh Patel' },
       items: [{ productId: prodId, quantity: '1.25', sellingPrice: '10.10' }],
     });
     expect(tx2dp.success).toBe(true);
-    // 1.25 × 10.10 = 12.625 -> ROUND_HALF_UP -> 12.63
+    // 1.25 ï¿½ 10.10 = 12.625 -> ROUND_HALF_UP -> 12.63
     expect(tx2dp.totalAmount).toBe('12.63');
 
-    // Minimum valid quantity (0.01) — accepted
+    // Minimum valid quantity (0.01) ï¿½ accepted
     const txMin = await khataService.createTransaction({
       customer: { name: 'Ramesh Patel' },
       items: [{ productId: prodId, quantity: '0.01', sellingPrice: '100.00' }],
     });
     expect(txMin.success).toBe(true);
-    expect(txMin.totalAmount).toBe('1.00'); // 0.01 × 100.00
+    expect(txMin.totalAmount).toBe('1.00'); // 0.01 ï¿½ 100.00
 
     // --- REJECTION: Invalid quantities ---
 
-    // More than 2 decimal places — rejected
+    // More than 2 decimal places ï¿½ rejected
     await expect(
       khataService.createTransaction({
         customer: { name: 'Ramesh Patel' },
@@ -736,7 +746,7 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
       })
     ).rejects.toThrow(/at most 2 decimal places|up to 2 decimal places/);
 
-    // Zero — rejected
+    // Zero ï¿½ rejected
     await expect(
       khataService.createTransaction({
         customer: { name: 'Ramesh Patel' },
@@ -744,7 +754,7 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
       })
     ).rejects.toThrow(/greater than 0/);
 
-    // Negative — rejected
+    // Negative ï¿½ rejected
     await expect(
       khataService.createTransaction({
         customer: { name: 'Ramesh Patel' },
@@ -752,7 +762,7 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
       })
     ).rejects.toThrow(/greater than 0/);
 
-    // Non-numeric — rejected
+    // Non-numeric ï¿½ rejected
     await expect(
       khataService.createTransaction({
         customer: { name: 'Ramesh Patel' },
@@ -760,7 +770,7 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
       })
     ).rejects.toThrow(/greater than 0|decimal places/);
 
-    // Exponent notation — rejected
+    // Exponent notation ï¿½ rejected
     await expect(
       khataService.createTransaction({
         customer: { name: 'Ramesh Patel' },
@@ -940,5 +950,108 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
         items: [{ productId: prodId, quantity: 1, sellingPrice: '60.00' }],
       })
     ).rejects.toThrow(/Multiple customers found matching "Mohan Lal"/);
+  });
+
+  // TEST CASE 19: Idempotency replay with same key and payload returns identical response
+  it('19. Idempotency Key deduplication on replay returns saved response without duplicate writes', async () => {
+    const prod = await productsService.createProduct('Cable 10m', '100.00');
+    const prodId = parseInt(prod.id.toString(), 10);
+    const idemKey = 'idem-key-test-same-payload-123';
+
+    // First submission
+    const res1 = await khataService.createTransaction({
+      customer: { name: 'Sunil Kumar', phone: '9811199999' },
+      items: [{ productId: prodId, quantity: 2, sellingPrice: '150.00' }],
+      initialPayment: '100.00',
+      idempotencyKey: idemKey,
+    });
+    expect(res1.success).toBe(true);
+    expect(res1.totalAmount).toBe('300.00');
+    expect(res1.initialPayment).toBe('100.00');
+    const originalTxId = res1.transactionId;
+
+    // Replay with identical payload and same key
+    const res2 = await khataService.createTransaction({
+      customer: { name: 'Sunil Kumar', phone: '9811199999' },
+      items: [{ productId: prodId, quantity: 2, sellingPrice: '150.00' }],
+      initialPayment: '100.00',
+      idempotencyKey: idemKey,
+    });
+    expect(res2.success).toBe(true);
+    expect(res2.transactionId).toBe(originalTxId);
+    expect(res2.totalAmount).toBe('300.00');
+  });
+
+  // TEST CASE 20: Idempotency key reused with different payload returns 409 conflict
+  it('20. Idempotency Key collision with different payload throws HTTP 409 IDEMPOTENCY_CONFLICT', async () => {
+    const prod = await productsService.createProduct('Wire 5m', '40.00');
+    const prodId = parseInt(prod.id.toString(), 10);
+    const idemKey = 'idem-key-test-diff-payload-456';
+
+    await khataService.createTransaction({
+      customer: { name: 'Karan Mehra', phone: '9822288888' },
+      items: [{ productId: prodId, quantity: 1, sellingPrice: '70.00' }],
+      idempotencyKey: idemKey,
+    });
+
+    // Replay with different selling price / items
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Karan Mehra', phone: '9822288888' },
+        items: [{ productId: prodId, quantity: 2, sellingPrice: '140.00' }],
+        idempotencyKey: idemKey,
+      })
+    ).rejects.toMatchObject({
+      status: 409,
+      code: 'IDEMPOTENCY_CONFLICT',
+    });
+  });
+
+  // TEST CASE 21: Typed error validation on non-existent product and archived product
+  it('21. Typed error validation: Non-existent product throws 404 PRODUCT_NOT_FOUND, archived product throws 400 PRODUCT_ARCHIVED', async () => {
+    // Non-existent product
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Test Customer' },
+        items: [{ productId: 999999, quantity: 1, sellingPrice: '50.00' }],
+      })
+    ).rejects.toMatchObject({
+      status: 404,
+      code: 'PRODUCT_NOT_FOUND',
+    });
+
+    // Archived product
+    const prod = await productsService.createProduct('Discontinued Bulb', '20.00');
+    const prodId = parseInt(prod.id.toString(), 10);
+    await productsService.archiveProduct(prodId);
+
+    await expect(
+      khataService.createTransaction({
+        customer: { name: 'Test Customer' },
+        items: [{ productId: prodId, quantity: 1, sellingPrice: '30.00' }],
+      })
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'PRODUCT_ARCHIVED',
+    });
+  });
+
+  // TEST CASE 22: Payment validation: Overpayment exceeding customer balance throws 400 PAYMENT_EXCEEDS_BALANCE
+  it('22. Payment validation: Overpayment exceeding customer balance throws 400 PAYMENT_EXCEEDS_BALANCE', async () => {
+    const prod = await productsService.createProduct('Switch Box', '80.00');
+    const prodId = parseInt(prod.id.toString(), 10);
+
+    const tx = await khataService.createTransaction({
+      customer: { name: 'Vikram Singh', phone: '9833377777' },
+      items: [{ productId: prodId, quantity: 1, sellingPrice: '100.00' }],
+    });
+
+    // Customer balance is 100.00. Attempting payment of 150.00 must fail with 400 PAYMENT_EXCEEDS_BALANCE
+    await expect(
+      khataService.recordPayment(tx.customerId, '150.00', 'Excess payment')
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'PAYMENT_EXCEEDS_BALANCE',
+    });
   });
 });

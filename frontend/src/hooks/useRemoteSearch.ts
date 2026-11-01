@@ -59,6 +59,7 @@ export function useRemoteSearch<T>({
         setIsLoading(true);
         setIsError(false);
         setErrorMessage(null);
+        setItems([]); // Clear stale items from previous query immediately
       } else {
         setIsLoadingMore(true);
       }

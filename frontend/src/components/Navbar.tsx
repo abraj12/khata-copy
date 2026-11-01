@@ -14,7 +14,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
   return (
     <header
       className="sticky top-0 z-30 border-b border-[var(--khata-border)] shadow-sm"
-      style={{ backgroundColor: 'var(--khata-surface)' }}
+      style={{ background: 'var(--khata-surface)' }}
     >
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
         <div className="flex flex-wrap items-center justify-between py-2 sm:py-0 sm:h-16 gap-2">
@@ -23,7 +23,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             <div
               className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center border border-[var(--khata-border)] shadow-sm flex-shrink-0"
               style={{
-                backgroundColor: 'var(--khata-surface-inset)',
+                background: 'var(--khata-surface-inset)',
                 color: 'var(--khata-accent)',
               }}
             >

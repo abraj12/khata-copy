@@ -1,6 +1,12 @@
 # Khata — Single-Shopkeeper Digital Ledger System
 
-Khata is a production-grade, offline-capable digital ledger application engineered specifically for a single retail shopkeeper. It provides rapid recording of credit sales (*udhar*) with itemized product breakdowns, a fast-lookup product catalog, transparent customer debt tracking with mathematical FIFO (*First-In, First-Out*) payment settlement, and zero floating-point rounding drift. The system runs as a responsive web application and as an Android native APK via Capacitor.
+Khata is a production-grade, highly reliable digital ledger application engineered specifically for a single retail shopkeeper. It provides rapid recording of credit sales (*udhar*) with itemized product breakdowns, a fast-lookup product catalog, transparent customer debt tracking with mathematical FIFO (*First-In, First-Out*) payment settlement, and zero floating-point rounding drift.
+
+The application operates as a unified multi-platform system:
+- **Web Interface:** Responsive Progressive Web App (PWA) served from Vercel (`https://khata.algions.in`).
+- **Android App:** Native Android Trusted Web Activity (TWA) pointing directly to the production website (`in.algions.khata`). Updates deployed to the web interface reflect immediately in the Android application without requiring an APK rebuild.
+- **Backend API:** Express REST API running on Node.js 22 LTS on Render (`https://api-khata.algions.in`).
+- **Database:** PostgreSQL 16 on Neon Serverless with strict ACID constraints and connection pooling.
 
 ---
 
@@ -8,10 +14,10 @@ Khata is a production-grade, offline-capable digital ledger application engineer
 
 - **Node.js:** `v22.18.0` LTS or later (enforced via `.node-version` and `"engines": { "node": "22.x" }`).
 - **npm:** `v10.x` or `v11.x` (native npm workspaces support).
-- **PostgreSQL:** `v16.x` (or a Neon Serverless PostgreSQL database).
-- **Android Development (Optional for APK builds):**
-  - JDK 17 or JDK 21.
-  - Android Studio with Android SDK Platform 34+ and Build Tools.
+- **PostgreSQL:** `v16.x` (or Neon Serverless PostgreSQL).
+- **Android Development (Optional for TWA APK builds):**
+  - JDK 17.
+  - Android SDK Platform 35 and Build Tools.
 
 ---
 
@@ -26,8 +32,11 @@ npm ci
 # 2. Compile both backend and frontend workspaces
 npm run build
 
-# 3. Execute automated test suites (72 tests: validators, financial, auth, search, database guard)
+# 3. Execute automated test suites (77 tests: financial, auth lockout, idempotency, search, database guard)
 npm test
+
+# 4. Validate Digital Asset Links configuration for TWA
+node frontend/scripts/validate-assetlinks.js
 ```
 
 ---
@@ -56,19 +65,26 @@ SESSION_SECRET=dev_session_secret_at_least_32_characters_long_for_security_12345
 ```
 
 > [!WARNING]
-> **Database Safety Notice:** Never point your local development `DATABASE_URL` or run tests against the production Neon database. The test suite includes a hardware-level safety guard (`backend/src/config/testDbGuard.ts`) that will deliberately abort if connected to production Neon hosts.
+> **Database Safety Safeguard:** Never point your local development `DATABASE_URL` or run tests against the production Neon database. The test suite includes a hardware-level safety guard (`backend/src/config/testDbGuard.ts`) that deliberately aborts if connected to production Neon hosts.
 
 ### 3.2 Database Migrations
 
-Run database migrations against your target development database:
+Apply migrations against your target development database:
 
 ```bash
 npm run migrate --workspace=backend
 ```
 
-### 3.3 Running Workspaces Locally
+Migrations list:
+1. `001_auth_tables.sql`: Session table and brute-force login lockout tracking.
+2. `002_khata_transactions.sql`: Products, customers, Udhar credit transactions, payments, and FIFO allocations.
+3. `003_idempotency_and_hardening.sql`: Idempotency store and indexes.
+4. `004_integer_quantity_and_money_constraints.sql`: Initial integer quantity and strict money bounds.
+5. `005_search_indexes_and_identity_constraints.sql`: Search indexes and buying price widening.
+6. `006_quantity_two_decimal_places.sql`: Fractional quantities support up to 2 decimal places.
+7. `007_quantity_strict_scale_and_allocation_integrity.sql`: Unconstrained `NUMERIC` with `TRUNC` scale check (rejects silent rounding on SQL inputs) and composite foreign keys preventing cross-customer payment allocations.
 
-Open two terminal sessions or run the workspaces independently:
+### 3.3 Running Workspaces Locally
 
 ```bash
 # Terminal 1: Start Backend API (runs on http://localhost:5000)
@@ -80,46 +96,37 @@ npm run dev --workspace=frontend
 
 ---
 
-## 4. Android Build & Capacitor Sync
+## 4. Android TWA Application
+
+The Android app is located in `android-twa/` and uses Google's `androidbrowserhelper` (TWA) to render the production web application (`https://khata.algions.in`) in standalone full-screen mode.
+
+- **Package ID:** `in.algions.khata`
+- **Target URL:** `https://khata.algions.in`
+- **Asset Links:** Served at `https://khata.algions.in/.well-known/assetlinks.json`
+
+### Build TWA APK:
 
 ```bash
-# 1. Build the production web bundle
-npm run build --workspace=frontend
+cd android-twa
 
-# 2. Sync web bundle and offline Montserrat fonts to the Android native shell
-cd frontend
-npx cap sync android
-
-# 3. Open in Android Studio or compile APK via Gradle
-cd android
+# Build debug APK for local device testing:
 ./gradlew assembleDebug
+
+# Build release APK (requires signing.properties):
+./gradlew assembleRelease
 ```
 
+Because the application is a Trusted Web Activity, ordinary frontend updates deployed to Vercel become visible immediately in the Android app upon refresh or reopen without requiring an APK rebuild.
+
 ---
 
-## 5. Canonical Technical Documentation Suite
+## 5. Canonical Documentation Suite
 
-Comprehensive architecture, contracts, design rules, and operational guides are documented in the `docs/` directory:
-
-| Document | Description |
+| Document | Purpose & Contents |
 |---|---|
-| [docs/REMEDIATION_BASELINE.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/REMEDIATION_BASELINE.md) | Phase 0 repository baseline, active branch, SHA, migrations, and environment inventory. |
-| [docs/REMEDIATION_REPORT.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/REMEDIATION_REPORT.md) | Authoritative remediation and verification report per Sonnet 46 master specification. |
-| [docs/ACCESSIBILITY_AND_THEMES.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/ACCESSIBILITY_AND_THEMES.md) | 9 neumorphic presets, Montserrat font bundling, text scale, and focus visibility guide. |
-| [docs/PRODUCT_REQUIREMENTS.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/PRODUCT_REQUIREMENTS.md) | Exact product workflows, business rules, financial validations (quantity <= 2dp), and non-goals. |
-| [docs/ARCHITECTURE.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/ARCHITECTURE.md) | High-level system architecture, technology stack, sequence diagrams, and data flows. |
-| [docs/API_CONTRACT.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/API_CONTRACT.md) | Canonical REST routes, request/response JSON schemas, and 2-decimal string formatting. |
-| [docs/DATABASE_AND_MIGRATIONS.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/DATABASE_AND_MIGRATIONS.md) | Relational database schema (9 tables), migrations runner (001–006), and connection pooling. |
-| [docs/SECURITY.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/SECURITY.md) | Argon2id auth, host-only cookies, CSRF protection, rate limits, and test DB guards. |
-| [docs/DESIGN_SYSTEM.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/DESIGN_SYSTEM.md) | Locally bundled Montserrat font, 9 tactile neumorphic presets, and text scale architecture. |
-| [docs/DEPLOYMENT.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/DEPLOYMENT.md) | Vercel CDN frontend, Render Node.js backend, Neon DB, and DNS CNAME settings. |
-| [docs/ANDROID_RELEASE.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/ANDROID_RELEASE.md) | Capacitor synchronization, release keystore generation, and signing configurations. |
-| [docs/TESTING_AND_RELEASE.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/TESTING_AND_RELEASE.md) | Test matrix (72 tests), financial edge cases, and release acceptance gates. |
-| [docs/OPERATIONS_AND_BACKUPS.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/OPERATIONS_AND_BACKUPS.md) | Health check monitoring, Neon backups, PITR recovery, and emergency password resets. |
-| [CHANGELOG.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/CHANGELOG.md) | Chronological release and remediation notes. |
-
----
-
-## 6. License & Ownership
-
-Proprietary software developed for Algions Technologies. All rights reserved.
+| [docs/ARCHITECTURE.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/ARCHITECTURE.md) | High-level topology, single-shopkeeper data flow, TWA architecture, and security design |
+| [docs/DATABASE_AND_MIGRATIONS.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/DATABASE_AND_MIGRATIONS.md) | Schema specification (all 7 migrations), FIFO payment allocation, and composite foreign keys |
+| [docs/ANDROID_RELEASE.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/ANDROID_RELEASE.md) | TWA build guide, keystore signing configuration, and Digital Asset Links verification |
+| [docs/ACCESSIBILITY_AND_THEMES.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/ACCESSIBILITY_AND_THEMES.md) | 9 tactile neumorphic appearance presets, CSS gradient rendering, and keyboard accessibility |
+| [docs/REMEDIATION_REPORT.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/REMEDIATION_REPORT.md) | Verification and audit reconciliation report with full test evidence |
+| [docs/REMEDIATION_BASELINE.md](file:///c:/Users/rajab/OneDrive/Desktop/khata/docs/REMEDIATION_BASELINE.md) | Audit trail from baseline commit `e7d0421` to current implementation |

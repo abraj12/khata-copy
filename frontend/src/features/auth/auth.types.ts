@@ -8,6 +8,7 @@ export interface AuthState {
   isLoading: boolean;
   owner: OwnerUser | null;
   error: string | null;
+  isOffline?: boolean;
 }
 
 export interface LoginResponse {

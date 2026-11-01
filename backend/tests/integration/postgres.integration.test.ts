@@ -23,50 +23,57 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       ssl: false,
     });
 
-    // 1. Drop public schema tables cleanly for test isolation
-    await pool.query(`
-      DROP TABLE IF EXISTS "idempotency_keys" CASCADE;
-      DROP TABLE IF EXISTS "payment_allocations" CASCADE;
-      DROP TABLE IF EXISTS "payments" CASCADE;
-      DROP TABLE IF EXISTS "udhar_items" CASCADE;
-      DROP TABLE IF EXISTS "udhar_transactions" CASCADE;
-      DROP TABLE IF EXISTS "ledger_entries" CASCADE;
-      DROP TABLE IF EXISTS "customers" CASCADE;
-      DROP TABLE IF EXISTS "products" CASCADE;
-      DROP TABLE IF EXISTS "login_attempts" CASCADE;
-      DROP TABLE IF EXISTS "session" CASCADE;
-      DROP TABLE IF EXISTS "schema_migrations" CASCADE;
-    `);
+    // Dedicated single client for migrations and schema setup (Section 4.2)
+    const client = await pool.connect();
+    try {
+      // 1. Drop public schema tables cleanly for test isolation
+      await client.query(`
+        DROP TABLE IF EXISTS "idempotency_keys" CASCADE;
+        DROP TABLE IF EXISTS "payment_allocations" CASCADE;
+        DROP TABLE IF EXISTS "payments" CASCADE;
+        DROP TABLE IF EXISTS "udhar_items" CASCADE;
+        DROP TABLE IF EXISTS "udhar_transactions" CASCADE;
+        DROP TABLE IF EXISTS "ledger_entries" CASCADE;
+        DROP TABLE IF EXISTS "customers" CASCADE;
+        DROP TABLE IF EXISTS "products" CASCADE;
+        DROP TABLE IF EXISTS "login_attempts" CASCADE;
+        DROP TABLE IF EXISTS "session" CASCADE;
+        DROP TABLE IF EXISTS "schema_migrations" CASCADE;
+      `);
 
-    // 2. Apply real migrations in order
-    const migrationsDir = path.resolve(__dirname, '../../migrations');
-    const migrationFiles = [
-      '001_auth_tables.sql',
-      '002_khata_transactions.sql',
-      '003_idempotency_and_hardening.sql',
-      '004_integer_quantity_and_money_constraints.sql',
-      '005_search_indexes_and_identity_constraints.sql',
-      '006_quantity_two_decimal_places.sql',
-    ];
+      // 2. Apply real migrations in order
+      const migrationsDir = path.resolve(__dirname, '../../migrations');
+      const migrationFiles = [
+        '001_auth_tables.sql',
+        '002_khata_transactions.sql',
+        '003_idempotency_and_hardening.sql',
+        '004_integer_quantity_and_money_constraints.sql',
+        '005_search_indexes_and_identity_constraints.sql',
+        '006_quantity_two_decimal_places.sql',
+        '007_quantity_strict_scale_and_allocation_integrity.sql',
+      ];
 
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS "schema_migrations" (
-        "version" VARCHAR(255) PRIMARY KEY,
-        "applied_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS "schema_migrations" (
+          "version" VARCHAR(255) PRIMARY KEY,
+          "applied_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
 
-    for (const file of migrationFiles) {
-      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
-      await pool.query('BEGIN');
-      try {
-        await pool.query(sql);
-        await pool.query('INSERT INTO schema_migrations (version) VALUES ($1)', [file]);
-        await pool.query('COMMIT');
-      } catch (err) {
-        await pool.query('ROLLBACK');
-        throw err;
+      for (const file of migrationFiles) {
+        const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
+        await client.query('BEGIN');
+        try {
+          await client.query(sql);
+          await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [file]);
+          await client.query('COMMIT');
+        } catch (err) {
+          await client.query('ROLLBACK');
+          throw err;
+        }
       }
+    } finally {
+      client.release();
     }
   });
 
@@ -86,6 +93,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '004_integer_quantity_and_money_constraints.sql',
       '005_search_indexes_and_identity_constraints.sql',
       '006_quantity_two_decimal_places.sql',
+      '007_quantity_strict_scale_and_allocation_integrity.sql',
     ]);
 
     const expectedTables = [
@@ -208,8 +216,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     const pay1Id = pay1Res.rows[0].id;
 
     await pool.query(
-      `INSERT INTO payment_allocations (payment_id, transaction_id, amount) VALUES ($1, $2, $3)`,
-      [pay1Id, txId, '1000.00']
+      `INSERT INTO payment_allocations (payment_id, transaction_id, customer_id, amount) VALUES ($1, $2, $3, $4)`,
+      [pay1Id, txId, custId, '1000.00']
     );
 
     // Check outstanding: 3400 - 1000 = 2400
@@ -228,8 +236,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       [custId, '500.00', 'Partial UPI transfer']
     );
     await pool.query(
-      `INSERT INTO payment_allocations (payment_id, transaction_id, amount) VALUES ($1, $2, $3)`,
-      [pay2Res.rows[0].id, txId, '500.00']
+      `INSERT INTO payment_allocations (payment_id, transaction_id, customer_id, amount) VALUES ($1, $2, $3, $4)`,
+      [pay2Res.rows[0].id, txId, custId, '500.00']
     );
 
     const due2Res = await pool.query(
@@ -247,8 +255,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       [custId, '1900.00', 'Final settlement']
     );
     await pool.query(
-      `INSERT INTO payment_allocations (payment_id, transaction_id, amount) VALUES ($1, $2, $3)`,
-      [pay3Res.rows[0].id, txId, '1900.00']
+      `INSERT INTO payment_allocations (payment_id, transaction_id, customer_id, amount) VALUES ($1, $2, $3, $4)`,
+      [pay3Res.rows[0].id, txId, custId, '1900.00']
     );
 
     const due3Res = await pool.query(
@@ -284,8 +292,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       [custId, '100.00', 'Payment 1']
     );
     await pool.query(
-      `INSERT INTO payment_allocations (payment_id, transaction_id, amount) VALUES ($1, $2, $3)`,
-      [p1.rows[0].id, txId, '100.00']
+      `INSERT INTO payment_allocations (payment_id, transaction_id, customer_id, amount) VALUES ($1, $2, $3, $4)`,
+      [p1.rows[0].id, txId, custId, '100.00']
     );
 
     // Payment 2: ₹100
@@ -294,8 +302,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       [custId, '100.00', 'Payment 2']
     );
     await pool.query(
-      `INSERT INTO payment_allocations (payment_id, transaction_id, amount) VALUES ($1, $2, $3)`,
-      [p2.rows[0].id, txId, '100.00']
+      `INSERT INTO payment_allocations (payment_id, transaction_id, customer_id, amount) VALUES ($1, $2, $3, $4)`,
+      [p2.rows[0].id, txId, custId, '100.00']
     );
 
     // Query dashboard summary CTE pattern
@@ -421,54 +429,175 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     expect(deleteFailed).toBe(true);
   });
 
-  // 9. Decimal Quantity Policy in PostgreSQL: Supports up to 2 decimal places (NUMERIC(12, 2))
-  it('9. PostgreSQL schema accepts fractional quantity (1.25, 1.50) and enforces 2dp scale constraint', async () => {
+  // 9. Decimal Quantity Policy in PostgreSQL: Unconstrained NUMERIC with TRUNC scale check (Section 4.1)
+  it('9. PostgreSQL schema accepts valid 2dp quantities (1, 1.2, 1.25, 0.01) and strictly rejects direct SQL excess precision (1.234) and non-positives', async () => {
     const custRes = await pool.query(
       `INSERT INTO customers (name, normalized_name, phone, normalized_phone)
        VALUES ($1, $2, $3, $4) RETURNING id`,
-      ['Decimal Qty Customer', 'decimal qty customer', '9866677788', '9866677788']
+      ['Strict Scale Test Customer', 'strict scale test customer', '9877766655', '9877766655']
     );
     const custId = custRes.rows[0].id;
 
     const prodRes = await pool.query(
       `INSERT INTO products (name, buying_price) VALUES ($1, $2) RETURNING id`,
-      ['PVC Pipe 2.5m', '120.00']
+      ['Copper Wire 1m', '50.00']
     );
     const prodId = prodRes.rows[0].id;
 
-    // Tx: 1.25 units @ 200.00 = 250.00
     const txRes = await pool.query(
       `INSERT INTO udhar_transactions (customer_id, transaction_date, total_amount, note)
        VALUES ($1, CURRENT_DATE, $2, $3) RETURNING id`,
-      [custId, '250.00', 'Fractional quantity test']
+      [custId, '500.00', 'Strict scale verification tx']
     );
     const txId = txRes.rows[0].id;
 
-    // Insert 1.25 quantity -> must succeed
-    await pool.query(
-      `INSERT INTO udhar_items (transaction_id, product_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [txId, prodId, 'PVC Pipe 2.5m', '120.00', '1.25', '200.00', '250.00']
-    );
+    // Table of valid inputs: 1, 1.2, 1.25, 0.01 -> All must succeed
+    const validQuantities = ['1', '1.2', '1.25', '0.01'];
+    for (const qty of validQuantities) {
+      const res = await pool.query(
+        `INSERT INTO udhar_items (transaction_id, product_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING quantity`,
+        [txId, prodId, 'Copper Wire 1m', '50.00', qty, '100.00', '100.00']
+      );
+      expect(parseFloat(res.rows[0].quantity)).toBe(parseFloat(qty));
+    }
 
-    const itemRes = await pool.query(
-      `SELECT quantity FROM udhar_items WHERE transaction_id = $1`,
-      [txId]
-    );
-    expect(itemRes.rows[0].quantity).toBe('1.25');
-
-    // Attempting to insert non-positive quantity (-1.25) must violate chk_udhar_items_quantity_positive
-    let positiveCheckFailed = false;
+    // Direct SQL insertion with >2 decimal places ('1.234') MUST be rejected by chk_udhar_items_quantity_scale
+    // (guaranteeing that PostgreSQL does not silently round to 1.23)
+    let scaleRejected = false;
     try {
       await pool.query(
         `INSERT INTO udhar_items (transaction_id, product_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [txId, prodId, 'PVC Pipe 2.5m', '120.00', '-1.25', '200.00', '250.00']
+        [txId, prodId, 'Copper Wire 1m', '50.00', '1.234', '100.00', '123.40']
       );
     } catch (err) {
-      positiveCheckFailed = true;
+      scaleRejected = true;
+      expect((err as Error).message).toContain('chk_udhar_items_quantity_scale');
+    }
+    expect(scaleRejected).toBe(true);
+
+    // Quantity = 0 MUST be rejected by chk_udhar_items_quantity_positive
+    let zeroRejected = false;
+    try {
+      await pool.query(
+        `INSERT INTO udhar_items (transaction_id, product_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [txId, prodId, 'Copper Wire 1m', '50.00', '0', '100.00', '0.00']
+      );
+    } catch (err) {
+      zeroRejected = true;
       expect((err as Error).message).toContain('chk_udhar_items_quantity_positive');
     }
-    expect(positiveCheckFailed).toBe(true);
+    expect(zeroRejected).toBe(true);
+
+    // Negative quantity ('-1.25') MUST be rejected by chk_udhar_items_quantity_positive
+    let negativeRejected = false;
+    try {
+      await pool.query(
+        `INSERT INTO udhar_items (transaction_id, product_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [txId, prodId, 'Copper Wire 1m', '50.00', '-1.25', '100.00', '100.00']
+      );
+    } catch (err) {
+      negativeRejected = true;
+      expect((err as Error).message).toContain('chk_udhar_items_quantity_positive');
+    }
+    expect(negativeRejected).toBe(true);
+
+    // Quantity exceeding maximum (1,000,001) MUST be rejected by chk_udhar_items_quantity_positive
+    let maxRejected = false;
+    try {
+      await pool.query(
+        `INSERT INTO udhar_items (transaction_id, product_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [txId, prodId, 'Copper Wire 1m', '50.00', '1000001', '100.00', '100.00']
+      );
+    } catch (err) {
+      maxRejected = true;
+      expect((err as Error).message).toContain('chk_udhar_items_quantity_positive');
+    }
+    expect(maxRejected).toBe(true);
+  });
+
+  // 10. Payment Allocation Cross-Customer Integrity (Section 6.2)
+  it('10. Database schema prevents cross-customer payment allocations via composite foreign keys', async () => {
+    // Customer A: Rahul
+    const custARes = await pool.query(
+      `INSERT INTO customers (name, normalized_name, phone, normalized_phone)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      ['Rahul Verma', 'rahul verma', '9899911122', '9899911122']
+    );
+    const custAId = custARes.rows[0].id;
+
+    // Customer B: Sneha
+    const custBRes = await pool.query(
+      `INSERT INTO customers (name, normalized_name, phone, normalized_phone)
+       VALUES ($1, $2, $3, $4) RETURNING id`,
+      ['Sneha Gupta', 'sneha gupta', '9899933344', '9899933344']
+    );
+    const custBId = custBRes.rows[0].id;
+
+    // Transaction belonging to Customer A (₹1,000)
+    const txARes = await pool.query(
+      `INSERT INTO udhar_transactions (customer_id, transaction_date, total_amount, note)
+       VALUES ($1, CURRENT_DATE, $2, $3) RETURNING id`,
+      [custAId, '1000.00', 'Rahul purchase']
+    );
+    const txAId = txARes.rows[0].id;
+
+    // Payment belonging to Customer B (₹500)
+    const payBRes = await pool.query(
+      `INSERT INTO payments (customer_id, amount, note)
+       VALUES ($1, $2, $3) RETURNING id`,
+      [custBId, '500.00', 'Sneha payment']
+    );
+    const payBId = payBRes.rows[0].id;
+
+    // Attempt 1: Allocate Customer B's payment to Customer A's transaction using Customer A's ID
+    // Must fail because payment B does not belong to Customer A (fk_payment_allocations_payment_customer)
+    let crossCustFailedA = false;
+    try {
+      await pool.query(
+        `INSERT INTO payment_allocations (payment_id, transaction_id, customer_id, amount)
+         VALUES ($1, $2, $3, $4)`,
+        [payBId, txAId, custAId, '500.00']
+      );
+    } catch (err) {
+      crossCustFailedA = true;
+      expect((err as Error).message).toContain('fk_payment_allocations_payment_customer');
+    }
+    expect(crossCustFailedA).toBe(true);
+
+    // Attempt 2: Allocate Customer B's payment to Customer A's transaction using Customer B's ID
+    // Must fail because transaction A does not belong to Customer B (fk_payment_allocations_transaction_customer)
+    let crossCustFailedB = false;
+    try {
+      await pool.query(
+        `INSERT INTO payment_allocations (payment_id, transaction_id, customer_id, amount)
+         VALUES ($1, $2, $3, $4)`,
+        [payBId, txAId, custBId, '500.00']
+      );
+    } catch (err) {
+      crossCustFailedB = true;
+      expect((err as Error).message).toContain('fk_payment_allocations_transaction_customer');
+    }
+    expect(crossCustFailedB).toBe(true);
+
+    // Valid allocation: Payment belonging to Customer A allocated to Customer A's transaction
+    const payARes = await pool.query(
+      `INSERT INTO payments (customer_id, amount, note)
+       VALUES ($1, $2, $3) RETURNING id`,
+      [custAId, '500.00', 'Rahul payment']
+    );
+    const payAId = payARes.rows[0].id;
+
+    const validAllocRes = await pool.query(
+      `INSERT INTO payment_allocations (payment_id, transaction_id, customer_id, amount)
+       VALUES ($1, $2, $3, $4) RETURNING id, amount`,
+      [payAId, txAId, custAId, '500.00']
+    );
+    expect(validAllocRes.rows.length).toBe(1);
+    expect(parseFloat(validAllocRes.rows[0].amount)).toBe(500.00);
   });
 });

@@ -1,3 +1,4 @@
+import { AppError } from '../../utils/errors.js';
 ﻿import { appPool } from '../../config/database.js';
 import { validateMoneyInput, escapeLike } from '../../utils/validation.js';
 
@@ -84,7 +85,7 @@ export class ProductsService {
    */
   public async createProduct(name: string, buyingPrice: string | number): Promise<ProductRecord> {
     const trimmed = name.trim();
-    if (!trimmed) throw new Error('Product name cannot be empty.');
+    if (!trimmed) throw new AppError('Product name cannot be empty.', 400, 'VALIDATION_ERROR');
 
     const priceDec = validateMoneyInput(buyingPrice, 'Buying price');
     const formattedPrice = priceDec.toFixed(2);

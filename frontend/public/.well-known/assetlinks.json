@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "in.algions.khata",
+      "sha256_cert_fingerprints": [
+        "D0:83:6B:13:CF:E8:BA:ED:0A:50:04:AA:4D:82:60:2E:E2:52:5D:99:C5:E8:96:F6:E7:67:E1:B4:7D:2B:0D:81"
+      ]
+    }
+  }
+]

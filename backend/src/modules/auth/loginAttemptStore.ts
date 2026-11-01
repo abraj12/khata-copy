@@ -55,8 +55,8 @@ export class LoginAttemptStore {
     const shortWindowStart = new Date(now - env.LOGIN_FAILURE_WINDOW_MS);
     const extendedWindowStart = new Date(now - env.LOGIN_EXTENDED_WINDOW_MS);
 
-    // Opportunistically trigger safe throttled maintenance cleanup
-    void this.maybePruneOldAttempts();
+    // Opportunistically trigger safe throttled maintenance cleanup without unhandled rejection
+    void this.maybePruneOldAttempts().catch(() => {});
 
     if (this.forceInMemory || (env.NODE_ENV as string) === 'test') {
       return this.checkInMemoryLockout(ipHash, phoneHash, combinedHash, now);
@@ -169,20 +169,30 @@ export class LoginAttemptStore {
   /**
    * Throttled background maintenance that invokes pruneOldAttempts safely without extra worker processes.
    */
-  private async maybePruneOldAttempts(): Promise<void> {
+  /**
+   * Throttled background maintenance that invokes pruneOldAttempts safely without extra worker processes.
+   * Guaranteed to catch all connection acquisition errors and never emit unhandled rejections.
+   */
+  public async maybePruneOldAttempts(): Promise<void> {
     const now = Date.now();
     if (now - this.lastCleanupTime < LoginAttemptStore.CLEANUP_INTERVAL_MS) {
       return;
     }
-    this.lastCleanupTime = now;
 
     if (this.forceInMemory || (env.NODE_ENV as string) === 'test') {
-      await this.pruneOldAttempts();
+      try {
+        await this.pruneOldAttempts();
+        this.lastCleanupTime = now;
+      } catch (err) {
+        console.warn('[LOCKOUT MAINTENANCE WARNING] In-memory pruning skipped:', (err as Error).message);
+        this.lastCleanupTime = now - LoginAttemptStore.CLEANUP_INTERVAL_MS + 5 * 60 * 1000;
+      }
       return;
     }
 
-    const client = await appPool.connect();
+    let client: any = null;
     try {
+      client = await appPool.connect();
       const lockRes = await client.query(
         'SELECT pg_try_advisory_lock($1) AS acquired',
         [LoginAttemptStore.CLEANUP_LOCK_ID]
@@ -190,14 +200,26 @@ export class LoginAttemptStore {
       if (lockRes.rows[0]?.acquired) {
         try {
           await this.pruneOldAttempts();
+          this.lastCleanupTime = now;
         } finally {
           await client.query('SELECT pg_advisory_unlock($1)', [LoginAttemptStore.CLEANUP_LOCK_ID]);
         }
+      } else {
+        // Lock currently held by another worker; mark as checked recently
+        this.lastCleanupTime = now;
       }
     } catch (err) {
       console.warn('[LOCKOUT MAINTENANCE WARNING] Background login attempt pruning skipped:', (err as Error).message);
+      // Safe retry cooldown: 5 minutes instead of 1 hour
+      this.lastCleanupTime = now - LoginAttemptStore.CLEANUP_INTERVAL_MS + 5 * 60 * 1000;
     } finally {
-      client.release();
+      if (client) {
+        try {
+          client.release();
+        } catch {
+          // ignore release error
+        }
+      }
     }
   }
 

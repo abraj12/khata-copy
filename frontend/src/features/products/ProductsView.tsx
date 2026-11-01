@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { apiClient } from '../../lib/apiClient.js';
 import { Tag, Plus, Search, Edit2, Archive, AlertTriangle, CheckCircle, X, Loader2 } from 'lucide-react';
 import { formatCurrency, safeDecimal, parseStrictDecimal } from '../../lib/formatters.js';
@@ -58,12 +58,33 @@ export const ProductsView: React.FC = () => {
     setTimeout(() => setNotification(null), 4000);
   };
 
+  const fetchProductsRequestIdRef = useRef(0);
+  const fetchProductsAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (fetchProductsAbortRef.current) {
+        fetchProductsAbortRef.current.abort();
+      }
+    };
+  }, []);
+
   const fetchProducts = async (searchQuery: string = '', offset: number = 0, append: boolean = false) => {
+    if (fetchProductsAbortRef.current) {
+      fetchProductsAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    fetchProductsAbortRef.current = controller;
+    const currentReqId = ++fetchProductsRequestIdRef.current;
+
     try {
       if (append) {
         setIsLoadingMore(true);
       } else {
         setIsLoading(true);
+        if (searchQuery !== '') {
+          setProducts([]);
+        }
       }
       const res = await apiClient<{
         success: boolean;
@@ -71,8 +92,12 @@ export const ProductsView: React.FC = () => {
         data?: Product[];
         pagination?: { limit: number; offset: number; hasMore: boolean; nextOffset: number | null };
       }>(
-        `/api/v1/products?search=${encodeURIComponent(searchQuery)}&limit=25&offset=${offset}`
+        `/api/v1/products?search=${encodeURIComponent(searchQuery)}&limit=25&offset=${offset}`,
+        { signal: controller.signal }
       );
+
+      if (currentReqId !== fetchProductsRequestIdRef.current) return;
+
       const items = res.data.products || res.data.data || [];
       const pag = res.data.pagination || { limit: 25, offset, hasMore: false, nextOffset: null };
       if (append) {
@@ -82,10 +107,14 @@ export const ProductsView: React.FC = () => {
       }
       setPagination(pag);
     } catch (err) {
+      if (currentReqId !== fetchProductsRequestIdRef.current) return;
+      if ((err as Error).name === 'AbortError') return;
       showNotification('error', (err as Error).message || 'Failed to load products.');
     } finally {
-      setIsLoading(false);
-      setIsLoadingMore(false);
+      if (currentReqId === fetchProductsRequestIdRef.current) {
+        setIsLoading(false);
+        setIsLoadingMore(false);
+      }
     }
   };
 
@@ -264,7 +293,7 @@ export const ProductsView: React.FC = () => {
         <form
           onSubmit={handleAddProduct}
           className="neu-card p-6 space-y-4 border-2 border-[var(--khata-accent)]/30"
-          style={{ backgroundColor: 'var(--khata-surface)' }}
+          style={{ background: 'var(--khata-surface)' }}
         >
           <div className="flex items-center justify-between pb-2 border-b border-[var(--khata-border)]">
             <h3 className="text-sm font-bold text-[var(--khata-text)]">
@@ -444,7 +473,7 @@ export const ProductsView: React.FC = () => {
         >
           <div
             className="neu-card max-w-md w-full p-6 space-y-4"
-            style={{ backgroundColor: 'var(--khata-surface)' }}
+            style={{ background: 'var(--khata-surface)' }}
           >
             <div className="flex items-center justify-between pb-2 border-b border-[var(--khata-border)]">
               <h3 id="edit-product-title" className="text-base font-bold text-[var(--khata-text)]">
@@ -525,7 +554,7 @@ export const ProductsView: React.FC = () => {
         >
           <div
             className="neu-card max-w-md w-full p-6 space-y-4"
-            style={{ backgroundColor: 'var(--khata-surface)' }}
+            style={{ background: 'var(--khata-surface)' }}
           >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-[var(--khata-danger)]">

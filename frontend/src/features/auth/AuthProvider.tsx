@@ -20,7 +20,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const checkAuth = async () => {
     try {
-      setAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
+      setAuthState((prev) => ({ ...prev, isLoading: true, error: null, isOffline: false }));
       const res = await authApi.me();
       if (res && res.authenticated) {
         setAuthState({
@@ -28,6 +28,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           isLoading: false,
           owner: res.owner as OwnerUser,
           error: null,
+          isOffline: false,
         });
       } else {
         setAuthState({
@@ -35,16 +36,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           isLoading: false,
           owner: null,
           error: null,
+          isOffline: false,
         });
       }
-    } catch {
-      // Unauthenticated or network error on startup: fail closed to logged-out state
-      setAuthState({
-        isAuthenticated: false,
-        isLoading: false,
-        owner: null,
-        error: null,
-      });
+    } catch (err: unknown) {
+      const status = (err as { status?: number }).status;
+      if (status === 401) {
+        // Authenticated session is definitely invalid or expired
+        setAuthState({
+          isAuthenticated: false,
+          isLoading: false,
+          owner: null,
+          error: null,
+          isOffline: false,
+        });
+      } else {
+        // Network timeout, Render cold boot, or temporary 502/503 service outage
+        setAuthState((prev) => ({
+          ...prev,
+          isLoading: false,
+          isOffline: true,
+          error:
+            status === 503 || status === 502
+              ? 'Khata server is temporarily waking up. Please retry in a moment.'
+              : 'Connection temporarily unavailable. Please verify internet connectivity.',
+        }));
+      }
     }
   };
 
@@ -76,16 +93,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
+    let warning: string | null = null;
     try {
       await authApi.logout();
-    } catch {
-      // Continue client cleanup even if network fails
+    } catch (err) {
+      warning = 'Server session could not be invalidated on backend. Local session was cleared.';
+      console.warn('[AUTH] Server logout warning:', (err as Error).message);
     } finally {
       setAuthState({
         isAuthenticated: false,
         isLoading: false,
         owner: null,
-        error: null,
+        error: warning,
+        isOffline: false,
       });
     }
   };

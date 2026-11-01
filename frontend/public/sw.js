@@ -1,0 +1,131 @@
+/**
+ * Khata Application Service Worker
+ *
+ * Designed for reliable business application operation in TWA and PWA modes:
+ * 1. Network-first for navigation/HTML documents: Guarantees that freshly deployed website
+ *    updates become visible immediately on refresh/reopen without requiring an APK rebuild.
+ * 2. Cache-first for immutable versioned static assets (/assets/*) with network fallback.
+ * 3. STRICT EXCLUSION FOR ALL API CALLS (/api/*): Financial transactions, customer data,
+ *    and authentication sessions are NEVER cached in Service Worker storage.
+ * 4. Safe cache invalidation and client claim on activation.
+ */
+
+const CACHE_VERSION = 'khata-static-v1.0.0';
+const STATIC_CACHE_NAME = `khata-assets-${CACHE_VERSION}`;
+const IMMUTABLE_ASSET_REGEX = /\/assets\/.*\.[a-f0-9]{8,}\.(js|css|woff2?|png|svg)$/i;
+
+self.addEventListener('install', (event) => {
+  // Activate immediately without waiting for existing tabs to close
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches
+      .keys()
+      .then((cacheNames) => {
+        return Promise.all(
+          cacheNames.map((name) => {
+            if (name !== STATIC_CACHE_NAME) {
+              return caches.delete(name);
+            }
+            return Promise.resolve(false);
+          })
+        );
+      })
+      .then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', (event) => {
+  const { request } = event;
+  const url = new URL(request.url);
+
+  // 1. Never intercept or cache non-GET requests (mutations, login, etc.)
+  if (request.method !== 'GET') {
+    return;
+  }
+
+  // 2. Strict exclusion for all API endpoints and health probes
+  // Financial, customer, session, and CSRF requests MUST always reach the server
+  if (url.pathname.startsWith('/api/')) {
+    return;
+  }
+
+  // 3. Document / Navigation requests: Network-First with cache fallback
+  // This guarantees that any new index.html deployed to Vercel is fetched immediately
+  if (request.mode === 'navigate' || request.destination === 'document') {
+    event.respondWith(
+      fetch(request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const responseClone = networkResponse.clone();
+            caches.open(STATIC_CACHE_NAME).then((cache) => {
+              cache.put(request, responseClone);
+            });
+          }
+          return networkResponse;
+        })
+        .catch(() => {
+          return caches.match(request).then((cachedResponse) => {
+            return (
+              cachedResponse ||
+              caches.match('/index.html') ||
+              new Response(
+                '<!doctype html><html><body style="font-family:sans-serif;text-align:center;padding:2rem;background:#0f172a;color:#fff;"><h2>Khata Offline</h2><p>Please check your internet connection and refresh.</p></body></html>',
+                { headers: { 'Content-Type': 'text/html' } }
+              )
+            );
+          });
+        })
+    );
+    return;
+  }
+
+  // 4. Versioned immutable static assets: Cache-First with network fallback
+  if (IMMUTABLE_ASSET_REGEX.test(url.pathname)) {
+    event.respondWith(
+      caches.match(request).then((cachedResponse) => {
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+        return fetch(request).then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const responseClone = networkResponse.clone();
+            caches.open(STATIC_CACHE_NAME).then((cache) => {
+              cache.put(request, responseClone);
+            });
+          }
+          return networkResponse;
+        });
+      })
+    );
+    return;
+  }
+
+  // 5. All other static GET requests (icons, manifest): Stale-while-revalidate
+  event.respondWith(
+    caches.match(request).then((cachedResponse) => {
+      const fetchPromise = fetch(request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const responseClone = networkResponse.clone();
+            caches.open(STATIC_CACHE_NAME).then((cache) => {
+              cache.put(request, responseClone);
+            });
+          }
+          return networkResponse;
+        })
+        .catch(() => null);
+
+      return cachedResponse || fetchPromise;
+    })
+  );
+});
+
+// Skip waiting message listener
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});

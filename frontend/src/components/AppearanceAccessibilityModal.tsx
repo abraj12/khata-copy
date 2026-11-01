@@ -41,21 +41,51 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
   const modalRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
 
-  // Close on Escape key press
+  // Focus trap, Escape key handling, and focus restoration
   useEffect(() => {
     if (!isOpen) return;
+
+    const previouslyFocused = document.activeElement as HTMLElement | null;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
         onClose();
+        return;
+      }
+
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusables = modalRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+
+        const firstElement = focusables[0];
+        const lastElement = focusables[focusables.length - 1];
+
+        if (e.shiftKey) {
+          if (document.activeElement === firstElement) {
+            e.preventDefault();
+            lastElement.focus();
+          }
+        } else {
+          if (document.activeElement === lastElement) {
+            e.preventDefault();
+            firstElement.focus();
+          }
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     closeBtnRef.current?.focus();
 
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+        previouslyFocused.focus();
+      }
+    };
   }, [isOpen, onClose]);
 
   if (!isOpen) return null;
@@ -73,7 +103,7 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
       <div
         ref={modalRef}
         className="neu-card w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 my-auto text-left"
-        style={{ backgroundColor: 'var(--khata-surface)' }}
+        style={{ background: 'var(--khata-surface)' }}
       >
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-[var(--khata-border)]">
@@ -133,7 +163,7 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
                       ? 'border-[var(--khata-accent)] ring-2 ring-[var(--khata-accent)]/30 shadow-md'
                       : 'border-[var(--khata-border)] hover:border-[var(--khata-accent)]/50'
                   }`}
-                  style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+                  style={{ background: 'var(--khata-surface-raised)' }}
                 >
                   <div className="flex items-center justify-between w-full mb-2">
                     <span className="font-semibold text-xs text-[var(--khata-text)]">

@@ -33,6 +33,11 @@ release-keystore.properties
 debug.keystore
 
 # Android build outputs
+android-twa/app/build/
+android-twa/.gradle/
+android-twa/build/
+android-twa/local.properties
+android-twa/signing.properties
 android/app/build/
 android/.gradle/
 android/build/

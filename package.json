@@ -19,7 +19,8 @@
     "test": "npm test --workspace=backend",
     "test:integration": "npm run test:integration --workspace=backend",
     "migrate": "npm run migrate --workspace=backend --",
-    "hash-password": "npm run hash-password --workspace=backend"
+    "hash-password": "npm run hash-password --workspace=backend",
+    "preflight:legacy": "npm run preflight:legacy --workspace=backend"
   },
   "keywords": [
     "khata",

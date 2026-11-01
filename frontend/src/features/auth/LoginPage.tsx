@@ -99,7 +99,7 @@ export const LoginPage: React.FC = () => {
         >
           <div
             className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-3 shadow-md border border-[var(--khata-border)]"
-            style={{ backgroundColor: 'var(--khata-surface-inset)', color: 'var(--khata-accent)' }}
+            style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-accent)' }}
           >
             <Store className="w-7 h-7" />
           </div>

@@ -28,7 +28,7 @@ export function KhataDashboard() {
 
       <footer
         className="py-4 border-t border-[var(--khata-border)] text-center text-xs font-medium text-[var(--khata-text-muted)] px-4"
-        style={{ backgroundColor: 'var(--khata-surface)' }}
+        style={{ background: 'var(--khata-surface)' }}
       >
         Designed and managed by Algions AI Labs Pvt. Ltd.
       </footer>

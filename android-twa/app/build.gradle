@@ -1,0 +1,71 @@
+plugins {
+    id 'com.android.application'
+}
+
+def signingPropertiesFile = rootProject.file('signing.properties')
+def signingProperties = new Properties()
+if (signingPropertiesFile.exists()) {
+    signingProperties.load(new FileInputStream(signingPropertiesFile))
+}
+
+android {
+    namespace 'in.algions.khata'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'in.algions.khata'
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName '1.0.0'
+
+        // Trusted Web Activity remote web URL configuration
+        manifestPlaceholders = [
+            hostName: "khata.algions.in",
+            defaultUrl: "https://khata.algions.in",
+            assetStatements: '[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"web","site":"https://khata.algions.in"}}]'
+        ]
+    }
+
+    signingConfigs {
+        release {
+            if (signingProperties.containsKey('RELEASE_STORE_FILE')) {
+                storeFile file(signingProperties['RELEASE_STORE_FILE'])
+                storePassword signingProperties['RELEASE_STORE_PASSWORD']
+                keyAlias signingProperties['RELEASE_KEY_ALIAS']
+                keyPassword signingProperties['RELEASE_KEY_PASSWORD']
+            } else if (System.getenv('RELEASE_STORE_FILE') != null) {
+                storeFile file(System.getenv('RELEASE_STORE_FILE'))
+                storePassword System.getenv('RELEASE_STORE_PASSWORD')
+                keyAlias System.getenv('RELEASE_KEY_ALIAS')
+                keyPassword System.getenv('RELEASE_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (signingProperties.containsKey('RELEASE_STORE_FILE') || System.getenv('RELEASE_STORE_FILE') != null) {
+                signingConfig signingConfigs.release
+            }
+        }
+        debug {
+            applicationIdSuffix ""
+            debuggable true
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+    implementation 'androidx.browser:browser:1.8.0'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.core:core:1.15.0'
+}

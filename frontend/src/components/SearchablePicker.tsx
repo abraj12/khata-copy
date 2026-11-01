@@ -217,7 +217,7 @@ export function SearchablePicker<T>({
           value && onClear && !disabled ? 'pr-16' : 'pr-9'
         } ${disabled ? 'opacity-60 cursor-not-allowed' : 'hover:border-[var(--khata-accent)]'}`}
         style={{
-          backgroundColor: 'var(--khata-surface)',
+          background: 'var(--khata-surface)',
           color: value ? 'var(--khata-text)' : 'var(--khata-text-muted)',
         }}
       >
@@ -264,7 +264,7 @@ export function SearchablePicker<T>({
               <div
                 className="w-full max-h-[85vh] rounded-t-2xl border-t border-[var(--khata-border)] flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-200"
                 style={{
-                  backgroundColor: 'var(--khata-surface)',
+                  background: 'var(--khata-surface)',
                   color: 'var(--khata-text)',
                   paddingBottom: 'max(1rem, env(safe-area-inset-bottom))',
                 }}
@@ -326,7 +326,7 @@ export function SearchablePicker<T>({
             <div
               className="absolute left-0 right-0 z-50 mt-1.5 max-h-80 rounded-xl border border-[var(--khata-border)] shadow-xl flex flex-col animate-in fade-in zoom-in-95 duration-150"
               style={{
-                backgroundColor: 'var(--khata-surface)',
+                background: 'var(--khata-surface)',
                 color: 'var(--khata-text)',
               }}
             >

@@ -35,6 +35,7 @@ export const EXPECTED_MIGRATIONS = [
   '004_integer_quantity_and_money_constraints.sql',
   '005_search_indexes_and_identity_constraints.sql',
   '006_quantity_two_decimal_places.sql',
+  '007_quantity_strict_scale_and_allocation_integrity.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [

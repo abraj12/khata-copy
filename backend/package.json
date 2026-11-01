@@ -15,7 +15,8 @@
     "preflight:quantity": "tsx scripts/preflight-quantity-check.ts",
     "hash-password": "tsx scripts/hash-owner-password.ts",
     "test": "vitest run --config vitest.config.ts",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "preflight:legacy": "tsx scripts/preflight-legacy-audit.ts"
   },
   "dependencies": {
     "@types/connect-pg-simple": "^7.0.3",

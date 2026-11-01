@@ -202,12 +202,33 @@ export const KhataLedgerView: React.FC = () => {
     }
   };
 
+  const fetchCustomersRequestIdRef = useRef(0);
+  const fetchCustomersAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (fetchCustomersAbortRef.current) {
+        fetchCustomersAbortRef.current.abort();
+      }
+    };
+  }, []);
+
   const fetchCustomers = async (queryText: string, offset: number = 0, append: boolean = false) => {
+    if (fetchCustomersAbortRef.current) {
+      fetchCustomersAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    fetchCustomersAbortRef.current = controller;
+    const currentReqId = ++fetchCustomersRequestIdRef.current;
+
     try {
       if (append) {
         setIsLoadingMoreCustomers(true);
       } else {
         setIsLoadingCustomers(true);
+        if (queryText !== '') {
+          setCustomers([]);
+        }
       }
 
       const res = await apiClient<{
@@ -216,8 +237,11 @@ export const KhataLedgerView: React.FC = () => {
         data?: CustomerListItem[];
         pagination?: { limit: number; offset: number; hasMore: boolean; nextOffset: number | null };
       }>(
-        `/api/v1/khata/customers?search=${encodeURIComponent(queryText)}&limit=25&offset=${offset}`
+        `/api/v1/khata/customers?search=${encodeURIComponent(queryText)}&limit=25&offset=${offset}`,
+        { signal: controller.signal }
       );
+
+      if (currentReqId !== fetchCustomersRequestIdRef.current) return;
 
       const items = res.data.customers || res.data.data || [];
       const pagination = res.data.pagination || {
@@ -234,10 +258,14 @@ export const KhataLedgerView: React.FC = () => {
       }
       setCustomerPagination(pagination);
     } catch (err) {
+      if (currentReqId !== fetchCustomersRequestIdRef.current) return;
+      if ((err as Error).name === 'AbortError') return;
       showNotification('error', (err as Error).message || 'Failed to load customers.');
     } finally {
-      setIsLoadingCustomers(false);
-      setIsLoadingMoreCustomers(false);
+      if (currentReqId === fetchCustomersRequestIdRef.current) {
+        setIsLoadingCustomers(false);
+        setIsLoadingMoreCustomers(false);
+      }
     }
   };
 
@@ -894,7 +922,7 @@ export const KhataLedgerView: React.FC = () => {
         >
           <div
             className="neu-card max-w-2xl w-full p-4 sm:p-6 my-4 sm:my-8 max-h-[90vh] flex flex-col space-y-4"
-            style={{ backgroundColor: 'var(--khata-surface)' }}
+            style={{ background: 'var(--khata-surface)' }}
           >
             <div className="flex items-start justify-between pb-3 border-b border-[var(--khata-border)] flex-shrink-0">
               <div className="min-w-0 flex-1 pr-2">
@@ -925,7 +953,7 @@ export const KhataLedgerView: React.FC = () => {
               {/* Customer Selector / Creator */}
               <div
                 className="p-4 rounded-xl border border-[var(--khata-border)] space-y-3"
-                style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+                style={{ background: 'var(--khata-surface-raised)' }}
               >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider block">
@@ -979,7 +1007,7 @@ export const KhataLedgerView: React.FC = () => {
                   {selectedExistingCustomer ? (
                     <div
                       className="p-3 rounded-xl border border-[var(--khata-accent)]/30 flex items-center justify-between"
-                      style={{ backgroundColor: 'var(--khata-surface-inset)' }}
+                      style={{ background: 'var(--khata-surface-inset)' }}
                     >
                       <div>
                         <div className="text-xs font-bold text-[var(--khata-text)]">
@@ -1054,7 +1082,7 @@ export const KhataLedgerView: React.FC = () => {
                     <div
                       key={line.lineId}
                       className="grid grid-cols-12 gap-2.5 items-start p-3.5 rounded-xl border border-[var(--khata-border)] shadow-sm"
-                      style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+                      style={{ background: 'var(--khata-surface-raised)' }}
                     >
                       {/* Product Selector with SearchablePicker */}
                       <div className="col-span-12 sm:col-span-5">
@@ -1154,7 +1182,7 @@ export const KhataLedgerView: React.FC = () => {
               {/* Initial Payment & Note */}
               <div
                 className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-xl border border-[var(--khata-border)]"
-                style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+                style={{ background: 'var(--khata-surface-raised)' }}
               >
                 <div>
                   <label className="block text-xs font-semibold text-[var(--khata-text)] mb-1">
@@ -1190,7 +1218,7 @@ export const KhataLedgerView: React.FC = () => {
               {/* Live Preview Summary Box */}
               <div
                 className="p-4 rounded-xl border border-[var(--khata-border)] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-sm"
-                style={{ backgroundColor: 'var(--khata-surface-inset)' }}
+                style={{ background: 'var(--khata-surface-inset)' }}
               >
                 <div>
                   <span className="text-xs font-bold text-[var(--khata-text)] block">
@@ -1254,7 +1282,7 @@ export const KhataLedgerView: React.FC = () => {
         >
           <div
             className="neu-card max-w-3xl w-full p-4 sm:p-6 my-4 sm:my-8 max-h-[90vh] flex flex-col space-y-4"
-            style={{ backgroundColor: 'var(--khata-surface)' }}
+            style={{ background: 'var(--khata-surface)' }}
           >
             {isLoadingHistory || !customerHistory ? (
               <div className="p-12 text-center text-sm text-[var(--khata-text-muted)] font-medium">
@@ -1302,7 +1330,7 @@ export const KhataLedgerView: React.FC = () => {
                 <div className="overflow-y-auto pr-1 flex-1 space-y-4 sm:space-y-5">
                   {/* Financial Summary Grid (3 responsive cards) */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div className="neu-card p-3.5 border border-[var(--khata-border)]" style={{ backgroundColor: 'var(--khata-surface-raised)' }}>
+                    <div className="neu-card p-3.5 border border-[var(--khata-border)]" style={{ background: 'var(--khata-surface-raised)' }}>
                       <span className="text-[11px] text-[var(--khata-text-muted)] uppercase font-semibold block">
                         Lifetime Udhar
                       </span>
@@ -1311,7 +1339,7 @@ export const KhataLedgerView: React.FC = () => {
                       </span>
                     </div>
 
-                    <div className="neu-card p-3.5 border border-[var(--khata-border)]" style={{ backgroundColor: 'var(--khata-surface-raised)' }}>
+                    <div className="neu-card p-3.5 border border-[var(--khata-border)]" style={{ background: 'var(--khata-surface-raised)' }}>
                       <span className="text-[11px] text-[var(--khata-text-muted)] uppercase font-semibold block">
                         Total Received
                       </span>
@@ -1320,7 +1348,7 @@ export const KhataLedgerView: React.FC = () => {
                       </span>
                     </div>
 
-                    <div className="neu-card p-3.5 border-2 border-[var(--khata-danger)]/40" style={{ backgroundColor: 'var(--khata-surface-raised)' }}>
+                    <div className="neu-card p-3.5 border-2 border-[var(--khata-danger)]/40" style={{ background: 'var(--khata-surface-raised)' }}>
                       <span className="text-[11px] text-[var(--khata-danger)] uppercase font-bold block">
                         Net Balance Due
                       </span>
@@ -1333,7 +1361,7 @@ export const KhataLedgerView: React.FC = () => {
                   {/* Record Payment Section */}
                   <div
                     className="p-4 rounded-xl border border-[var(--khata-border)] space-y-3"
-                    style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+                    style={{ background: 'var(--khata-surface-raised)' }}
                   >
                     <div className="flex items-center gap-2 text-[var(--khata-text)] font-bold text-sm">
                       <DollarSign className="w-4 h-4 text-[var(--khata-success)]" />
@@ -1415,7 +1443,7 @@ export const KhataLedgerView: React.FC = () => {
                             <div
                               key={tx.id}
                               className="border border-[var(--khata-border)] rounded-xl overflow-hidden"
-                              style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+                              style={{ background: 'var(--khata-surface-raised)' }}
                             >
                               <div
                                 onClick={() => toggleExpandTx(tx.id)}
@@ -1483,7 +1511,7 @@ export const KhataLedgerView: React.FC = () => {
                               {isExpanded && (
                                 <div
                                   className="p-3 border-t border-[var(--khata-border)] space-y-2 overflow-x-auto"
-                                  style={{ backgroundColor: 'var(--khata-surface-inset)' }}
+                                  style={{ background: 'var(--khata-surface-inset)' }}
                                 >
                                   <span className="text-[11px] font-bold text-[var(--khata-text-muted)] uppercase tracking-wider block">
                                     Purchased Items Snapshot
@@ -1544,7 +1572,7 @@ export const KhataLedgerView: React.FC = () => {
                             <div
                               key={p.id}
                               className="p-3 rounded-xl border border-[var(--khata-border)] space-y-1.5"
-                              style={{ backgroundColor: 'var(--khata-surface-raised)' }}
+                              style={{ background: 'var(--khata-surface-raised)' }}
                             >
                               <div className="flex items-center justify-between">
                                 <div>
