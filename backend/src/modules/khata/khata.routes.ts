@@ -36,7 +36,7 @@ const recordPaymentSchema = z.object({
 
 const customerSearchQuerySchema = z.object({
   search: z.string().max(100).optional(),
-  limit: z.coerce.number().int().min(1).max(50).default(25),
+  limit: z.coerce.number().int().min(1).max(200).default(25),
   offset: z.coerce.number().int().min(0).default(0),
 });
 

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import Decimal from 'decimal.js';
 import { numberWords } from '../src/components/MannatTaxInvoice/MannatTaxInvoice.js';
 import { mapRecordToInvoiceProps, GstInvoiceRecord } from '../src/features/bills/gstInvoicesApi.js';
+import { getTodayLocalDate } from '../src/features/bills/GstBillingView.js';
 
 describe('GST Billing Module (Frontend Calculation & Mannat Invoice Mapping)', () => {
   it('1. Accurately converts currency to Indian words', () => {
@@ -98,5 +99,15 @@ describe('GST Billing Module (Frontend Calculation & Mannat Invoice Mapping)', (
     expect(mapped.totals?.grandTotal).toBe('9581.60');
     expect(mapped.totals?.cgstAmount).toBe('730.80');
     expect(mapped.totals?.sgstAmount).toBe('730.80');
+  });
+
+  it('5. Generates local today date in YYYY-MM-DD format (not UTC shifted)', () => {
+    const today = getTodayLocalDate();
+    expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const now = new Date();
+    const expectedYear = now.getFullYear();
+    const expectedMonth = String(now.getMonth() + 1).padStart(2, '0');
+    const expectedDay = String(now.getDate()).padStart(2, '0');
+    expect(today).toBe(`${expectedYear}-${expectedMonth}-${expectedDay}`);
   });
 });

@@ -29,20 +29,28 @@ function loadSavedPreferences(): UIPreferences {
     const raw = localStorage.getItem(PREFERENCES_STORAGE_KEY);
     if (!raw) return DEFAULT_PREFERENCES;
     const parsed = JSON.parse(raw);
-    if (parsed && (parsed.version === 1 || parsed.version === 2)) {
+    if (parsed && (parsed.version === 1 || parsed.version === 2 || parsed.version === 3)) {
       // Validate preset is among valid presets
       const isValidPreset = NEUMORPHIC_PRESETS.some((p) => p.id === parsed.preset);
 
-      // In version 2, contrastOverride defaults to 'enhanced'.
-      // If user had version 1 stored with old default 'default', upgrade to 'enhanced'.
+      // In version 2 and 3, contrastOverride defaults to 'enhanced'.
       let contrastOverride: ContrastOption = DEFAULT_PREFERENCES.contrastOverride;
-      if (parsed.version === 2 && ['default', 'enhanced'].includes(parsed.contrastOverride)) {
+      if ((parsed.version === 2 || parsed.version === 3) && ['default', 'enhanced'].includes(parsed.contrastOverride)) {
         contrastOverride = parsed.contrastOverride;
       }
 
+      // In version 3, default preset is 'flat'.
+      // If user had old default 'soft-light' from v1/v2, migrate them to 'flat'.
+      let preset: NeuPresetId = DEFAULT_PREFERENCES.preset;
+      if (parsed.version === 3 && isValidPreset) {
+        preset = parsed.preset;
+      } else if (isValidPreset && parsed.preset !== 'soft-light') {
+        preset = parsed.preset;
+      }
+
       return {
-        version: 2,
-        preset: isValidPreset ? parsed.preset : DEFAULT_PREFERENCES.preset,
+        version: 3,
+        preset,
         textSize: ['100', '115', '130', '145'].includes(parsed.textSize)
           ? parsed.textSize
           : DEFAULT_PREFERENCES.textSize,

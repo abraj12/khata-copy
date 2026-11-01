@@ -56,17 +56,25 @@ interface FormLineItem {
   rateUnit: string;
 }
 
+export const getTodayLocalDate = (): string => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export const GstBillingView: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<'create' | 'history'>('create');
 
-  // Form states
+  // Form states (Pre-filled with device local today's date)
   const [invoiceNumber, setInvoiceNumber] = useState('');
-  const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [invoiceDate, setInvoiceDate] = useState<string>(() => getTodayLocalDate());
   const [state] = useState('Uttar Pradesh');
   const [stateCode] = useState('09');
   const [transportationMode, setTransportationMode] = useState('');
   const [vehicleNumber, setVehicleNumber] = useState('');
-  const [dateOfSupply, setDateOfSupply] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dateOfSupply, setDateOfSupply] = useState<string>(() => getTodayLocalDate());
   const [placeOfSupply, setPlaceOfSupply] = useState('Uttar Pradesh');
 
   // Customer states
@@ -127,6 +135,7 @@ export const GstBillingView: React.FC = () => {
 
   // Existing products & customers lookup
   const [availableProducts, setAvailableProducts] = useState<ProductItem[]>([]);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const [availableCustomers, setAvailableCustomers] = useState<CustomerItem[]>([]);
   const [customerSearch, setCustomerSearch] = useState('');
   const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
@@ -161,19 +170,43 @@ export const GstBillingView: React.FC = () => {
 
   const fetchProducts = async () => {
     try {
-      const res = await apiClient<{ success: boolean; data: ProductItem[] }>('/api/v1/products?limit=100');
-      if (res.data?.data) {
-        setAvailableProducts(res.data.data);
+      setIsLoadingProducts(true);
+      const all: ProductItem[] = [];
+      let offset = 0;
+      let hasMore = true;
+
+      while (hasMore && offset < 200) {
+        const res = await apiClient<{
+          success: boolean;
+          data: ProductItem[];
+          pagination?: { hasMore: boolean; nextOffset: number | null };
+        }>(`/api/v1/products?limit=50&offset=${offset}`);
+
+        if (res.data?.data && Array.isArray(res.data.data)) {
+          all.push(...res.data.data);
+          if (res.data.pagination?.hasMore && res.data.pagination?.nextOffset) {
+            offset = res.data.pagination.nextOffset;
+          } else {
+            hasMore = false;
+          }
+        } else {
+          hasMore = false;
+        }
       }
+      setAvailableProducts(all);
     } catch (err) {
       console.warn('Error fetching products:', err);
+    } finally {
+      setIsLoadingProducts(false);
     }
   };
 
   const fetchCustomers = async () => {
     try {
-      const res = await apiClient<{ success: boolean; customers: CustomerItem[] }>('/api/v1/khata/customers?limit=100');
-      if (res.data?.customers) {
+      const res = await apiClient<{ success: boolean; customers: CustomerItem[] }>(
+        '/api/v1/khata/customers?limit=50'
+      );
+      if (res.data?.customers && Array.isArray(res.data.customers)) {
         setAvailableCustomers(res.data.customers);
       }
     } catch (err) {
@@ -431,6 +464,8 @@ export const GstBillingView: React.FC = () => {
   // Reset form after saving
   const handleResetForm = () => {
     setSuccessRecord(null);
+    setInvoiceDate(getTodayLocalDate());
+    setDateOfSupply(getTodayLocalDate());
     setCustomerName('');
     setCustomerAddress('');
     setCustomerGstin('');
@@ -647,14 +682,24 @@ export const GstBillingView: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
-                      Invoice Date <span className="text-rose-500">*</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-bold text-[var(--khata-text-muted)]">
+                        Invoice Date <span className="text-rose-500">*</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setInvoiceDate(getTodayLocalDate())}
+                        className="text-[10px] font-semibold text-[var(--khata-accent)] hover:underline flex items-center gap-1 cursor-pointer"
+                        title="Set to today's local date"
+                      >
+                        <span>Today</span>
+                      </button>
+                    </div>
                     <input
                       type="date"
                       value={invoiceDate}
                       onChange={(e) => setInvoiceDate(e.target.value)}
-                      className="neu-input w-full"
+                      className="neu-input w-full font-medium"
                     />
                   </div>
 
@@ -710,14 +755,24 @@ export const GstBillingView: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
-                      Date of Supply
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-bold text-[var(--khata-text-muted)]">
+                        Date of Supply
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setDateOfSupply(getTodayLocalDate())}
+                        className="text-[10px] font-semibold text-[var(--khata-accent)] hover:underline flex items-center gap-1 cursor-pointer"
+                        title="Set to today's local date"
+                      >
+                        <span>Today</span>
+                      </button>
+                    </div>
                     <input
                       type="date"
                       value={dateOfSupply}
                       onChange={(e) => setDateOfSupply(e.target.value)}
-                      className="neu-input w-full"
+                      className="neu-input w-full font-medium"
                     />
                   </div>
                 </div>
@@ -902,89 +957,117 @@ export const GstBillingView: React.FC = () => {
                         )}
                       </div>
 
-                      {/* Row 1: Description of Goods with Integrated Product Selection Option */}
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap items-center justify-between gap-1">
-                          <label className="text-[11px] font-bold text-[var(--khata-text-muted)] flex items-center gap-1.5">
-                            <span>Description of Goods</span>
-                            <span className="text-rose-500">*</span>
-                          </label>
-
-                          {/* Option to select product directly in description */}
-                          {availableProducts.length > 0 && (
-                            <div className="flex items-center gap-1.5 text-xs">
+                      {/* Row 1: Product Selection & Description of Goods side by side */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {/* Column 1: Select Product from Catalogue */}
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-[11px] font-bold text-[var(--khata-text-muted)] flex items-center gap-1.5">
                               <Package className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
-                              <select
-                                onChange={(e) => {
-                                  const selectedProd = availableProducts.find(
-                                    (p) => p.id === Number(e.target.value)
+                              <span>Select Product</span>
+                            </label>
+                            {item.productId ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setItems((prev) =>
+                                    prev.map((i) => (i.id === item.id ? { ...i, productId: null } : i))
                                   );
-                                  if (selectedProd) {
-                                    handleSelectProduct(item.id, selectedProd);
-                                  }
                                 }}
-                                value={item.productId || ''}
-                                className="neu-input py-1 px-2 text-xs font-semibold rounded-lg border border-[var(--khata-border)] cursor-pointer"
-                                style={{ background: 'var(--khata-surface)', color: 'var(--khata-accent)' }}
+                                className="text-[10px] text-rose-500 hover:underline font-bold cursor-pointer"
+                                title="Unlink catalogue product"
                               >
-                                <option value="">🔍 Select Product from Catalogue...</option>
-                                {availableProducts.map((p) => (
-                                  <option key={p.id} value={p.id}>
-                                    {p.name} {p.hsn_code ? `[HSN: ${p.hsn_code}]` : ''} (₹{p.buying_price})
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Description input with integrated autocomplete datalist */}
-                        <div className="relative">
-                          <input
-                            type="text"
-                            list={`product-options-${item.id}`}
-                            value={item.description}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              const matched = availableProducts.find((p) => p.name === val);
-                              if (matched) {
-                                handleSelectProduct(item.id, matched);
-                              } else {
-                                handleItemChange(item.id, 'description', val);
-                              }
-                            }}
-                            placeholder="Type description or select a product above / start typing for catalogue..."
-                            className="neu-input w-full font-medium"
-                          />
-                          <datalist id={`product-options-${item.id}`}>
-                            {availableProducts.map((p) => (
-                              <option key={p.id} value={p.name}>
-                                {p.hsn_code ? `HSN: ${p.hsn_code} | ` : ''}₹{p.buying_price}
-                              </option>
-                            ))}
-                          </datalist>
-                        </div>
-
-                        {/* Linked product indicator */}
-                        {item.productId && (
-                          <div className="flex items-center justify-between text-[11px] px-2.5 py-1 rounded-md bg-[var(--khata-surface)] border border-[var(--khata-border)] text-[var(--khata-accent)]">
-                            <span className="flex items-center gap-1 font-semibold truncate">
-                              <Package className="w-3 h-3 flex-shrink-0" />
-                              <span>Linked Product: {availableProducts.find((p) => p.id === item.productId)?.name || 'Custom Product'}</span>
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setItems((prev) =>
-                                  prev.map((i) => (i.id === item.id ? { ...i, productId: null } : i))
-                                );
-                              }}
-                              className="text-[10px] text-[var(--khata-text-muted)] hover:text-rose-500 font-bold ml-2 underline cursor-pointer"
-                            >
-                              Unlink
-                            </button>
+                                Clear Selection
+                              </button>
+                            ) : availableProducts.length > 0 ? (
+                              <span className="text-[10px] text-[var(--khata-text-muted)]">
+                                {availableProducts.length} in catalogue
+                              </span>
+                            ) : null}
                           </div>
-                        )}
+
+                          <div className="relative">
+                            <select
+                              value={item.productId || ''}
+                              onChange={(e) => {
+                                const prodId = Number(e.target.value);
+                                if (!prodId) {
+                                  setItems((prev) =>
+                                    prev.map((i) => (i.id === item.id ? { ...i, productId: null } : i))
+                                  );
+                                  return;
+                                }
+                                const selectedProd = availableProducts.find((p) => p.id === prodId);
+                                if (selectedProd) {
+                                  handleSelectProduct(item.id, selectedProd);
+                                }
+                              }}
+                              disabled={isLoadingProducts}
+                              className="neu-input w-full font-semibold text-xs cursor-pointer truncate"
+                              style={{ background: 'var(--khata-surface)', color: 'var(--khata-text)' }}
+                            >
+                              <option value="">
+                                {isLoadingProducts
+                                  ? '⏳ Loading products from catalogue...'
+                                  : availableProducts.length === 0
+                                  ? '⚠️ No products found in catalogue (Type description)'
+                                  : '🔍 -- Pick a Product from Catalogue --'}
+                              </option>
+                              {availableProducts.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name} {p.hsn_code ? `[HSN: ${p.hsn_code}]` : ''} (₹{p.buying_price})
+                                </option>
+                              ))}
+                            </select>
+                            {isLoadingProducts && (
+                              <div className="absolute right-8 top-1/2 -translate-y-1/2">
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--khata-accent)]" />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Column 2: Description of Goods */}
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-[11px] font-bold text-[var(--khata-text-muted)] flex items-center gap-1">
+                              <span>Description of Goods</span>
+                              <span className="text-rose-500">*</span>
+                            </label>
+                            {item.productId && (
+                              <span className="text-[10px] text-[var(--khata-accent)] font-semibold flex items-center gap-1 truncate">
+                                ✓ Linked to product #{item.productId}
+                              </span>
+                            )}
+                          </div>
+                          <div className="relative">
+                            <input
+                              type="text"
+                              list={`product-options-${item.id}`}
+                              value={item.description}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                const matched = availableProducts.find(
+                                  (p) => p.name.toLowerCase() === val.toLowerCase()
+                                );
+                                if (matched) {
+                                  handleSelectProduct(item.id, matched);
+                                } else {
+                                  handleItemChange(item.id, 'description', val);
+                                }
+                              }}
+                              placeholder="e.g. HDF BOARD 12mm 2.44 × 1.22 (auto-filled or type custom)"
+                              className="neu-input w-full font-medium text-xs"
+                            />
+                            <datalist id={`product-options-${item.id}`}>
+                              {availableProducts.map((p) => (
+                                <option key={p.id} value={p.name}>
+                                  {p.hsn_code ? `HSN: ${p.hsn_code} | ` : ''}₹{p.buying_price}
+                                </option>
+                              ))}
+                            </datalist>
+                          </div>
+                        </div>
                       </div>
 
                       {/* Row 2: 5 Spacious Numeric Columns (HSN, Qty, Unit, Rate, Amount) */}
