@@ -179,6 +179,7 @@ export async function downloadDraftPdf(payload: CreateGstInvoicePayload): Promis
 
 export function mapRecordToInvoiceProps(record: GstInvoiceRecord): MannatInvoiceProps {
   return {
+    id: record.id,
     invoiceNumber: record.invoice_number,
     invoiceDate: record.invoice_date,
     transportationMode: record.transportation_mode,

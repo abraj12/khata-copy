@@ -1608,7 +1608,9 @@ export const GstBillingView: React.FC = () => {
               invoice={previewInvoice}
               showPrintButton={true}
               onDownloadPdf={() => {
-                if (successRecord) {
+                if (previewInvoice?.id) {
+                  handleDownloadPdf(previewInvoice.id, previewInvoice.invoiceNumber || 'Invoice');
+                } else if (successRecord?.id) {
                   handleDownloadPdf(successRecord.id, successRecord.invoice_number);
                 } else {
                   handleDownloadDraftPdf();

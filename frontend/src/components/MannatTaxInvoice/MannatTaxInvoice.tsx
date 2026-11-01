@@ -59,11 +59,25 @@ const money = (value: any): string => {
 
 const printableDate = (value: any): string => {
   if (!value) return '';
-  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) {
-    const [year, month, day] = value.slice(0, 10).split('-');
-    return `${day}-${month}-${year}`;
+  if (value instanceof Date) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${d}-${m}-${y}`;
   }
-  return String(value);
+  const str = String(value).trim();
+  const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    return `${isoMatch[3]}-${isoMatch[2]}-${isoMatch[1]}`;
+  }
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${d}-${m}-${y}`;
+  }
+  return str.slice(0, 10);
 };
 
 export interface MannatInvoiceItem {
@@ -100,6 +114,7 @@ export interface MannatInvoiceTotals {
 }
 
 export interface MannatInvoiceProps {
+  id?: number;
   invoiceNumber?: string;
   invoiceDate?: string;
   transportationMode?: string | null;

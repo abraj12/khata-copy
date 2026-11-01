@@ -3,7 +3,7 @@ import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { env } from '../src/config/env.js';
 import { appPool } from '../src/config/database.js';
-import { numberToIndianWords, generateMannatInvoicePdf } from '../src/modules/gstInvoices/gstInvoices.pdf.js';
+import { numberToIndianWords, formatDateToIndian, generateMannatInvoicePdf } from '../src/modules/gstInvoices/gstInvoices.pdf.js';
 
 const TEST_PHONE = '9876543210';
 const TEST_PASSWORD = 'KhataOwner@2026!';
@@ -66,11 +66,18 @@ describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
     csrfToken = csrfRes.body.csrfToken;
   });
 
-  it('1. Formats Indian numbering system currency to words accurately', () => {
+  it('1. Formats Indian numbering system currency to words and dates strictly as DD-MM-YYYY', () => {
     expect(numberToIndianWords(9581.60)).toBe('Rupees Nine Thousand Five Hundred Eighty One and Sixty Paise Only');
     expect(numberToIndianWords(100000)).toBe('Rupees One Lakh Only');
     expect(numberToIndianWords(10500000.50)).toBe('Rupees One Crore Five Lakh and Fifty Paise Only');
     expect(numberToIndianWords(0)).toBe('Rupees Zero Only');
+
+    // Date formatting tests: never timezone, always DD-MM-YYYY
+    expect(formatDateToIndian('2026-11-02')).toBe('02-11-2026');
+    expect(formatDateToIndian('2026-11-02T00:00:00.000Z')).toBe('02-11-2026');
+    expect(formatDateToIndian(new Date(2026, 10, 2))).toBe('02-11-2026');
+    expect(formatDateToIndian('Mon Nov 02 2026 05:30:00 GMT+0530 (India Standard Time)')).toBe('02-11-2026');
+    expect(formatDateToIndian(null)).toBe('');
   });
 
   it('2. Suggests the next sequential invoice number via /api/v1/gst-invoices/next-number', async () => {
@@ -404,7 +411,7 @@ describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
       if (sqlText.includes('COUNT(*)')) {
         return { rows: [{ total: 1 }], rowCount: 1 } as any;
       }
-      if (sqlText.includes('SELECT id, invoice_number')) {
+      if (sqlText.includes('FROM gst_invoices') && !sqlText.includes('COUNT(*)')) {
         return {
           rows: [
             {
@@ -414,6 +421,17 @@ describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
               customer_name: 'Sharma Construction',
               grand_total: '9581.60',
               pdf_status: 'local_only',
+              items: [
+                {
+                  id: 1,
+                  invoice_id: 1,
+                  description: 'HDF BOARD 12mm',
+                  hsn_code: '44119219',
+                  quantity: '14.000',
+                  rate: '580.00',
+                  amount: '8120.00',
+                },
+              ],
             },
           ],
           rowCount: 1,
@@ -429,6 +447,8 @@ describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.invoices).toHaveLength(1);
+    expect(res.body.invoices[0].items).toHaveLength(1);
+    expect(res.body.invoices[0].items[0].description).toBe('HDF BOARD 12mm');
     expect(res.body.pagination.total).toBe(1);
   });
 

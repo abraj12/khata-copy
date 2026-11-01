@@ -82,13 +82,27 @@ export function numberToIndianWords(value: number | string): string {
   return `Rupees ${indianInteger(rupees)}${paise ? ` and ${indianInteger(paise)} Paise` : ''} Only`;
 }
 
-export function formatDateToIndian(val?: string | null): string {
+export function formatDateToIndian(val?: any): string {
   if (!val) return '';
-  if (/^\d{4}-\d{2}-\d{2}/.test(val)) {
-    const [y, m, d] = val.slice(0, 10).split('-');
+  if (val instanceof Date) {
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    const d = String(val.getDate()).padStart(2, '0');
     return `${d}-${m}-${y}`;
   }
-  return val;
+  const str = String(val).trim();
+  const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    return `${isoMatch[3]}-${isoMatch[2]}-${isoMatch[1]}`;
+  }
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${d}-${m}-${y}`;
+  }
+  return str.slice(0, 10);
 }
 
 export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> {

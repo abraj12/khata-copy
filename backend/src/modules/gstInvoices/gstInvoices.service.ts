@@ -359,6 +359,8 @@ export class GstInvoicesService {
 
       createdInvoice.r2_object_key = r2Key;
       createdInvoice.pdf_status = pdfStatus;
+      createdInvoice.invoice_date = input.invoiceDate || invoiceDate;
+      createdInvoice.date_of_supply = input.dateOfSupply || invoiceDate;
       createdInvoice.items = insertedItems;
 
       return createdInvoice;
@@ -388,36 +390,62 @@ export class GstInvoicesService {
 
     if (opts.search && opts.search.trim()) {
       params.push(`%${opts.search.trim()}%`);
-      whereSql += ` AND (invoice_number ILIKE $${params.length} OR customer_name ILIKE $${params.length})`;
+      whereSql += ` AND (i.invoice_number ILIKE $${params.length} OR i.customer_name ILIKE $${params.length})`;
     }
 
     if (opts.dateFrom) {
       params.push(opts.dateFrom);
-      whereSql += ` AND invoice_date >= $${params.length}`;
+      whereSql += ` AND i.invoice_date >= $${params.length}`;
     }
 
     if (opts.dateTo) {
       params.push(opts.dateTo);
-      whereSql += ` AND invoice_date <= $${params.length}`;
+      whereSql += ` AND i.invoice_date <= $${params.length}`;
     }
 
     const countRes = await appPool.query(
-      `SELECT COUNT(*)::INT AS total FROM gst_invoices ${whereSql}`,
+      `SELECT COUNT(*)::INT AS total FROM gst_invoices i ${whereSql}`,
       params
     );
     const total = countRes.rows[0]?.total || 0;
 
     const listSql = `
-      SELECT id, invoice_number, invoice_date, state, state_code,
-             transportation_mode, vehicle_number, date_of_supply, place_of_supply,
-             customer_id, customer_name, customer_address, customer_gstin,
-             customer_state, customer_state_code,
-             taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
-             igst_rate, igst_amount, tax_amount, grand_total, amount_in_words,
-             r2_object_key, pdf_status, notes, created_at, updated_at
-      FROM gst_invoices
+      SELECT i.id, i.invoice_number,
+             TO_CHAR(i.invoice_date, 'YYYY-MM-DD') AS invoice_date,
+             i.state, i.state_code,
+             i.transportation_mode, i.vehicle_number,
+             TO_CHAR(i.date_of_supply, 'YYYY-MM-DD') AS date_of_supply,
+             i.place_of_supply,
+             i.customer_id, i.customer_name, i.customer_address, i.customer_gstin,
+             i.customer_state, i.customer_state_code,
+             i.taxable_amount, i.cgst_rate, i.cgst_amount, i.sgst_rate, i.sgst_amount,
+             i.igst_rate, i.igst_amount, i.tax_amount, i.grand_total, i.amount_in_words,
+             i.r2_object_key, i.pdf_status, i.notes, i.created_at, i.updated_at,
+             COALESCE(
+               (
+                 SELECT json_agg(
+                   json_build_object(
+                     'id', it.id,
+                     'invoice_id', it.invoice_id,
+                     'product_id', it.product_id,
+                     'item_index', it.item_index,
+                     'description', it.description,
+                     'hsn_code', it.hsn_code,
+                     'quantity', it.quantity,
+                     'unit', it.unit,
+                     'rate', it.rate,
+                     'rate_unit', it.rate_unit,
+                     'amount', it.amount
+                   ) ORDER BY it.item_index ASC
+                 )
+                 FROM gst_invoice_items it
+                 WHERE it.invoice_id = i.id
+               ),
+               '[]'::json
+             ) AS items
+      FROM gst_invoices i
       ${whereSql}
-      ORDER BY invoice_date DESC, id DESC
+      ORDER BY i.invoice_date DESC, i.id DESC
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
 
@@ -433,7 +461,18 @@ export class GstInvoicesService {
    * Retrieve single invoice with items
    */
   public async getInvoiceById(id: number): Promise<GstInvoiceRecord | null> {
-    const res = await appPool.query('SELECT * FROM gst_invoices WHERE id = $1', [id]);
+    const res = await appPool.query(
+      `SELECT id, invoice_number,
+              TO_CHAR(invoice_date, 'YYYY-MM-DD') AS invoice_date,
+              state, state_code, transportation_mode, vehicle_number,
+              TO_CHAR(date_of_supply, 'YYYY-MM-DD') AS date_of_supply,
+              place_of_supply, customer_id, customer_name, customer_address, customer_gstin,
+              customer_state, customer_state_code, taxable_amount, cgst_rate, cgst_amount,
+              sgst_rate, sgst_amount, igst_rate, igst_amount, tax_amount, grand_total,
+              amount_in_words, r2_object_key, pdf_status, notes, created_at, updated_at
+       FROM gst_invoices WHERE id = $1`,
+      [id]
+    );
     if ((res.rowCount ?? 0) === 0) return null;
 
     const invoice: GstInvoiceRecord = res.rows[0];
