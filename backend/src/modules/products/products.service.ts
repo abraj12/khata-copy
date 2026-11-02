@@ -62,7 +62,7 @@ export class ProductsService {
    */
   public async listActiveProducts(optionsOrSearch?: string | ListProductsOptions): Promise<PaginatedProductsResult> {
     const opts = typeof optionsOrSearch === 'string' ? { search: optionsOrSearch } : optionsOrSearch || {};
-    const limit = Math.min(Math.max(1, opts.limit || 25), 50);
+    const limit = Math.min(Math.max(1, opts.limit || 25), 200);
     const offset = Math.max(0, opts.offset || 0);
 
     let sql = `

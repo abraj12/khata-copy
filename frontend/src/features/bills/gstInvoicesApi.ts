@@ -171,12 +171,33 @@ export async function downloadDraftPdf(payload: CreateGstInvoicePayload): Promis
     body: JSON.stringify(payload),
   });
 
-  if (!response.ok) {
-    const errorJson = await response.json().catch(() => ({}));
-    throw new Error(errorJson.message || 'Failed to download draft PDF');
+  let res = response;
+  if (!res.ok) {
+    const errorJson = await res.json().catch(() => ({}));
+    if (res.status === 403 && (errorJson.message?.includes('CSRF token') || errorJson.message?.includes('Origin'))) {
+      const refreshedToken = await fetchCsrfToken();
+      if (refreshedToken) {
+        const retryRes = await fetch(url, {
+          method: 'POST',
+          headers: { ...headers, 'X-CSRF-Token': refreshedToken },
+          credentials: 'include',
+          body: JSON.stringify(payload),
+        });
+        if (retryRes.ok) {
+          res = retryRes;
+        } else {
+          const retryErr = await retryRes.json().catch(() => ({}));
+          throw new Error(retryErr.message || 'Failed to download draft PDF');
+        }
+      } else {
+        throw new Error(errorJson.message || 'Failed to download draft PDF');
+      }
+    } else {
+      throw new Error(errorJson.message || 'Failed to download draft PDF');
+    }
   }
 
-  const blob = await response.blob();
+  const blob = await res.blob();
   const blobUrl = window.URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = blobUrl;

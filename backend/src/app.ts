@@ -60,8 +60,8 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
   );
 
   // 4. Request Body Parsers with strict size limits to prevent buffer resource abuse
-  app.use(express.json({ limit: '10kb' }));
-  app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+  app.use(express.json({ limit: '250kb' }));
+  app.use(express.urlencoded({ extended: true, limit: '250kb' }));
   app.use(cookieParser());
 
   // 5. Session Middleware (PostgreSQL store with 7-day rolling TTL)

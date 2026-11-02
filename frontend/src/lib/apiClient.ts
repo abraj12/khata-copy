@@ -84,6 +84,26 @@ export async function apiClient<T = unknown>(
 
   if (!response.ok) {
     const errorPayload = data as { message?: string; isLocked?: boolean; remainingMs?: number };
+
+    // Auto-refresh CSRF token and retry once if token became stale or session refreshed
+    if (
+      response.status === 403 &&
+      errorPayload.message?.includes('CSRF token') &&
+      !(options as { _isCsrfRetry?: boolean })._isCsrfRetry
+    ) {
+      const refreshedToken = await fetchCsrfToken();
+      if (refreshedToken) {
+        return apiClient<T>(endpoint, {
+          ...options,
+          headers: {
+            ...headers,
+            'X-CSRF-Token': refreshedToken,
+          },
+          _isCsrfRetry: true,
+        } as RequestInit);
+      }
+    }
+
     const err = new Error(errorPayload.message || `Request failed with status ${response.status}`);
     (err as unknown as { status: number; payload: unknown }).status = response.status;
     (err as unknown as { status: number; payload: unknown }).payload = errorPayload;

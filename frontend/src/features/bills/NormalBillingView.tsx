@@ -978,8 +978,6 @@ export const NormalBillingView: React.FC = () => {
                         type="button"
                         onClick={() => {
                           setCustomerId(null);
-                          setCustomerAddress('');
-                          setCustomerPhone('');
                         }}
                         className="text-rose-500 hover:underline font-bold cursor-pointer"
                         title="Unlink customer"
@@ -998,8 +996,6 @@ export const NormalBillingView: React.FC = () => {
                       setCustomerSearch(e.target.value);
                       if (customerId) {
                         setCustomerId(null);
-                        setCustomerAddress('');
-                        setCustomerPhone('');
                       }
                     }}
                     placeholder="Search existing customer or type new name..."

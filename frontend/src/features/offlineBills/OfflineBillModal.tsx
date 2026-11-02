@@ -122,7 +122,12 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
   // Validate phone format (10 digit Indian mobile)
   const validatePhone = (val: string): boolean => {
     const clean = val.replace(/[\s\-+]/g, '');
-    const mobile = clean.startsWith('91') && clean.length === 12 ? clean.slice(2) : clean;
+    let mobile = clean;
+    if (clean.startsWith('91') && clean.length === 12) {
+      mobile = clean.slice(2);
+    } else if (clean.startsWith('0') && clean.length === 11) {
+      mobile = clean.slice(1);
+    }
     return /^[6-9]\d{9}$/.test(mobile);
   };
 

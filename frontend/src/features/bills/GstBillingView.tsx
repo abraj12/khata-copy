@@ -912,7 +912,6 @@ export const GstBillingView: React.FC = () => {
                             type="button"
                             onClick={() => {
                               setCustomerId(null);
-                              setCustomerAddress('');
                             }}
                             className="text-rose-500 hover:underline font-bold cursor-pointer"
                             title="Unlink customer"
@@ -929,7 +928,6 @@ export const GstBillingView: React.FC = () => {
                         setCustomerName(e.target.value);
                         if (customerId) {
                           setCustomerId(null);
-                          setCustomerAddress('');
                         }
                       }}
                       placeholder="e.g. Sharma Construction Co. / M/s ABC Enterprises"

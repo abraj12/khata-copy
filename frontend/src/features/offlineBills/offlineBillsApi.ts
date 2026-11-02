@@ -94,6 +94,23 @@ export async function uploadAndCreateOfflineBill(params: {
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
+    if (response.status === 403 && (err as { message?: string })?.message?.includes('CSRF token')) {
+      const refreshedToken = await fetchCsrfToken();
+      if (refreshedToken) {
+        const retryRes = await fetch(`${API_BASE_URL}/api/v1/offline-bills/upload`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'X-CSRF-Token': refreshedToken },
+          body: formData,
+        });
+        if (retryRes.ok) {
+          const retryResult = await retryRes.json();
+          return (retryResult as { data: OfflineBillRecord }).data;
+        }
+        const retryErr = await retryRes.json().catch(() => ({}));
+        throw new Error((retryErr as { message?: string }).message || 'Offline bill upload failed');
+      }
+    }
     throw new Error((err as { message?: string }).message || 'Offline bill upload failed');
   }
 

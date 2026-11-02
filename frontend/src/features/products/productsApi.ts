@@ -124,6 +124,20 @@ export async function uploadAndAttachProductImage(
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
+    if (response.status === 403 && (err as { message?: string })?.message?.includes('CSRF token')) {
+      const refreshedToken = await fetchCsrfToken();
+      if (refreshedToken) {
+        const retryRes = await fetch(`${API_BASE_URL}/api/v1/products/${productId}/image/upload`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'X-CSRF-Token': refreshedToken },
+          body: formData,
+        });
+        if (retryRes.ok) return;
+        const retryErr = await retryRes.json().catch(() => ({}));
+        throw new Error((retryErr as { message?: string }).message || 'Image upload failed');
+      }
+    }
     throw new Error((err as { message?: string }).message || 'Image upload failed');
   }
 }
