@@ -59,7 +59,7 @@ All API endpoints return JSON conforming to standard canonical envelopes:
 ### 2.2 Deep Readiness Probe
 - **Method & Route:** `GET /api/v1/health/ready`
 - **Authentication:** Public
-- **Checks Performed:** PostgreSQL connectivity, `schema_migrations` table existence, migration files verified (`001` through `005`), 9 core tables verified. In production, database credentials, server traces, and raw connection strings are strictly masked.
+- **Checks Performed:** PostgreSQL connectivity, `schema_migrations` table existence, migration files verified (`001` through `014`), 11 core tables verified (`session`, `login_attempts`, `products`, `customers`, `udhar_transactions`, `udhar_items`, `payments`, `payment_allocations`, `idempotency_keys`, `offline_bill_records`, `gst_invoices`, `normal_bills`). In production, database credentials, server traces, and raw connection strings are strictly masked.
 - **Response (200 OK):**
 ```json
 {
@@ -77,7 +77,15 @@ All API endpoints return JSON conforming to standard canonical envelopes:
           "003_idempotency_and_hardening.sql",
           "004_integer_quantity_and_money_constraints.sql",
           "005_search_indexes_and_identity_constraints.sql",
-          "006_quantity_two_decimal_places.sql"
+          "006_quantity_two_decimal_places.sql",
+          "007_quantity_strict_scale_and_allocation_integrity.sql",
+          "008_strict_quantity_scale.sql",
+          "009_product_images_and_offline_bills.sql",
+          "010_product_hsn_code.sql",
+          "011_gst_invoices.sql",
+          "012_normal_bills.sql",
+          "013_customer_address.sql",
+          "014_billing_quantity_and_sequences.sql"
         ],
         "found": [
           "001_auth_tables.sql",
@@ -85,7 +93,15 @@ All API endpoints return JSON conforming to standard canonical envelopes:
           "003_idempotency_and_hardening.sql",
           "004_integer_quantity_and_money_constraints.sql",
           "005_search_indexes_and_identity_constraints.sql",
-          "006_quantity_two_decimal_places.sql"
+          "006_quantity_two_decimal_places.sql",
+          "007_quantity_strict_scale_and_allocation_integrity.sql",
+          "008_strict_quantity_scale.sql",
+          "009_product_images_and_offline_bills.sql",
+          "010_product_hsn_code.sql",
+          "011_gst_invoices.sql",
+          "012_normal_bills.sql",
+          "013_customer_address.sql",
+          "014_billing_quantity_and_sequences.sql"
         ],
         "missing": []
       },
@@ -124,13 +140,26 @@ All API endpoints return JSON conforming to standard canonical envelopes:
 
 ## 3. Authentication Endpoints
 
-### 3.1 Owner Login
+### 3.1 CSRF Token Generation
+- **Method & Route:** `GET /api/v1/auth/csrf-token`
+- **Authentication:** Public / Session
+- **Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "csrfToken": "4f9d8a..."
+  }
+}
+```
+
+### 3.2 Owner Login
 - **Method & Route:** `POST /api/v1/auth/login`
 - **Headers:** `Content-Type: application/json`, `X-CSRF-Token: <token>`
 - **Request Body:**
 ```json
 {
-  "username": "owner",
+  "phone": "9876543210",
   "password": "SecretPassword123!"
 }
 ```
@@ -139,16 +168,16 @@ All API endpoints return JSON conforming to standard canonical envelopes:
 {
   "success": true,
   "data": {
-    "username": "owner",
+    "phone": "9876543210",
     "role": "OWNER"
   }
 }
 ```
 - **Cookies Set:**
-  - `sid`: Host-only, HTTP-only, Secure, SameSite=Lax.
-  - `csrf-token`: Host-only, Secure, SameSite=Lax.
+  - `khata_session`: Host-only, HTTP-only, Secure (in production), SameSite=Lax.
+  - Note: CSRF token is held in frontend memory and transmitted via the `X-CSRF-Token` header.
 
-### 3.2 Owner Logout
+### 3.3 Owner Logout
 - **Method & Route:** `POST /api/v1/auth/logout`
 - **Authentication:** Session cookie required
 - **Response (200 OK):**
@@ -161,7 +190,7 @@ All API endpoints return JSON conforming to standard canonical envelopes:
 }
 ```
 
-### 3.3 Current Session Check
+### 3.4 Current Session Check
 - **Method & Route:** `GET /api/v1/auth/me`
 - **Authentication:** Session cookie required
 - **Response (200 OK):**
@@ -169,7 +198,7 @@ All API endpoints return JSON conforming to standard canonical envelopes:
 {
   "success": true,
   "data": {
-    "username": "owner",
+    "phone": "9876543210",
     "authenticated": true
   }
 }

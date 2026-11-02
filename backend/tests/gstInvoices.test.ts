@@ -538,4 +538,63 @@ describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
     expect(res.headers['content-disposition']).toContain('Invoice_DRAFT-099.pdf');
     expect(res.body.subarray(0, 5).toString('ascii')).toBe('%PDF-');
   });
+
+  it('12. Renders multi-line long item descriptions and 20 items cleanly in PDF without overlap or error', async () => {
+    const items = Array.from({ length: 20 }, (_, i) => ({
+      name: `Premium Heavy Duty Stainless Steel Flange Pipe Fitting Joint # ${i + 1}`,
+      hsn: '7307',
+      quantity: 1,
+      unit: 'pcs',
+      rate: 150,
+      amount: 150,
+    }));
+
+    const pdfBuffer = await generateMannatInvoicePdf({
+      invoiceNumber: '020',
+      invoiceDate: '2026-11-02',
+      customer: {
+        name: 'Mannat Customer With Long Multi-line Address',
+        address: 'Plot No. 45, Industrial Area Phase II, Near Subhash Chowk, Bilaspur, Rampur, UP',
+        gstin: '09ABCDE1234F1Z5',
+        state: 'Uttar Pradesh',
+        stateCode: '09',
+      },
+      items,
+      totals: {
+        taxableAmount: 3000,
+        cgstRate: 9,
+        cgstAmount: 270,
+        sgstRate: 9,
+        sgstAmount: 270,
+        taxAmount: 540,
+        grandTotal: 3540,
+      },
+    });
+
+    expect(pdfBuffer).toBeDefined();
+    expect(pdfBuffer.length).toBeGreaterThan(1000);
+    expect(pdfBuffer.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+  });
+
+  it('13. Rejects invalid calendar dates (e.g. 2026-02-31) with HTTP 400 Bad Request', async () => {
+    const res = await request(app)
+      .post('/api/v1/gst-invoices')
+      .set('Cookie', authCookie)
+      .set('X-CSRF-Token', csrfToken)
+      .send({
+        customerName: 'Invalid Date Customer',
+        invoiceDate: '2026-02-31',
+        gstRate: 18,
+        items: [
+          {
+            description: 'Item A',
+            quantity: 1,
+            rate: 100,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+  });
 });

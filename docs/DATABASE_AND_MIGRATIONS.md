@@ -22,6 +22,11 @@ Migrations are executed sequentially via `backend/scripts/migrate.ts` using dire
 | **007** | `007_quantity_strict_scale_and_allocation_integrity.sql` | Unconstrained NUMERIC with TRUNC scale check and **composite foreign keys** ensuring payment allocations cannot cross customer ownership. |
 | **008** | `008_strict_quantity_scale.sql` | **Strict scale enforcement**: Enforces `scale(quantity) <= 2 AND TRUNC(quantity, 2) = quantity` to strictly reject direct SQL inputs with trailing zeros or excess precision (e.g. `1.2300` and `1.234`). |
 | **009** | `009_product_images_and_offline_bills.sql` | Adds nullable Cloudflare R2 image metadata columns to `products` (`image_object_key`, `image_content_type`, `image_size_bytes`, `image_updated_at`) and creates `offline_bill_records` table with search indexes. |
+| **010** | `010_product_hsn_code.sql` | Adds nullable `hsn_code` column to `products` table for GST tax classification. |
+| **011** | `011_gst_invoices.sql` | Creates `gst_invoices` and `gst_invoice_items` tables with Cloudflare R2 PDF metadata and sequential invoice numbering. |
+| **012** | `012_normal_bills.sql` | Creates `normal_bills` and `normal_bill_items` tables for non-GST standard retail billing. |
+| **013** | `013_customer_address.sql` | Adds nullable `address` column to `customers` table for billing and invoice autofill. |
+| **014** | `014_billing_quantity_and_sequences.sql` | Standardizes billing item quantities to 2-decimal scale unconstrained `NUMERIC` and synchronizes sequence counters atomically. |
 
 ---
 

@@ -308,10 +308,14 @@ export const GstBillingView: React.FC = () => {
     let igstAmountDec = new Decimal(0);
 
     if (isIntraState) {
-      cgstRateVal = gstRateDec.dividedBy(2).toNumber();
-      sgstRateVal = gstRateDec.dividedBy(2).toNumber();
-      cgstAmountDec = taxableDec.times(cgstRateVal).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-      sgstAmountDec = taxableDec.times(sgstRateVal).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      // Synchronize with backend rate calculation: cgst_rate + sgst_rate = gst_rate exactly
+      const halfRate = gstRateDec.dividedBy(2).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      const cgstDec = halfRate;
+      const sgstDec = gstRateDec.minus(halfRate);
+      cgstRateVal = cgstDec.toNumber();
+      sgstRateVal = sgstDec.toNumber();
+      cgstAmountDec = taxableDec.times(cgstDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      sgstAmountDec = taxableDec.times(sgstDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     } else {
       igstRateVal = gstRateDec.toNumber();
       igstAmountDec = taxableDec.times(igstRateVal).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);

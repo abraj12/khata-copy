@@ -55,7 +55,7 @@ flowchart TD
 | **Object Storage** | Cloudflare R2 (S3-compatible, private bucket, region `auto`, zero egress fees).<br>Direct presigned PUT/GET upload pattern and server-side magic byte inspection. |
 | **Financial Engine** | `decimal.js` for arbitrary-precision decimal arithmetic (financial rounding half-up, strict 2-decimal-place scale for money and fractional quantities up to 2 decimal places). |
 | **Database** | PostgreSQL 16 on Neon Serverless. Enforces foreign key constraints, unconstrained `NUMERIC` with `TRUNC` scale checks, composite payment allocation foreign keys, unique indexes, and ACID transactions. |
-| **Security & Auth** | Argon2id for password hashing, host-only `httpOnly` secure session cookies, double-submit CSRF cookie protection, `express-rate-limit`. |
+| **Security & Auth** | Argon2id for password hashing, host-only `httpOnly` secure session cookies, session-bound CSRF token validation, persistent PostgreSQL brute-force lockout (`login_attempts`). |
 
 ---
 

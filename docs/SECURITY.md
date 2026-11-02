@@ -51,15 +51,16 @@ Khata implements the **Double-Submit Cookie Pattern**:
 The authentication service protects against credential stuffing and brute-force attacks via multi-tiered controls:
 
 ### Multi-Tiered Defense Architecture
-1. **Network Rate Limiting:** `express-rate-limit` caps login attempts to 10 requests per 15 minutes per IP address.
+1. **Persistent Lockout & Rate Limiting:** Login attempts are tracked in the persistent `login_attempts` table, keyed by SHA-256 hashes of client IP, normalized owner phone, and combined IP + phone peppered with `SESSION_SECRET`.
 2. **Exponential Backoff & Account Lockout:**
-   - Client identifier is hashed via SHA-256 with `SESSION_SECRET` as a cryptographic pepper: $\text{Hash} = \text{SHA256}(\text{IP} + \text{UserAgent} + \text{pepper})$.
-   - Failed attempts are logged in the `login_attempts` table.
-   - 5 consecutive failures trigger a 15-minute account lockout.
-   - Additional failures apply exponential backoff penalties.
+   - 5 consecutive failures trigger a 15-minute temporary lockout (HTTP 429).
+   - Phone formats with `+91`, spaces, dashes, or zero prefixes map to the canonical account lockout bucket.
 3. **Throttled Maintenance Pruning:**
    - Expired attempts are purged using non-blocking PostgreSQL advisory locks (`pg_try_advisory_xact_lock(0x4B48415441)`).
    - Pruning executes without stalling concurrent requests.
+4. **Session-Bound CSRF Architecture:**
+   - CSRF tokens are cryptographically generated per session and served via `GET /api/v1/auth/csrf-token`.
+   - Transmitted in the `X-CSRF-Token` header for state-changing endpoints, verified with strict timing-safe comparisons.
 
 ---
 

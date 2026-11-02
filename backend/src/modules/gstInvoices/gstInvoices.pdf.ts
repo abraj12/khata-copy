@@ -187,21 +187,21 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       doc.lineWidth(1).moveTo(left, y).lineTo(left + width, y).stroke();
 
       // Bill to Party Section
-      const billToHeight = 65;
-      doc.font('Helvetica-Bold').fontSize(9).text('Details of Receiver (Bill to Party)', left + 6, y + 6);
-      doc.font('Helvetica-Bold').fontSize(8.5).text('Name : ', left + 6, y + 20, { continued: true });
+      const billToHeight = 70;
+      doc.font('Helvetica-Bold').fontSize(9).text('Details of Receiver (Bill to Party)', left + 6, y + 5);
+      doc.font('Helvetica-Bold').fontSize(8.5).text('Name : ', left + 6, y + 18, { continued: true });
       doc.font('Helvetica').fontSize(8.5).text(data.customer?.name || '');
 
-      // Guarded Address Section: Ellipsis clipping prevents long addresses from overflowing into GSTIN
-      doc.font('Helvetica-Bold').fontSize(8.5).text('Address : ', left + 6, y + 33, { continued: true });
+      // Guarded Address Section: Supports multi-line addresses with ellipsis safety boundary
+      doc.font('Helvetica-Bold').fontSize(8.5).text('Address : ', left + 6, y + 30, { continued: true });
       const addressText = (data.customer?.address || '').trim();
-      doc.font('Helvetica').fontSize(8).text(addressText, {
+      doc.font('Helvetica').fontSize(7.5).text(addressText, {
         width: width - 70,
-        height: 17,
+        height: 22,
         ellipsis: true,
       });
 
-      const bottomLineY = y + 51;
+      const bottomLineY = y + 54;
       doc.font('Helvetica-Bold').fontSize(8.5).text('GSTIN : ', left + 6, bottomLineY, { continued: true });
       doc.font('Helvetica').fontSize(8.5).text(`${data.customer?.gstin || ''}              `, { continued: true });
       doc.font('Helvetica-Bold').fontSize(8.5).text('State : ', { continued: true });
@@ -296,7 +296,7 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       for (const item of items) {
         doc.font('Helvetica').fontSize(itemFontSize);
         const nameHeight = doc.heightOfString(item.name || '', { width: colWidths[1] - 8 });
-        const rowHeight = Math.max(minRowHeight, Math.min(nameHeight + 2, 28));
+        const rowHeight = Math.max(minRowHeight, nameHeight + 3);
         simulatedY += rowHeight;
       }
 
@@ -313,7 +313,7 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       items.forEach((item, idx) => {
         doc.font('Helvetica').fontSize(itemFontSize);
         const nameHeight = doc.heightOfString(item.name || '', { width: colWidths[1] - 8 });
-        const rowHeight = Math.max(minRowHeight, Math.min(nameHeight + 2, 28));
+        const rowHeight = Math.max(minRowHeight, nameHeight + 3);
 
         doc.text(`${idx + 1}.`, colX[0], itemY, { width: colWidths[0], align: 'center' });
         doc.text(item.name || '', colX[1] + 4, itemY, { width: colWidths[1] - 8, align: 'left', lineBreak: true });

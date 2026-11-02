@@ -791,4 +791,30 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     `, [invId]);
     expect(parseFloat(trailingZeroItem.rows[0].quantity)).toBe(1.20);
   });
+
+  // 17. Historical NUMERIC(12, 3) upgrade test: verifies 1.230 converts cleanly without constraint failure
+  it('17. Simulates historical NUMERIC(12, 3) column with 1.230 and applies migration 014 conversion', async () => {
+    await pool.query(`
+      CREATE TABLE test_hist_items (
+        id BIGSERIAL PRIMARY KEY,
+        quantity NUMERIC(12, 3) NOT NULL
+      )
+    `);
+
+    await pool.query(`INSERT INTO test_hist_items (quantity) VALUES (1.230)`);
+
+    const beforeRes = await pool.query(`SELECT quantity, scale(quantity) AS sc FROM test_hist_items WHERE id = 1`);
+    expect(parseInt(beforeRes.rows[0].sc, 10)).toBe(3);
+
+    await pool.query(`
+      ALTER TABLE test_hist_items ALTER COLUMN quantity TYPE NUMERIC USING TRUNC(quantity, 2);
+      ALTER TABLE test_hist_items ADD CONSTRAINT chk_test_hist_scale CHECK (quantity > 0 AND scale(quantity) <= 2 AND TRUNC(quantity, 2) = quantity);
+    `);
+
+    const afterRes = await pool.query(`SELECT quantity, scale(quantity) AS sc FROM test_hist_items WHERE id = 1`);
+    expect(parseInt(afterRes.rows[0].sc, 10)).toBe(2);
+    expect(parseFloat(afterRes.rows[0].quantity)).toBe(1.23);
+
+    await pool.query(`DROP TABLE test_hist_items`);
+  });
 });
