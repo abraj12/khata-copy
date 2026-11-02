@@ -147,7 +147,7 @@ describe('Search & Bounded Pagination Test Suite', () => {
       });
 
       await khataService.listCustomers();
-      expect(executedSql).toContain('ORDER BY tx.last_activity DESC NULLS LAST, c.name ASC, c.id ASC');
+      expect(executedSql).toContain('ORDER BY GREATEST(tx.last_activity, pay.last_payment) DESC NULLS LAST, c.name ASC, c.id ASC');
       expect(executedSql).toContain('LIMIT $1 OFFSET $2');
       expect(executedParams).toEqual([26, 0]);
     });

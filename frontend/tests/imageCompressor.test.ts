@@ -27,4 +27,12 @@ describe('Client-Side Image Compression Suite', () => {
     expect(result).toBeDefined();
     expect(result.size).toBe(dummyPng.size);
   });
+
+  it('4. Rejects file and throws clear error if file exceeds maxSizeBytes without Canvas', async () => {
+    const largeBlob = new Uint8Array(5 * 1024 * 1024);
+    const largeFile = new File([largeBlob], 'huge.jpg', { type: 'image/jpeg' });
+    await expect(
+      compressImageFile(largeFile, { maxSizeBytes: 4 * 1024 * 1024 })
+    ).rejects.toThrow('Image size exceeds the 4.0 MB limit.');
+  });
 });

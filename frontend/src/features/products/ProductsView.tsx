@@ -213,18 +213,19 @@ export const ProductsView: React.FC = () => {
 
     setCreateError(null);
     try {
-      const processed = await compressImageFile(file, { maxWidth: 1200, maxHeight: 1200, quality: 0.8 });
+      const processed = await compressImageFile(file, {
+        maxWidth: 1200,
+        maxHeight: 1200,
+        quality: 0.8,
+        maxSizeBytes: 4.5 * 1024 * 1024,
+      });
       setCreateImageFile(processed);
       if (createImagePreview && createImagePreview.startsWith('blob:')) {
         URL.revokeObjectURL(createImagePreview);
       }
       setCreateImagePreview(URL.createObjectURL(processed));
-    } catch {
-      setCreateImageFile(file);
-      if (createImagePreview && createImagePreview.startsWith('blob:')) {
-        URL.revokeObjectURL(createImagePreview);
-      }
-      setCreateImagePreview(URL.createObjectURL(file));
+    } catch (err) {
+      setCreateError((err as Error).message || 'Failed to prepare image for upload.');
     }
   };
 
@@ -324,18 +325,19 @@ export const ProductsView: React.FC = () => {
 
     setEditError(null);
     try {
-      const processed = await compressImageFile(file, { maxWidth: 1200, maxHeight: 1200, quality: 0.8 });
+      const processed = await compressImageFile(file, {
+        maxWidth: 1200,
+        maxHeight: 1200,
+        quality: 0.8,
+        maxSizeBytes: 4.5 * 1024 * 1024,
+      });
       setEditImageFile(processed);
       if (editImagePreview && editImagePreview.startsWith('blob:')) {
         URL.revokeObjectURL(editImagePreview);
       }
       setEditImagePreview(URL.createObjectURL(processed));
-    } catch {
-      setEditImageFile(file);
-      if (editImagePreview && editImagePreview.startsWith('blob:')) {
-        URL.revokeObjectURL(editImagePreview);
-      }
-      setEditImagePreview(URL.createObjectURL(file));
+    } catch (err) {
+      setEditError((err as Error).message || 'Failed to prepare image for upload.');
     }
   };
 

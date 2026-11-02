@@ -1,22 +1,24 @@
 import { describe, it, expect } from 'vitest';
+import Decimal from 'decimal.js';
 import { numberWords } from '../src/components/MannatTaxInvoice/MannatTaxInvoice.js';
 import { mapNormalBillToInvoiceProps, NormalBillRecord } from '../src/features/bills/normalBillsApi.js';
 
 describe('Normal Billing Module (Frontend Calculation & Mannat Bill Mapping)', () => {
-  it('1. Calculates line items and grand total without any GST', () => {
+  it('1. Calculates line items and grand total without any GST using Decimal.js', () => {
     const items = [
       { quantity: '2', rate: '1750' }, // 3500
       { quantity: '5', rate: '240' },  // 1200
       { quantity: '10', rate: '35.50' }, // 355
     ];
 
-    let totalAmount = 0;
+    let totalAmountDec = new Decimal(0);
     items.forEach((item) => {
-      const q = parseFloat(item.quantity) || 0;
-      const r = parseFloat(item.rate) || 0;
-      totalAmount += Math.round((q * r + Number.EPSILON) * 100) / 100;
+      const q = new Decimal(item.quantity || 0);
+      const r = new Decimal(item.rate || 0);
+      totalAmountDec = totalAmountDec.plus(q.times(r).toDecimalPlaces(2, Decimal.ROUND_HALF_UP));
     });
 
+    const totalAmount = totalAmountDec.toNumber();
     expect(totalAmount).toBe(5055);
     expect(numberWords(totalAmount)).toBe('Rupees Five Thousand Fifty Five Only');
   });
@@ -74,5 +76,12 @@ describe('Normal Billing Module (Frontend Calculation & Mannat Bill Mapping)', (
     expect(invoiceProps.totals?.grandTotal).toBe('4500.00');
     expect(invoiceProps.items).toHaveLength(1);
     expect(invoiceProps.items?.[0].name).toBe('HDF Board 12mm');
+  });
+
+  it('3. Accurately calculates half-up boundary cases with Decimal.js (e.g. 0.01 * 401.50 = 4.02)', () => {
+    const qDec = new Decimal('0.01');
+    const rDec = new Decimal('401.50');
+    const lineAmt = qDec.times(rDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
+    expect(lineAmt).toBe(4.02);
   });
 });

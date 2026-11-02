@@ -181,7 +181,8 @@ export class KhataService {
       customer_pay AS (
         SELECT
           customer_id,
-          COALESCE(SUM(amount), 0)::numeric AS total_received
+          COALESCE(SUM(amount), 0)::numeric AS total_received,
+          MAX(received_at) AS last_payment
         FROM payments
         GROUP BY customer_id
       )
@@ -193,7 +194,7 @@ export class KhataService {
         COALESCE(tx.total_udhar, 0)::numeric AS total_udhar,
         COALESCE(pay.total_received, 0)::numeric AS total_received,
         GREATEST(COALESCE(tx.total_udhar, 0) - COALESCE(alloc.total_allocated, 0), 0)::numeric AS outstanding,
-        tx.last_activity
+        GREATEST(tx.last_activity, pay.last_payment) AS last_activity
       FROM customers c
       INNER JOIN customer_tx tx ON tx.customer_id = c.id
       LEFT JOIN customer_alloc alloc ON alloc.customer_id = c.id
@@ -222,7 +223,7 @@ export class KhataService {
       }
     }
 
-    sql += ` ORDER BY tx.last_activity DESC NULLS LAST, c.name ASC, c.id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    sql += ` ORDER BY GREATEST(tx.last_activity, pay.last_payment) DESC NULLS LAST, c.name ASC, c.id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limit + 1, offset);
 
     const result = await appPool.query(sql, params);
@@ -283,7 +284,8 @@ export class KhataService {
       customer_pay AS (
         SELECT
           customer_id,
-          COALESCE(SUM(amount), 0)::numeric AS total_received
+          COALESCE(SUM(amount), 0)::numeric AS total_received,
+          MAX(received_at) AS last_payment
         FROM payments
         WHERE customer_id = $1
         GROUP BY customer_id
@@ -296,7 +298,7 @@ export class KhataService {
         COALESCE(tx.total_udhar, 0)::numeric AS total_udhar,
         COALESCE(pay.total_received, 0)::numeric AS total_received,
         GREATEST(COALESCE(tx.total_udhar, 0) - COALESCE(alloc.total_allocated, 0), 0)::numeric AS outstanding,
-        tx.last_activity
+        GREATEST(tx.last_activity, pay.last_payment) AS last_activity
       FROM customers c
       LEFT JOIN customer_tx tx ON tx.customer_id = c.id
       LEFT JOIN customer_alloc alloc ON alloc.customer_id = c.id

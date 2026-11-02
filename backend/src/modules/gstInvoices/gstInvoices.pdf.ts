@@ -296,7 +296,10 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       for (const item of items) {
         doc.font('Helvetica').fontSize(itemFontSize);
         const nameHeight = doc.heightOfString(item.name || '', { width: colWidths[1] - 8 });
-        const rowHeight = Math.max(minRowHeight, nameHeight + 3);
+        const hsnHeight = doc.heightOfString(item.hsn || '', { width: colWidths[2] });
+        const qtyHeight = doc.heightOfString(`${item.quantity ?? ''}${item.unit ? ' ' + item.unit : ''}`, { width: colWidths[3] });
+        const maxContentHeight = Math.max(nameHeight, hsnHeight, qtyHeight);
+        const rowHeight = Math.max(minRowHeight, maxContentHeight + 3);
         simulatedY += rowHeight;
       }
 
@@ -313,7 +316,10 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       items.forEach((item, idx) => {
         doc.font('Helvetica').fontSize(itemFontSize);
         const nameHeight = doc.heightOfString(item.name || '', { width: colWidths[1] - 8 });
-        const rowHeight = Math.max(minRowHeight, nameHeight + 3);
+        const hsnHeight = doc.heightOfString(item.hsn || '', { width: colWidths[2] });
+        const qtyHeight = doc.heightOfString(`${item.quantity ?? ''}${item.unit ? ' ' + item.unit : ''}`, { width: colWidths[3] });
+        const maxContentHeight = Math.max(nameHeight, hsnHeight, qtyHeight);
+        const rowHeight = Math.max(minRowHeight, maxContentHeight + 3);
 
         doc.text(`${idx + 1}.`, colX[0], itemY, { width: colWidths[0], align: 'center' });
         doc.text(item.name || '', colX[1] + 4, itemY, { width: colWidths[1] - 8, align: 'left', lineBreak: true });

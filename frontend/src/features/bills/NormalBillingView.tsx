@@ -34,6 +34,7 @@ import {
   downloadNormalBillDraftPdf,
   mapNormalBillToInvoiceProps,
 } from './normalBillsApi.js';
+import Decimal from 'decimal.js';
 import { apiClient } from '../../lib/apiClient.js';
 
 interface ProductItem {
@@ -370,29 +371,46 @@ export const NormalBillingView: React.FC = () => {
     );
   };
 
-  // Pure Decimal Math Calculations (No GST)
+  // Pure Decimal Math Calculations (No GST, strictly synchronized with backend Decimal.ROUND_HALF_UP)
   const calculationSummary = useMemo(() => {
-    let totalAmount = 0;
-    let totalQty = 0;
+    let totalAmountDec = new Decimal(0);
+    let totalQtyDec = new Decimal(0);
 
     const lineCalculations = items.map((item) => {
-      const q = Math.max(0, parseFloat(item.quantity) || 0);
-      const r = Math.max(0, parseFloat(item.rate) || 0);
-      const lineAmt = Math.round((q * r + Number.EPSILON) * 100) / 100;
-      totalAmount += lineAmt;
-      totalQty += q;
+      let qDec = new Decimal(0);
+      let rDec = new Decimal(0);
+      try {
+        if (item.quantity && !isNaN(Number(item.quantity))) {
+          qDec = new Decimal(item.quantity);
+        }
+      } catch {
+        qDec = new Decimal(0);
+      }
+      try {
+        if (item.rate && !isNaN(Number(item.rate))) {
+          rDec = new Decimal(item.rate);
+        }
+      } catch {
+        rDec = new Decimal(0);
+      }
+
+      const safeQ = qDec.isFinite() && qDec.isPositive() ? qDec : new Decimal(0);
+      const safeR = rDec.isFinite() && rDec.isPositive() ? rDec : new Decimal(0);
+      const lineAmtDec = safeQ.times(safeR).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      totalAmountDec = totalAmountDec.plus(lineAmtDec);
+      totalQtyDec = totalQtyDec.plus(safeQ);
       return {
         ...item,
-        computedAmount: lineAmt,
+        computedAmount: lineAmtDec.toNumber(),
       };
     });
 
-    totalAmount = Math.round((totalAmount + Number.EPSILON) * 100) / 100;
+    const totalAmount = totalAmountDec.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
     const finalAmount = totalAmount;
 
     return {
       lineCalculations,
-      totalQty,
+      totalQty: totalQtyDec.toNumber(),
       totalAmount,
       finalAmount,
       amountInWords: numberWords(finalAmount),

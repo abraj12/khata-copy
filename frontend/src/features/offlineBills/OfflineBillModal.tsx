@@ -93,18 +93,19 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
     setUploadError(null);
     try {
       // Compress camera photos: 1600px max width/height retains clear document text while reducing size by 90%+
-      const processed = await compressImageFile(file, { maxWidth: 1600, maxHeight: 1600, quality: 0.82 });
+      const processed = await compressImageFile(file, {
+        maxWidth: 1600,
+        maxHeight: 1600,
+        quality: 0.82,
+        maxSizeBytes: 9 * 1024 * 1024,
+      });
       setSelectedFile(processed);
       if (previewUrl && previewUrl.startsWith('blob:')) {
         URL.revokeObjectURL(previewUrl);
       }
       setPreviewUrl(URL.createObjectURL(processed));
-    } catch {
-      setSelectedFile(file);
-      if (previewUrl && previewUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(previewUrl);
-      }
-      setPreviewUrl(URL.createObjectURL(file));
+    } catch (err) {
+      setUploadError((err as Error).message || 'Failed to prepare bill image for upload.');
     }
   };
 

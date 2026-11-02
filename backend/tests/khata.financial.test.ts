@@ -391,6 +391,13 @@ class MockDatabaseState {
         const totalAllocated = custAllocs.reduce((acc, a) => acc + parseFloat(a.amount), 0);
         const outstanding = Math.max(0, totalUdhar - totalAllocated);
 
+        const lastTxDate = custTxs[custTxs.length - 1]?.created_at || null;
+        const lastPayDate = custPays[custPays.length - 1]?.received_at || null;
+        let lastActivity = lastTxDate;
+        if (lastPayDate && (!lastActivity || lastPayDate > lastActivity)) {
+          lastActivity = lastPayDate;
+        }
+
         rows.push({
           id: cust.id,
           name: cust.name,
@@ -398,7 +405,7 @@ class MockDatabaseState {
           total_udhar: totalUdhar.toFixed(2),
           total_received: totalReceived.toFixed(2),
           outstanding: outstanding.toFixed(2),
-          last_activity: custTxs[custTxs.length - 1]?.created_at || null,
+          last_activity: lastActivity,
         });
       }
 
@@ -1055,5 +1062,29 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
       status: 400,
       code: 'PAYMENT_EXCEEDS_BALANCE',
     });
+  });
+
+  // TEST CASE 23: Customer activity timestamp reflects recent payments
+  it('23. Customer activity date incorporates recent payments even without new credit', async () => {
+    const prod = await productsService.createProduct('Junction Box', '40.00');
+    const prodId = parseInt(prod.id.toString(), 10);
+
+    const tx = await khataService.createTransaction({
+      customer: { name: 'Sunil Kumar', phone: '9844455555' },
+      items: [{ productId: prodId, quantity: 2, sellingPrice: '50.00' }],
+    });
+
+    const initialList = await khataService.listCustomers('Sunil');
+    const initialActivity = initialList.customers[0].lastActivity;
+    expect(initialActivity).toBeDefined();
+
+    // Now record payment
+    const payment = await khataService.recordPayment(tx.customerId, '50.00', 'Partial settlement');
+    expect(payment.amount).toBe('50.00');
+
+    const updatedList = await khataService.listCustomers('Sunil');
+    expect(updatedList.customers[0].lastActivity).toBeDefined();
+    expect(updatedList.customers[0].totalReceived).toBe('50.00');
+    expect(updatedList.customers[0].outstanding).toBe('50.00');
   });
 });
