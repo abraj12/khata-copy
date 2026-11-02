@@ -43,6 +43,7 @@ interface CustomerItem {
   id: number;
   name: string;
   phone?: string | null;
+  address?: string | null;
 }
 
 interface FormLineItem {
@@ -223,10 +224,11 @@ export const GstBillingView: React.FC = () => {
   const fetchCustomers = async () => {
     try {
       const res = await apiClient<{ success: boolean; customers: CustomerItem[] }>(
-        '/api/v1/khata/customers?limit=50'
+        '/api/v1/khata/customers?limit=200'
       );
-      if (res.data?.customers && Array.isArray(res.data.customers)) {
-        setAvailableCustomers(res.data.customers);
+      const custs = res.data?.customers || (res.data as any)?.data;
+      if (custs && Array.isArray(custs)) {
+        setAvailableCustomers(custs);
       }
     } catch (err) {
       console.warn('Error fetching customers:', err);
@@ -426,6 +428,9 @@ export const GstBillingView: React.FC = () => {
   const handleSelectCustomer = (c: CustomerItem) => {
     setCustomerId(c.id);
     setCustomerName(c.name);
+    if (c.address) {
+      setCustomerAddress(c.address);
+    }
     setIsCustomerDropdownOpen(false);
   };
 
@@ -838,7 +843,8 @@ export const GstBillingView: React.FC = () => {
                         <div className="max-h-48 overflow-y-auto space-y-1">
                           {availableCustomers
                             .filter((c) =>
-                              c.name.toLowerCase().includes(customerSearch.toLowerCase())
+                              c.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
+                              (c.phone && c.phone.includes(customerSearch))
                             )
                             .map((c) => (
                               <button
@@ -847,10 +853,22 @@ export const GstBillingView: React.FC = () => {
                                 onClick={() => handleSelectCustomer(c)}
                                 className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex items-center justify-between"
                               >
-                                <span className="font-bold text-[var(--khata-text)] truncate">{c.name}</span>
-                                {c.phone && <span className="text-[10px] text-[var(--khata-text-muted)] font-mono">{c.phone}</span>}
+                                <div>
+                                  <span className="font-bold text-[var(--khata-text)] block truncate">{c.name}</span>
+                                  {c.address && (
+                                    <span className="text-[10px] text-[var(--khata-text-muted)] block truncate max-w-[180px]">
+                                      {c.address}
+                                    </span>
+                                  )}
+                                </div>
+                                {c.phone && <span className="text-[10px] text-[var(--khata-text-muted)] font-mono ml-2">{c.phone}</span>}
                               </button>
                             ))}
+                          {availableCustomers.length === 0 && (
+                            <div className="p-2 text-center text-xs text-[var(--khata-text-muted)]">
+                              No Khata customers found.
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}
@@ -859,13 +877,31 @@ export const GstBillingView: React.FC = () => {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
                   <div className="sm:col-span-2">
-                    <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
-                      Customer / Firm Name <span className="text-rose-500">*</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-bold text-[var(--khata-text-muted)]">
+                        Customer / Firm Name <span className="text-rose-500">*</span>
+                      </label>
+                      {customerId && (
+                        <div className="flex items-center gap-1.5 text-[10px]">
+                          <span className="text-emerald-600 font-bold">✓ Linked Customer</span>
+                          <button
+                            type="button"
+                            onClick={() => setCustomerId(null)}
+                            className="text-rose-500 hover:underline font-bold cursor-pointer"
+                            title="Unlink customer"
+                          >
+                            (Unlink)
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     <input
                       type="text"
                       value={customerName}
-                      onChange={(e) => setCustomerName(e.target.value)}
+                      onChange={(e) => {
+                        setCustomerName(e.target.value);
+                        setCustomerId(null);
+                      }}
                       placeholder="e.g. Sharma Construction Co. / M/s ABC Enterprises"
                       className="neu-input w-full font-bold"
                     />
