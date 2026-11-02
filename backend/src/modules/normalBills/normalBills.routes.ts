@@ -20,8 +20,21 @@ function isValidCalendarDate(val?: string | null): boolean {
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
 }
 
+const optionalIntegerIdSchema = z
+  .union([z.number(), z.string()])
+  .nullable()
+  .optional()
+  .transform((val) => {
+    if (val === null || val === undefined || val === '') return null;
+    const n = Number(val);
+    return isNaN(n) ? null : n;
+  })
+  .refine((val) => val === null || (Number.isInteger(val) && val > 0), {
+    message: 'Must be a positive integer ID',
+  });
+
 const normalBillItemSchema = z.object({
-  productId: z.number().int().positive().nullable().optional(),
+  productId: optionalIntegerIdSchema,
   description: z.string().trim().min(1, 'Item description is required').max(255),
   hsnCode: z.string().trim().max(20).nullable().optional(),
   quantity: z.union([z.number(), z.string()]).refine((val) => {
@@ -45,7 +58,7 @@ const createNormalBillSchema = z.object({
   vehicleNumber: z.string().trim().max(50).nullable().optional(),
   dateOfSupply: z.string().trim().max(20).refine(isValidCalendarDate, 'Date of supply must be a valid calendar date in YYYY-MM-DD format').nullable().optional(),
   placeOfSupply: z.string().trim().max(150).nullable().optional(),
-  customerId: z.number().int().positive().nullable().optional(),
+  customerId: optionalIntegerIdSchema,
   customerName: z.string().trim().min(1, 'Customer name is required').max(255),
   customerAddress: z.string().trim().max(500).nullable().optional(),
   customerPhone: z.string().trim().max(20).nullable().optional(),

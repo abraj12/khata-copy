@@ -279,4 +279,26 @@ describe('Normal Billing Module (Non-GST Standard Bills) Test Suite', () => {
     expect(res.headers['content-disposition']).toContain('attachment; filename="Normal_Bill_DRAFT-01.pdf"');
     expect(res.body.length).toBeGreaterThan(100);
   });
+
+  it('7. Safely accepts string-typed productId and customerId from pickers and coerces to numbers', async () => {
+    const res = await request(app)
+      .post('/api/v1/normal-bills/preview-pdf')
+      .set('Cookie', authCookie)
+      .set('X-CSRF-Token', csrfToken)
+      .send({
+        customerId: '55',
+        customerName: 'Picker Buyer',
+        items: [
+          {
+            productId: '88',
+            description: 'Item with string Product ID',
+            quantity: 1,
+            rate: 200,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+  });
 });

@@ -597,4 +597,27 @@ describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
     expect(res.status).toBe(400);
     expect(res.body.success).toBe(false);
   });
+
+  it('14. Safely accepts string-typed productId and customerId from pickers and coerces to numbers', async () => {
+    const res = await request(app)
+      .post('/api/v1/gst-invoices/preview-pdf')
+      .set('Cookie', authCookie)
+      .set('X-CSRF-Token', csrfToken)
+      .send({
+        customerId: '42',
+        customerName: 'Picker Customer',
+        gstRate: 18,
+        items: [
+          {
+            productId: '99',
+            description: 'Item with string Product ID',
+            quantity: 2,
+            rate: 150,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/pdf');
+  });
 });

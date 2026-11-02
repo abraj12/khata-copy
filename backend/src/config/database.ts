@@ -3,6 +3,9 @@ import { env } from './env.js';
 
 const { Pool } = pg;
 
+// Parse PostgreSQL 64-bit integers (BIGINT / BIGSERIAL, OID 20) as JavaScript numbers
+pg.types.setTypeParser(20, (val: string) => (val === null ? null : parseInt(val, 10)));
+
 // Reusable single application connection pool (against Neon pooled endpoint)
 export const appPool = new Pool({
   connectionString: env.DATABASE_URL_POOLED,

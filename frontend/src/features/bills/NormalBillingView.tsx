@@ -7,7 +7,7 @@ import {
   Printer,
   Download,
   Eye,
-  CheckCircle,
+  CheckCircle2,
   AlertCircle,
   RotateCcw,
   Search,
@@ -308,7 +308,7 @@ export const NormalBillingView: React.FC = () => {
   }, [availableCustomers, customerSearch]);
 
   const handleSelectCustomer = (customer: CustomerItem) => {
-    setCustomerId(customer.id);
+    setCustomerId(Number(customer.id));
     setCustomerName(customer.name);
     setCustomerPhone(customer.phone || '');
     setCustomerAddress(customer.address || '');
@@ -359,7 +359,7 @@ export const NormalBillingView: React.FC = () => {
         if (item.id === itemId) {
           return {
             ...item,
-            productId: product.id,
+            productId: Number(product.id),
             description: product.name,
             // If product has HSN available, autofill it; shopkeeper can still freely edit it
             hsnCode: cleanHsn !== null && cleanHsn !== '' ? cleanHsn : item.hsnCode || '',
@@ -519,19 +519,19 @@ export const NormalBillingView: React.FC = () => {
         vehicleNumber: vehicleNumber.trim() || null,
         dateOfSupply: dateOfSupply || null,
         placeOfSupply: placeOfSupply.trim() || null,
-        customerId,
+        customerId: customerId ? Number(customerId) : null,
         customerName: customerName.trim(),
         customerAddress: customerAddress.trim() || null,
         customerPhone: customerPhone.trim() || null,
         customerState,
         customerStateCode,
         items: items.map((item) => ({
-          productId: item.productId,
+          productId: item.productId ? Number(item.productId) : null,
           description: item.description.trim(),
           hsnCode: item.hsnCode.trim() || null,
-          quantity: parseFloat(item.quantity) || 1,
+          quantity: item.quantity,
           unit: item.unit.trim() || null,
-          rate: parseFloat(item.rate) || 0,
+          rate: item.rate,
           rateUnit: item.rateUnit.trim() || null,
         })),
         notes: notes.trim() || null,
@@ -565,19 +565,19 @@ export const NormalBillingView: React.FC = () => {
         vehicleNumber: vehicleNumber.trim() || null,
         dateOfSupply: dateOfSupply || null,
         placeOfSupply: placeOfSupply.trim() || null,
-        customerId,
+        customerId: customerId ? Number(customerId) : null,
         customerName: customerName.trim(),
         customerAddress: customerAddress.trim() || null,
         customerPhone: customerPhone.trim() || null,
         customerState,
         customerStateCode,
         items: items.map((item) => ({
-          productId: item.productId,
+          productId: item.productId ? Number(item.productId) : null,
           description: item.description.trim(),
           hsnCode: item.hsnCode.trim() || null,
-          quantity: parseFloat(item.quantity) || 1,
+          quantity: item.quantity,
           unit: item.unit.trim() || null,
-          rate: parseFloat(item.rate) || 0,
+          rate: item.rate,
           rateUnit: item.rateUnit.trim() || null,
         })),
         notes: notes.trim() || null,
@@ -585,9 +585,7 @@ export const NormalBillingView: React.FC = () => {
 
       const saved = await createNormalBill(payload);
       setSuccessRecord(saved);
-      // Auto open preview modal so shopkeeper can immediately print
-      setPreviewInvoice(mapNormalBillToInvoiceProps(saved));
-      // Refresh next bill number for next transaction
+      // Auto-fetch next sequential bill number for next bill
       fetchNextNumber();
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to save normal bill. Please try again.');
@@ -627,7 +625,8 @@ export const NormalBillingView: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Page Title & Subtitle Header */}
+      <div className="mhi-no-print space-y-6">
+        {/* Page Title & Subtitle Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[var(--khata-border)] pb-4">
         <div>
           <div className="flex items-center gap-2">
@@ -688,39 +687,6 @@ export const NormalBillingView: React.FC = () => {
           >
             <X className="w-4 h-4" />
           </button>
-        </div>
-      )}
-
-      {/* SUCCESS BANNER */}
-      {successRecord && (
-        <div className="p-3.5 rounded-xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200 text-xs sm:text-sm flex items-center justify-between gap-3 animate-in fade-in">
-          <div className="flex items-center gap-2 font-semibold">
-            <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
-            <span>
-              Normal Bill <strong>#{successRecord.bill_number}</strong> created successfully! Total: ₹
-              {successRecord.total_amount}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => handleDirectPrint(successRecord)}
-              className="neu-btn-primary text-xs px-2.5 py-1 flex items-center gap-1"
-            >
-              <Printer className="w-3.5 h-3.5" />
-              <span>Print Bill</span>
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                downloadNormalBillPdf(successRecord.id, successRecord.bill_number)
-              }
-              className="neu-btn-secondary text-xs px-2.5 py-1 flex items-center gap-1"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>PDF</span>
-            </button>
-          </div>
         </div>
       )}
 
@@ -1122,7 +1088,7 @@ export const NormalBillingView: React.FC = () => {
                           {item.productId ? (
                             <div className="flex items-center gap-1.5 text-[10px]">
                               <span className="text-[var(--khata-accent)] font-semibold truncate max-w-[200px]">
-                                ✓ Linked: {availableProducts.find((p) => p.id === item.productId)?.name || 'Catalogue Product'}
+                                ✓ Linked: {availableProducts.find((p) => Number(p.id) === Number(item.productId))?.name || 'Catalogue Product'}
                               </span>
                               <button
                                 type="button"
@@ -1402,48 +1368,49 @@ export const NormalBillingView: React.FC = () => {
                 <div className="pt-2 border-t border-[var(--khata-border)]/60 text-[11px] text-[var(--khata-text-muted)] italic">
                   <strong>In Words:</strong> {calculationSummary.amountInWords}
                 </div>
+
+                {/* Action Buttons: located on base at the bottom of the bill summary card (matching GST billing) */}
+                <div className="space-y-2.5 pt-3 border-t border-[var(--khata-border)]/60">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleResetForm}
+                      className="neu-btn-secondary flex-1 py-2.5 flex items-center justify-center gap-1.5 text-xs font-bold"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Reset</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPreviewInvoice(currentInvoiceDraft)}
+                      className="neu-btn-secondary flex-1 py-2.5 flex items-center justify-center gap-1.5 text-xs font-bold"
+                    >
+                      <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
+                      <span>Preview Bill</span>
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSaveBill}
+                    disabled={isSaving}
+                    className="neu-btn-primary w-full py-3 flex items-center justify-center gap-2 text-sm font-extrabold shadow-md"
+                  >
+                    {isSaving ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Saving Normal Bill...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>Save Normal Bill</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
-            </div>
-          </div>
-
-          {/* ACTION BUTTONS TOOLBAR */}
-          <div className="neu-card p-4 flex flex-wrap items-center justify-between gap-3 sticky bottom-4 z-20 shadow-xl border border-[var(--khata-accent)]/30">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleResetForm}
-                className="neu-btn-secondary text-xs px-3.5 py-2 flex items-center gap-1.5 font-bold"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Reset</span>
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              {/* Preview Button */}
-              <button
-                type="button"
-                onClick={() => setPreviewInvoice(currentInvoiceDraft)}
-                className="neu-btn-secondary text-xs px-4 py-2 flex items-center gap-1.5 font-bold"
-              >
-                <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
-                <span>Preview Bill</span>
-              </button>
-
-              {/* Save Bill Button */}
-              <button
-                type="button"
-                onClick={handleSaveBill}
-                disabled={isSaving}
-                className="neu-btn-primary text-xs px-5 py-2 flex items-center gap-2 font-black shadow-lg"
-              >
-                {isSaving ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Check className="w-4 h-4" />
-                )}
-                <span>{isSaving ? 'Saving...' : 'Save Normal Bill'}</span>
-              </button>
             </div>
           </div>
         </div>
@@ -1630,6 +1597,64 @@ export const NormalBillingView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Success Record Modal (matching GST invoice experience) */}
+      {successRecord && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm mhi-no-print">
+          <div
+            className="neu-card w-full max-w-md p-6 text-center space-y-4 rounded-2xl border border-[var(--khata-border)]"
+            style={{ background: 'var(--khata-surface)' }}
+          >
+            <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 mx-auto flex items-center justify-center">
+              <CheckCircle2 className="w-8 h-8" />
+            </div>
+
+            <div>
+              <h3 className="text-lg font-extrabold text-[var(--khata-text)]">
+                Normal Bill #{successRecord.bill_number} Created!
+              </h3>
+              <p className="text-xs text-[var(--khata-text-muted)] mt-1">
+                Amount: <strong className="font-mono text-[var(--khata-accent)]">₹{successRecord.total_amount}</strong>
+                <br />
+                {successRecord.pdf_status === 'uploaded'
+                  ? 'Archived securely in Cloudflare R2 object storage.'
+                  : 'Bill saved to Neon database.'}
+              </p>
+            </div>
+
+            <div className="space-y-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPreviewInvoice(mapNormalBillToInvoiceProps(successRecord));
+                }}
+                className="neu-btn-primary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Preview &amp; Print A4 Bill</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleDownloadPdf(successRecord.id, successRecord.bill_number)}
+                className="neu-btn-secondary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold"
+              >
+                <Download className="w-4 h-4 text-emerald-600" />
+                <span>Download PDF File</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetForm}
+                className="w-full py-2 text-xs text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] font-semibold transition"
+              >
+                Create Another Bill
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
 
       {/* ========================================================================= */}
       {/* FULLSCREEN A4 NORMAL BILL PREVIEW MODAL                                   */}

@@ -434,7 +434,7 @@ export const GstBillingView: React.FC = () => {
         if (i.id === itemId) {
           return {
             ...i,
-            productId: product.id,
+            productId: Number(product.id),
             description: product.name,
             // If product has HSN available, autofill it; shopkeeper can still freely edit it
             hsnCode: cleanHsn !== null && cleanHsn !== '' ? cleanHsn : i.hsnCode || '',
@@ -449,7 +449,7 @@ export const GstBillingView: React.FC = () => {
 
   // Handle selecting an existing customer
   const handleSelectCustomer = (c: CustomerItem) => {
-    setCustomerId(c.id);
+    setCustomerId(Number(c.id));
     setCustomerName(c.name);
     setCustomerAddress(c.address || '');
     setIsCustomerDropdownOpen(false);
@@ -481,7 +481,7 @@ export const GstBillingView: React.FC = () => {
         vehicleNumber: vehicleNumber.trim() || null,
         dateOfSupply,
         placeOfSupply,
-        customerId,
+        customerId: customerId ? Number(customerId) : null,
         customerName: customerName.trim(),
         customerAddress: customerAddress.trim() || null,
         customerGstin: customerGstin.trim() || null,
@@ -489,7 +489,7 @@ export const GstBillingView: React.FC = () => {
         customerStateCode,
         gstRate,
         items: items.map((i) => ({
-          productId: i.productId || null,
+          productId: i.productId ? Number(i.productId) : null,
           description: i.description.trim(),
           hsnCode: i.hsnCode.trim() || null,
           quantity: i.quantity,
@@ -560,7 +560,7 @@ export const GstBillingView: React.FC = () => {
         vehicleNumber: vehicleNumber.trim() || null,
         dateOfSupply,
         placeOfSupply,
-        customerId,
+        customerId: customerId ? Number(customerId) : null,
         customerName: customerName.trim() || 'Customer / Receiver',
         customerAddress: customerAddress.trim() || null,
         customerGstin: customerGstin.trim() || null,
@@ -568,7 +568,7 @@ export const GstBillingView: React.FC = () => {
         customerStateCode,
         gstRate,
         items: items.map((i) => ({
-          productId: i.productId || null,
+          productId: i.productId ? Number(i.productId) : null,
           description: i.description.trim() || 'Item Description',
           hsnCode: i.hsnCode.trim() || null,
           quantity: i.quantity || '1',
@@ -1058,7 +1058,7 @@ export const GstBillingView: React.FC = () => {
                             {item.productId ? (
                               <div className="flex items-center gap-1.5 text-[10px]">
                                 <span className="text-[var(--khata-accent)] font-semibold truncate max-w-[200px]">
-                                  ✓ Linked: {availableProducts.find((p) => p.id === item.productId)?.name || 'Catalogue Product'}
+                                  ✓ Linked: {availableProducts.find((p) => Number(p.id) === Number(item.productId))?.name || 'Catalogue Product'}
                                 </span>
                                 <button
                                   type="button"
