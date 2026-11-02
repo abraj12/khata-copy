@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Decimal from 'decimal.js';
 import {
   FileText,
@@ -139,6 +139,8 @@ export const GstBillingView: React.FC = () => {
   const [availableCustomers, setAvailableCustomers] = useState<CustomerItem[]>([]);
   const [customerSearch, setCustomerSearch] = useState('');
   const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
+  const [openProductPickerItemId, setOpenProductPickerItemId] = useState<string | null>(null);
+  const [productPickerSearch, setProductPickerSearch] = useState('');
 
   // History list states
   const [historyInvoices, setHistoryInvoices] = useState<GstInvoiceRecord[]>([]);
@@ -148,6 +150,23 @@ export const GstBillingView: React.FC = () => {
   const [historyDateTo, setHistoryDateTo] = useState('');
   const [historyPage, setHistoryPage] = useState(0);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  const customerDropdownRef = useRef<HTMLDivElement>(null);
+  const productPickerRef = useRef<HTMLDivElement>(null);
+
+  // Close customer & product pickers on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (customerDropdownRef.current && !customerDropdownRef.current.contains(e.target as Node)) {
+        setIsCustomerDropdownOpen(false);
+      }
+      if (productPickerRef.current && !productPickerRef.current.contains(e.target as Node)) {
+        setOpenProductPickerItemId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Fetch initial data (next invoice number, products, customers)
   useEffect(() => {
@@ -382,6 +401,9 @@ export const GstBillingView: React.FC = () => {
 
   // Handle selecting an existing product
   const handleSelectProduct = (itemId: string, product: ProductItem) => {
+    const rawHsn = product.hsn_code || (product as any).hsnCode;
+    const cleanHsn = rawHsn ? String(rawHsn).trim() : null;
+
     setItems((prev) =>
       prev.map((i) => {
         if (i.id === itemId) {
@@ -389,9 +411,10 @@ export const GstBillingView: React.FC = () => {
             ...i,
             productId: product.id,
             description: product.name,
-            hsnCode: product.hsn_code || i.hsnCode || '',
-            // keep existing rate or prefill buying price as reference if empty
-            rate: i.rate || product.buying_price || '',
+            // If product has HSN available, autofill it; shopkeeper can still freely edit it
+            hsnCode: cleanHsn !== null && cleanHsn !== '' ? cleanHsn : i.hsnCode || '',
+            // Autofill rate with product price if available, or keep existing
+            rate: product.buying_price ? String(product.buying_price) : i.rate || '',
           };
         }
         return i;
@@ -790,12 +813,13 @@ export const GstBillingView: React.FC = () => {
                   </h3>
 
                   {/* Customer picker dropdown */}
-                  <div className="relative">
+                  <div className="relative" ref={customerDropdownRef}>
                     <button
                       type="button"
                       onClick={() => setIsCustomerDropdownOpen(!isCustomerDropdownOpen)}
                       className="text-xs font-semibold text-[var(--khata-accent)] hover:underline flex items-center gap-1 cursor-pointer"
                     >
+                      <User className="w-3.5 h-3.5" />
                       <span>Pick Khata Customer</span>
                     </button>
 
@@ -985,28 +1009,47 @@ export const GstBillingView: React.FC = () => {
                                   (Unlink)
                                 </button>
                               </div>
-                            ) : isLoadingProducts ? (
-                              <span className="text-[10px] text-[var(--khata-text-muted)] flex items-center gap-1">
-                                <Loader2 className="w-3 h-3 animate-spin text-[var(--khata-accent)]" />
-                                <span>Loading catalogue...</span>
-                              </span>
-                            ) : availableProducts.length > 0 ? (
-                              <span className="text-[10px] text-[var(--khata-text-muted)]">
-                                {availableProducts.length} catalogue products available
-                              </span>
-                            ) : null}
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOpenProductPickerItemId(
+                                      openProductPickerItemId === item.id ? null : item.id
+                                    );
+                                    setProductPickerSearch('');
+                                  }}
+                                  className="text-[10px] font-semibold text-[var(--khata-accent)] hover:underline flex items-center gap-1 cursor-pointer"
+                                  title="Pick from store product catalogue"
+                                >
+                                  <Package className="w-3 h-3" />
+                                  <span>Pick Product</span>
+                                </button>
+                                {isLoadingProducts ? (
+                                  <span className="text-[10px] text-[var(--khata-text-muted)] flex items-center gap-1">
+                                    <Loader2 className="w-3 h-3 animate-spin text-[var(--khata-accent)]" />
+                                    <span>Loading...</span>
+                                  </span>
+                                ) : availableProducts.length > 0 ? (
+                                  <span className="text-[10px] text-[var(--khata-text-muted)]">
+                                    {availableProducts.length} in catalogue
+                                  </span>
+                                ) : null}
+                              </div>
+                            )}
                           </div>
                         </div>
 
-                        <div className="relative">
+                        <div className="relative" ref={openProductPickerItemId === item.id ? productPickerRef : undefined}>
                           <input
                             type="text"
                             list={`product-options-${item.id}`}
                             value={item.description}
                             onChange={(e) => {
                               const val = e.target.value;
+                              const cleanVal = val.trim().toLowerCase();
                               const matched = availableProducts.find(
-                                (p) => p.name.toLowerCase() === val.toLowerCase()
+                                (p) => p.name.trim().toLowerCase() === cleanVal
                               );
                               if (matched) {
                                 handleSelectProduct(item.id, matched);
@@ -1024,6 +1067,70 @@ export const GstBillingView: React.FC = () => {
                               </option>
                             ))}
                           </datalist>
+
+                          {/* Interactive Product Popover Picker */}
+                          {openProductPickerItemId === item.id && (
+                            <div
+                              className="absolute left-0 right-0 top-full mt-1.5 p-2 rounded-xl border border-[var(--khata-border)] shadow-2xl z-30 space-y-2 animate-in fade-in"
+                              style={{ background: 'var(--khata-surface)' }}
+                            >
+                              <div className="flex items-center justify-between text-[10px] font-bold text-[var(--khata-text-muted)] pb-1 border-b border-[var(--khata-border)]">
+                                <span>SELECT PRODUCT FROM CATALOGUE ({availableProducts.length})</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setOpenProductPickerItemId(null)}
+                                  className="text-neutral-400 hover:text-neutral-600 p-0.5 cursor-pointer"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                              <input
+                                type="text"
+                                placeholder="Search products by name or HSN..."
+                                value={productPickerSearch}
+                                onChange={(e) => setProductPickerSearch(e.target.value)}
+                                className="neu-input w-full text-xs p-1.5"
+                                autoFocus
+                              />
+                              <div className="max-h-48 overflow-y-auto space-y-1">
+                                {availableProducts
+                                  .filter(
+                                    (p) =>
+                                      p.name.toLowerCase().includes(productPickerSearch.toLowerCase()) ||
+                                      (p.hsn_code && p.hsn_code.includes(productPickerSearch))
+                                  )
+                                  .map((p) => (
+                                    <button
+                                      key={p.id}
+                                      type="button"
+                                      onClick={() => {
+                                        handleSelectProduct(item.id, p);
+                                        setOpenProductPickerItemId(null);
+                                        setProductPickerSearch('');
+                                      }}
+                                      className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex items-center justify-between transition cursor-pointer"
+                                    >
+                                      <div>
+                                        <span className="font-bold text-[var(--khata-text)] block truncate">{p.name}</span>
+                                        {p.hsn_code && (
+                                          <span className="text-[10px] text-[var(--khata-text-muted)] font-mono">
+                                            HSN: {p.hsn_code}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <span className="text-xs font-bold text-[var(--khata-accent)] font-mono ml-2">
+                                        ₹{p.buying_price}
+                                      </span>
+                                    </button>
+                                  ))}
+                                {availableProducts.length === 0 && (
+                                  <div className="p-2 text-center text-xs text-[var(--khata-text-muted)]">
+                                    {isLoadingProducts ? 'Loading catalogue...' : 'No products found.'}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
 

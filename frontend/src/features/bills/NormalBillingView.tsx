@@ -333,6 +333,9 @@ export const NormalBillingView: React.FC = () => {
   };
 
   const handleSelectProduct = (itemId: string, product: ProductItem) => {
+    const rawHsn = product.hsn_code || (product as any).hsnCode;
+    const cleanHsn = rawHsn ? String(rawHsn).trim() : null;
+
     setItems((prev) =>
       prev.map((item) => {
         if (item.id === itemId) {
@@ -340,7 +343,8 @@ export const NormalBillingView: React.FC = () => {
             ...item,
             productId: product.id,
             description: product.name,
-            hsnCode: product.hsn_code || item.hsnCode || '',
+            // If product has HSN available, autofill it; shopkeeper can still freely edit it
+            hsnCode: cleanHsn !== null && cleanHsn !== '' ? cleanHsn : item.hsnCode || '',
             rate: product.buying_price ? String(product.buying_price) : item.rate,
           };
         }
@@ -1129,8 +1133,9 @@ export const NormalBillingView: React.FC = () => {
                           value={item.description}
                           onChange={(e) => {
                             const val = e.target.value;
+                            const cleanVal = val.trim().toLowerCase();
                             const matched = availableProducts.find(
-                              (p) => p.name.toLowerCase() === val.toLowerCase()
+                              (p) => p.name.trim().toLowerCase() === cleanVal
                             );
                             if (matched) {
                               handleSelectProduct(item.id, matched);
