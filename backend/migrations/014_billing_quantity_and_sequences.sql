@@ -34,8 +34,8 @@ BEGIN
   -- When table is empty, setval(seq, 1, false) -> next is 1 ('001').
   SELECT COALESCE(MAX(
     CASE
-      WHEN invoice_number ~ '^\d+$' THEN invoice_number::BIGINT
-      WHEN regexp_replace(invoice_number, '\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\D', '', 'g')::BIGINT
+      WHEN invoice_number ~ '^[0-9]+$' THEN invoice_number::BIGINT
+      WHEN regexp_replace(invoice_number, '[^0-9]', '', 'g') <> '' THEN regexp_replace(invoice_number, '[^0-9]', '', 'g')::BIGINT
       ELSE 0
     END
   ), 0) INTO v_max_gst FROM gst_invoices;
@@ -51,8 +51,8 @@ BEGIN
   -- When table is empty, setval(seq, 1, false) -> next is 1 ('001').
   SELECT COALESCE(MAX(
     CASE
-      WHEN bill_number ~ '^\d+$' THEN bill_number::BIGINT
-      WHEN regexp_replace(bill_number, '\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\D', '', 'g')::BIGINT
+      WHEN bill_number ~ '^[0-9]+$' THEN bill_number::BIGINT
+      WHEN regexp_replace(bill_number, '[^0-9]', '', 'g') <> '' THEN regexp_replace(bill_number, '[^0-9]', '', 'g')::BIGINT
       ELSE 0
     END
   ), 0) INTO v_max_normal FROM normal_bills;
@@ -64,24 +64,26 @@ BEGIN
   END IF;
 END $$;
 
--- 4. Adjust GST Invoice Items quantity column to NUMERIC(12, 2) with strict 2-decimal constraint
+-- 4. Adjust GST Invoice Items quantity column to unconstrained NUMERIC with strict 2-decimal constraint
+-- Using unconstrained NUMERIC prevents PostgreSQL from silently rounding inputs like 1.234 to 1.23
 ALTER TABLE "gst_invoice_items"
-  ALTER COLUMN "quantity" TYPE NUMERIC(12, 2);
+  ALTER COLUMN "quantity" TYPE NUMERIC;
 
 ALTER TABLE "gst_invoice_items"
   DROP CONSTRAINT IF EXISTS "chk_gst_invoice_items_quantity_scale";
 
 ALTER TABLE "gst_invoice_items"
   ADD CONSTRAINT "chk_gst_invoice_items_quantity_scale"
-  CHECK ("quantity" > 0 AND scale("quantity") <= 2 AND TRUNC("quantity", 2) = "quantity");
+  CHECK ("quantity" > 0 AND "quantity" <= 1000000 AND scale("quantity") <= 2 AND TRUNC("quantity", 2) = "quantity");
 
--- 5. Adjust Normal Bill Items quantity column to NUMERIC(12, 2) with strict 2-decimal constraint
+-- 5. Adjust Normal Bill Items quantity column to unconstrained NUMERIC with strict 2-decimal constraint
+-- Using unconstrained NUMERIC prevents PostgreSQL from silently rounding inputs like 1.234 to 1.23
 ALTER TABLE "normal_bill_items"
-  ALTER COLUMN "quantity" TYPE NUMERIC(12, 2);
+  ALTER COLUMN "quantity" TYPE NUMERIC;
 
 ALTER TABLE "normal_bill_items"
   DROP CONSTRAINT IF EXISTS "chk_normal_bill_items_quantity_scale";
 
 ALTER TABLE "normal_bill_items"
   ADD CONSTRAINT "chk_normal_bill_items_quantity_scale"
-  CHECK ("quantity" > 0 AND scale("quantity") <= 2 AND TRUNC("quantity", 2) = "quantity");
+  CHECK ("quantity" > 0 AND "quantity" <= 1000000 AND scale("quantity") <= 2 AND TRUNC("quantity", 2) = "quantity");

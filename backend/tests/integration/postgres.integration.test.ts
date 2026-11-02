@@ -717,5 +717,36 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       expect((err as Error).message).toContain('chk_gst_invoice_items_quantity_scale');
     }
     expect(rejected).toBe(true);
+
+    // Verify normal_bill_items as well
+    const billRes = await pool.query(`
+      INSERT INTO normal_bills (
+        bill_number, bill_date, state, state_code, customer_name,
+        total_amount, amount_in_words
+      ) VALUES (
+        'BILL-INT-001', '2026-11-02', 'Uttar Pradesh', '09', 'Test Customer Normal',
+        '125.00', 'Rupees One Hundred Twenty Five Only'
+      ) RETURNING id
+    `);
+    const billId = billRes.rows[0].id;
+
+    const validBillItem = await pool.query(`
+      INSERT INTO normal_bill_items (bill_id, item_index, description, quantity, rate, amount)
+      VALUES ($1, 1, 'Valid Bill Item', 2.50, 50.00, 125.00)
+      RETURNING id, quantity
+    `, [billId]);
+    expect(parseFloat(validBillItem.rows[0].quantity)).toBe(2.50);
+
+    let billRejected = false;
+    try {
+      await pool.query(`
+        INSERT INTO normal_bill_items (bill_id, item_index, description, quantity, rate, amount)
+        VALUES ($1, 2, 'Invalid Bill Item', 2.555, 50.00, 127.75)
+      `, [billId]);
+    } catch (err) {
+      billRejected = true;
+      expect((err as Error).message).toContain('chk_normal_bill_items_quantity_scale');
+    }
+    expect(billRejected).toBe(true);
   });
 });
