@@ -13,6 +13,7 @@ const createTransactionSchema = z.object({
     id: z.number().nullable().optional(),
     name: z.string().trim().min(1, 'Customer name is required'),
     phone: z.string().nullable().optional(),
+    address: z.string().nullable().optional(),
   }),
   items: z
     .array(

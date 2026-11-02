@@ -11,6 +11,7 @@ export interface CustomerSummaryItem {
   id: number;
   name: string;
   phone: string | null;
+  address?: string | null;
   totalUdhar: string;
   totalReceived: string;
   outstanding: string;
@@ -50,6 +51,7 @@ export interface CreateTransactionInput {
     id?: number | null;
     name: string;
     phone?: string | null;
+    address?: string | null;
   };
   items: CreateTransactionItemInput[];
   initialPayment?: number | string | null;
@@ -156,7 +158,7 @@ export class KhataService {
    */
   public async listCustomers(optionsOrSearch?: string | ListCustomersOptions): Promise<PaginatedCustomersResult> {
     const opts = typeof optionsOrSearch === 'string' ? { search: optionsOrSearch } : optionsOrSearch || {};
-    const limit = Math.min(Math.max(1, opts.limit || 25), 50);
+    const limit = Math.min(Math.max(1, opts.limit || 25), 200);
     const offset = Math.max(0, opts.offset || 0);
 
     let sql = `
@@ -187,6 +189,7 @@ export class KhataService {
         c.id,
         c.name,
         c.phone,
+        c.address,
         COALESCE(tx.total_udhar, 0)::numeric AS total_udhar,
         COALESCE(pay.total_received, 0)::numeric AS total_received,
         GREATEST(COALESCE(tx.total_udhar, 0) - COALESCE(alloc.total_allocated, 0), 0)::numeric AS outstanding,
@@ -235,6 +238,7 @@ export class KhataService {
         id: parseInt(row.id, 10),
         name: row.name,
         phone: row.phone,
+        address: row.address || null,
         totalUdhar: udhar,
         totalReceived: received,
         outstanding,
@@ -288,6 +292,7 @@ export class KhataService {
         c.id,
         c.name,
         c.phone,
+        c.address,
         COALESCE(tx.total_udhar, 0)::numeric AS total_udhar,
         COALESCE(pay.total_received, 0)::numeric AS total_received,
         GREATEST(COALESCE(tx.total_udhar, 0) - COALESCE(alloc.total_allocated, 0), 0)::numeric AS outstanding,
@@ -311,6 +316,7 @@ export class KhataService {
       id: parseInt(row.id, 10),
       name: row.name,
       phone: row.phone,
+      address: row.address || null,
       totalUdhar: udhar,
       totalReceived: received,
       outstanding,
@@ -458,6 +464,7 @@ export class KhataService {
 
       const normName = this.normalizeName(rawName);
       const normPhone = this.normalizeCustomerPhone(input.customer.phone);
+      const custAddr = input.customer.address ? input.customer.address.trim() : null;
 
       if (input.customer.id) {
         // Explicitly selected customer
@@ -493,6 +500,12 @@ export class KhataService {
           await client.query(
             'UPDATE customers SET phone = $1, normalized_phone = $2, updated_at = NOW() WHERE id = $3',
             [input.customer.phone ? input.customer.phone.trim() : normPhone, normPhone, existing.id]
+          );
+        }
+        if (custAddr) {
+          await client.query(
+            'UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2 AND (address IS NULL OR address = \'\')',
+            [custAddr, existing.id]
           );
         }
         customerId = parseInt(existing.id, 10);
@@ -555,22 +568,28 @@ export class KhataService {
           } else {
             // 0 matches: safe to insert new customer with the phone
             const newCust = await client.query(
-              `INSERT INTO customers (name, normalized_name, phone, normalized_phone, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, NOW(), NOW())
+              `INSERT INTO customers (name, normalized_name, phone, normalized_phone, address, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
                RETURNING id`,
-              [rawName, normName, input.customer.phone ? input.customer.phone.trim() : null, normPhone]
+              [rawName, normName, input.customer.phone ? input.customer.phone.trim() : null, normPhone, custAddr]
             );
             customerId = parseInt(newCust.rows[0].id, 10);
           }
         } else {
           // No phone provided. Search by exact normalized name
           const nameMatches = await client.query(
-            'SELECT id, name, phone FROM customers WHERE normalized_name = $1 FOR UPDATE',
+            'SELECT id, name, phone, address FROM customers WHERE normalized_name = $1 FOR UPDATE',
             [normName]
           );
           if (nameMatches.rows.length === 1) {
             // Exactly one match: safely reuse
             customerId = parseInt(nameMatches.rows[0].id, 10);
+            if (custAddr && !nameMatches.rows[0].address) {
+              await client.query(
+                'UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2',
+                [custAddr, customerId]
+              );
+            }
           } else if (nameMatches.rows.length > 1) {
             // Ambiguous matches: reject with 409 AMBIGUOUS_CUSTOMER_MATCH
             throw new AppError(
@@ -586,14 +605,21 @@ export class KhataService {
           } else {
             // 0 matches: create new customer without phone
             const newCust = await client.query(
-              `INSERT INTO customers (name, normalized_name, phone, normalized_phone, created_at, updated_at)
-               VALUES ($1, $2, NULL, NULL, NOW(), NOW())
+              `INSERT INTO customers (name, normalized_name, phone, normalized_phone, address, created_at, updated_at)
+               VALUES ($1, $2, NULL, NULL, $3, NOW(), NOW())
                RETURNING id`,
-              [rawName, normName]
+              [rawName, normName, custAddr]
             );
             customerId = parseInt(newCust.rows[0].id, 10);
           }
         }
+      }
+
+      if (custAddr) {
+        await client.query(
+          `UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2 AND (address IS NULL OR address = '')`,
+          [custAddr, customerId]
+        );
       }
 
       // 2. Validate Items & Snapshot Products from DB using Decimal Arithmetic

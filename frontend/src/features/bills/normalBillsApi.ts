@@ -1,4 +1,4 @@
-import { apiClient, API_BASE_URL } from '../../lib/apiClient.js';
+import { apiClient, API_BASE_URL, getCsrfToken, fetchCsrfToken } from '../../lib/apiClient.js';
 import { MannatInvoiceProps } from '../../components/MannatTaxInvoice/MannatTaxInvoice.js';
 
 export interface NormalBillItemPayload {
@@ -143,11 +143,21 @@ export async function downloadNormalBillPdf(id: number, billNumber: string): Pro
 
 export async function downloadNormalBillDraftPdf(payload: CreateNormalBillPayload): Promise<void> {
   const url = `${API_BASE_URL}/api/v1/normal-bills/preview-pdf`;
+  let csrfToken = getCsrfToken();
+  if (!csrfToken) {
+    csrfToken = await fetchCsrfToken();
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (csrfToken) {
+    headers['X-CSRF-Token'] = csrfToken;
+  }
+
   const response = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     credentials: 'include',
     body: JSON.stringify(payload),
   });

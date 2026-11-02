@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { appPool } from '../src/config/database.js';
 import { khataService } from '../src/modules/khata/khata.service.js';
 import { productsService } from '../src/modules/products/products.service.js';
@@ -119,8 +119,8 @@ describe('Search & Bounded Pagination Test Suite', () => {
       });
 
       await khataService.listCustomers({ limit: 1000, offset: 0 });
-      // Limit parameter must be capped at 50 (+ 1 for hasMore = 51)
-      expect(executedParams).toContain(51);
+      // Limit parameter must be capped at 200 (+ 1 for hasMore = 201)
+      expect(executedParams).toContain(201);
     });
 
     it('6. Excludes archived products and enforces stable ordering (name ASC, id ASC)', async () => {
