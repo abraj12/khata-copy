@@ -41,6 +41,8 @@ export const EXPECTED_MIGRATIONS = [
   '010_product_hsn_code.sql',
   '011_gst_invoices.sql',
   '012_normal_bills.sql',
+  '013_customer_address.sql',
+  '014_billing_quantity_and_sequences.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [
@@ -54,6 +56,10 @@ export const EXPECTED_CORE_TABLES = [
   'payment_allocations',
   'idempotency_keys',
   'offline_bill_records',
+  'gst_invoices',
+  'gst_invoice_items',
+  'normal_bills',
+  'normal_bill_items',
 ];
 
 export interface ReadinessReport {

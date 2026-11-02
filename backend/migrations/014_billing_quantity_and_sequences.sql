@@ -3,41 +3,68 @@
 -- Enforce 2-decimal scale standard on billing item quantities and synchronize sequences
 -- ==============================================================================
 
--- 1. Synchronize GST Invoice Number Sequence with existing max numerical invoice number
-SELECT setval(
-  'gst_invoice_number_seq',
-  GREATEST(
-    COALESCE((
-      SELECT MAX(
-        CASE
-          WHEN invoice_number ~ '^\d+$' THEN invoice_number::BIGINT
-          WHEN regexp_replace(invoice_number, '\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
-          ELSE 0
-        END
-      ) FROM gst_invoices
-    ), 0),
-    1
-  )
-);
+DO $$
+DECLARE
+  v_max_gst BIGINT;
+  v_max_normal BIGINT;
+  v_invalid_gst_count INT;
+  v_invalid_normal_count INT;
+BEGIN
+  -- 1. Historical Quantity Precision Safety Guard
+  -- Verify no existing records have fractional precision beyond 2 decimal places.
+  -- Abort before altering column types to prevent silent mathematical rounding/corruption.
+  SELECT COUNT(*) INTO v_invalid_gst_count
+  FROM gst_invoice_items
+  WHERE "quantity" <> TRUNC("quantity", 2) OR scale("quantity") > 2;
 
--- 2. Synchronize Normal Bill Number Sequence with existing max numerical bill number
-SELECT setval(
-  'normal_bill_number_seq',
-  GREATEST(
-    COALESCE((
-      SELECT MAX(
-        CASE
-          WHEN bill_number ~ '^\d+$' THEN bill_number::BIGINT
-          WHEN regexp_replace(bill_number, '\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\\D', '', 'g')::BIGINT
-          ELSE 0
-        END
-      ) FROM normal_bills
-    ), 0),
-    1
-  )
-);
+  IF v_invalid_gst_count > 0 THEN
+    RAISE EXCEPTION 'Cannot apply migration 014: gst_invoice_items contains % historical record(s) with > 2 decimal places. Manual reconciliation is required to prevent rounding discrepancies.', v_invalid_gst_count;
+  END IF;
 
--- 3. Adjust GST Invoice Items quantity column to NUMERIC(12, 2) with strict 2-decimal constraint
+  SELECT COUNT(*) INTO v_invalid_normal_count
+  FROM normal_bill_items
+  WHERE "quantity" <> TRUNC("quantity", 2) OR scale("quantity") > 2;
+
+  IF v_invalid_normal_count > 0 THEN
+    RAISE EXCEPTION 'Cannot apply migration 014: normal_bill_items contains % historical record(s) with > 2 decimal places. Manual reconciliation is required to prevent rounding discrepancies.', v_invalid_normal_count;
+  END IF;
+
+  -- 2. Synchronize GST Invoice Number Sequence atomically
+  -- When table has existing records, setval(seq, max, true) -> next is max + 1.
+  -- When table is empty, setval(seq, 1, false) -> next is 1 ('001').
+  SELECT COALESCE(MAX(
+    CASE
+      WHEN invoice_number ~ '^\d+$' THEN invoice_number::BIGINT
+      WHEN regexp_replace(invoice_number, '\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\D', '', 'g')::BIGINT
+      ELSE 0
+    END
+  ), 0) INTO v_max_gst FROM gst_invoices;
+
+  IF v_max_gst > 0 THEN
+    PERFORM setval('gst_invoice_number_seq', v_max_gst, true);
+  ELSE
+    PERFORM setval('gst_invoice_number_seq', 1, false);
+  END IF;
+
+  -- 3. Synchronize Normal Bill Number Sequence atomically
+  -- When table has existing records, setval(seq, max, true) -> next is max + 1.
+  -- When table is empty, setval(seq, 1, false) -> next is 1 ('001').
+  SELECT COALESCE(MAX(
+    CASE
+      WHEN bill_number ~ '^\d+$' THEN bill_number::BIGINT
+      WHEN regexp_replace(bill_number, '\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\D', '', 'g')::BIGINT
+      ELSE 0
+    END
+  ), 0) INTO v_max_normal FROM normal_bills;
+
+  IF v_max_normal > 0 THEN
+    PERFORM setval('normal_bill_number_seq', v_max_normal, true);
+  ELSE
+    PERFORM setval('normal_bill_number_seq', 1, false);
+  END IF;
+END $$;
+
+-- 4. Adjust GST Invoice Items quantity column to NUMERIC(12, 2) with strict 2-decimal constraint
 ALTER TABLE "gst_invoice_items"
   ALTER COLUMN "quantity" TYPE NUMERIC(12, 2);
 
@@ -48,7 +75,7 @@ ALTER TABLE "gst_invoice_items"
   ADD CONSTRAINT "chk_gst_invoice_items_quantity_scale"
   CHECK ("quantity" > 0 AND scale("quantity") <= 2 AND TRUNC("quantity", 2) = "quantity");
 
--- 4. Adjust Normal Bill Items quantity column to NUMERIC(12, 2) with strict 2-decimal constraint
+-- 5. Adjust Normal Bill Items quantity column to NUMERIC(12, 2) with strict 2-decimal constraint
 ALTER TABLE "normal_bill_items"
   ALTER COLUMN "quantity" TYPE NUMERIC(12, 2);
 

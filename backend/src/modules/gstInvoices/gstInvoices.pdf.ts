@@ -242,25 +242,6 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       // Table Content Area
       const tableContentTop = y;
       const tableBottom = top + height - 120; // Reserve footer space
-      const tableContentHeight = tableBottom - tableContentTop;
-
-      // Draw table column vertical lines down to tableBottom
-      colX.slice(1).forEach((x) => {
-        doc.lineWidth(0.5).moveTo(x, tableContentTop).lineTo(x, tableBottom).stroke();
-      });
-
-      // Draw items
-      let itemY = tableContentTop + 5;
-      (data.items || []).forEach((item, idx) => {
-        doc.font('Helvetica').fontSize(8);
-        doc.text(`${idx + 1}.`, colX[0], itemY, { width: colWidths[0], align: 'center' });
-        doc.text(item.name || '', colX[1] + 4, itemY, { width: colWidths[1] - 8, align: 'left' });
-        doc.text(item.hsn || '', colX[2], itemY, { width: colWidths[2], align: 'center' });
-        doc.text(`${item.quantity ?? ''}${item.unit ? ' ' + item.unit : ''}`, colX[3], itemY, { width: colWidths[3], align: 'center' });
-        doc.text(item.rate !== undefined && item.rate !== null ? Number(item.rate).toFixed(2) : '', colX[4], itemY, { width: colWidths[4] - 4, align: 'right' });
-        doc.text(item.amount !== undefined && item.amount !== null ? Number(item.amount).toFixed(2) : '', colX[5], itemY, { width: colWidths[5] - 4, align: 'right' });
-        itemY += 18;
-      });
 
       // Tax/Bill summary box at bottom right (width 42% = covers col 4 and col 5)
       const taxBoxWidth = width * 0.42;
@@ -289,6 +270,33 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       const taxBoxRows = taxRows.length;
       const taxBoxHeight = taxBoxRowHeight * taxBoxRows;
       const taxBoxTop = tableBottom - taxBoxHeight;
+
+      // Draw table column vertical lines down to tableBottom
+      colX.slice(1).forEach((x) => {
+        doc.lineWidth(0.5).moveTo(x, tableContentTop).lineTo(x, tableBottom).stroke();
+      });
+
+      // Draw items with dynamic row height and tax box boundary protection
+      const itemCount = (data.items || []).length;
+      const itemFontSize = itemCount > 16 ? 7 : 8;
+      let itemY = tableContentTop + 4;
+
+      (data.items || []).forEach((item, idx) => {
+        doc.font('Helvetica').fontSize(itemFontSize);
+        const nameHeight = doc.heightOfString(item.name || '', { width: colWidths[1] - 8 });
+        const rowHeight = Math.max(itemCount > 16 ? 14 : 16, Math.min(nameHeight + 4, 32));
+
+        // Ensure row does not breach tax summary boundary
+        if (itemY + rowHeight <= taxBoxTop - 2) {
+          doc.text(`${idx + 1}.`, colX[0], itemY, { width: colWidths[0], align: 'center' });
+          doc.text(item.name || '', colX[1] + 4, itemY, { width: colWidths[1] - 8, align: 'left', lineBreak: true });
+          doc.text(item.hsn || '', colX[2], itemY, { width: colWidths[2], align: 'center' });
+          doc.text(`${item.quantity ?? ''}${item.unit ? ' ' + item.unit : ''}`, colX[3], itemY, { width: colWidths[3], align: 'center' });
+          doc.text(item.rate !== undefined && item.rate !== null ? Number(item.rate).toFixed(2) : '', colX[4], itemY, { width: colWidths[4] - 4, align: 'right' });
+          doc.text(item.amount !== undefined && item.amount !== null ? Number(item.amount).toFixed(2) : '', colX[5], itemY, { width: colWidths[5] - 4, align: 'right' });
+          itemY += rowHeight;
+        }
+      });
 
       // Fill white background for tax box to obscure table dividers
       doc.rect(taxBoxLeft, taxBoxTop, taxBoxWidth, taxBoxHeight).fillAndStroke('#ffffff', '#000000');

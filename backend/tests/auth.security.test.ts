@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { env, loadAndValidateEnv } from '../src/config/env.js';
@@ -40,6 +40,10 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { table_name: 'payment_allocations' },
             { table_name: 'idempotency_keys' },
             { table_name: 'offline_bill_records' },
+            { table_name: 'gst_invoices' },
+            { table_name: 'gst_invoice_items' },
+            { table_name: 'normal_bills' },
+            { table_name: 'normal_bill_items' },
           ],
           rowCount: 9,
         } as any;
@@ -57,6 +61,8 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '008_strict_quantity_scale.sql' },
             { version: '009_product_images_and_offline_bills.sql' },
             { version: '010_product_hsn_code.sql' },
+            { version: '013_customer_address.sql' },
+            { version: '014_billing_quantity_and_sequences.sql' },
             {
             version: '011_gst_invoices.sql',
           },

@@ -39,7 +39,7 @@ const createNormalBillSchema = z.object({
   customerPhone: z.string().trim().max(20).nullable().optional(),
   customerState: z.string().trim().max(100).optional(),
   customerStateCode: z.string().trim().max(10).optional(),
-  items: z.array(normalBillItemSchema).min(1, 'At least one item is required in the bill'),
+  items: z.array(normalBillItemSchema).min(1, 'At least one item is required in the bill').max(20, 'A single bill can have at most 20 line items to ensure standard A4 print layout integrity'),
   notes: z.string().trim().max(1000).nullable().optional(),
 });
 

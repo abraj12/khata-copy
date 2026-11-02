@@ -74,6 +74,7 @@ export const NormalBillingView: React.FC = () => {
 
   // Form Header States
   const [billNumber, setBillNumber] = useState('');
+  const [isManualBillNumber, setIsManualBillNumber] = useState(false);
   const [billDate, setBillDate] = useState(getTodayLocalDate);
   const [state, setState] = useState('Uttar Pradesh');
   const [stateCode, setStateCode] = useState('09');
@@ -162,6 +163,7 @@ export const NormalBillingView: React.FC = () => {
       setIsLoadingNextNum(true);
       const nextNum = await getNextNormalBillNumber();
       setBillNumber(nextNum);
+      setIsManualBillNumber(false);
     } catch (err) {
       console.warn('Could not auto-fetch next normal bill number:', err);
     } finally {
@@ -181,7 +183,7 @@ export const NormalBillingView: React.FC = () => {
       let offset = 0;
       let hasMore = true;
 
-      while (hasMore && offset < 200) {
+      while (hasMore && offset < 1000) {
         const res = await apiClient<{
           success: boolean;
           data: ProductItem[];
@@ -215,13 +217,30 @@ export const NormalBillingView: React.FC = () => {
   // 3. Load customers for autocomplete search
   const fetchCustomers = async () => {
     try {
-      const res = await apiClient<{ success: boolean; customers: CustomerItem[] }>(
-        '/api/v1/khata/customers?limit=200'
-      );
-      const custs = res.data?.customers || (res.data as any)?.data;
-      if (custs && Array.isArray(custs)) {
-        setAvailableCustomers(custs);
+      const all: CustomerItem[] = [];
+      let offset = 0;
+      let hasMore = true;
+
+      while (hasMore && offset < 1000) {
+        const res = await apiClient<{
+          success: boolean;
+          customers: CustomerItem[];
+          pagination?: { hasMore: boolean; nextOffset: number | null };
+        }>(`/api/v1/khata/customers?limit=200&offset=${offset}`);
+
+        const custs = res.data?.customers || (res.data as any)?.data;
+        if (custs && Array.isArray(custs) && custs.length > 0) {
+          all.push(...custs);
+          if (res.data?.pagination?.hasMore && res.data.pagination.nextOffset) {
+            offset = res.data.pagination.nextOffset;
+          } else {
+            hasMore = false;
+          }
+        } else {
+          hasMore = false;
+        }
       }
+      setAvailableCustomers(all);
     } catch (err) {
       console.warn('Could not load customers for selection:', err);
     }
@@ -291,9 +310,7 @@ export const NormalBillingView: React.FC = () => {
     setCustomerId(customer.id);
     setCustomerName(customer.name);
     setCustomerPhone(customer.phone || '');
-    if (customer.address) {
-      setCustomerAddress(customer.address);
-    }
+    setCustomerAddress(customer.address || '');
     setIsCustomerDropdownOpen(false);
   };
 
@@ -476,7 +493,7 @@ export const NormalBillingView: React.FC = () => {
     try {
       setIsDownloadingPdf(true);
       await downloadNormalBillDraftPdf({
-        billNumber: billNumber.trim() || undefined,
+        billNumber: isManualBillNumber ? billNumber.trim() || undefined : undefined,
         billDate,
         state,
         stateCode,
@@ -522,7 +539,7 @@ export const NormalBillingView: React.FC = () => {
     try {
       setIsSaving(true);
       const payload: CreateNormalBillPayload = {
-        billNumber: billNumber.trim() || undefined,
+        billNumber: isManualBillNumber ? billNumber.trim() || undefined : undefined,
         billDate: billDate || undefined,
         state,
         stateCode,
@@ -728,7 +745,10 @@ export const NormalBillingView: React.FC = () => {
                   <input
                     type="text"
                     value={billNumber}
-                    onChange={(e) => setBillNumber(e.target.value)}
+                    onChange={(e) => {
+                      setBillNumber(e.target.value);
+                      setIsManualBillNumber(true);
+                    }}
                     placeholder={isLoadingNextNum ? 'Fetching...' : 'e.g. 001'}
                     className="neu-input w-full font-mono font-bold text-sm tracking-wide"
                   />
@@ -938,7 +958,11 @@ export const NormalBillingView: React.FC = () => {
                       <span className="text-emerald-600 font-bold">✓ Linked Customer</span>
                       <button
                         type="button"
-                        onClick={() => setCustomerId(null)}
+                        onClick={() => {
+                          setCustomerId(null);
+                          setCustomerAddress('');
+                          setCustomerPhone('');
+                        }}
                         className="text-rose-500 hover:underline font-bold cursor-pointer"
                         title="Unlink customer"
                       >
@@ -954,7 +978,11 @@ export const NormalBillingView: React.FC = () => {
                     onChange={(e) => {
                       setCustomerName(e.target.value);
                       setCustomerSearch(e.target.value);
-                      setCustomerId(null);
+                      if (customerId) {
+                        setCustomerId(null);
+                        setCustomerAddress('');
+                        setCustomerPhone('');
+                      }
                     }}
                     placeholder="Search existing customer or type new name..."
                     className="neu-input w-full font-bold text-sm pl-8"

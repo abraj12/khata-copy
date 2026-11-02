@@ -13,6 +13,7 @@
     "dev": "tsx watch src/index.ts",
     "migrate": "tsx scripts/migrate.ts",
     "preflight:quantity": "tsx scripts/preflight-quantity-check.ts",
+    "preflight:billing": "tsx scripts/preflight-billing-quantity-check.ts",
     "hash-password": "tsx scripts/hash-owner-password.ts",
     "test": "vitest run --config vitest.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",

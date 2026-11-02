@@ -70,6 +70,7 @@ export const GstBillingView: React.FC = () => {
 
   // Form states (Pre-filled with device local today's date)
   const [invoiceNumber, setInvoiceNumber] = useState('');
+  const [isManualInvoiceNumber, setIsManualInvoiceNumber] = useState(false);
   const [invoiceDate, setInvoiceDate] = useState<string>(() => getTodayLocalDate());
   const [state] = useState('Uttar Pradesh');
   const [stateCode] = useState('09');
@@ -181,6 +182,7 @@ export const GstBillingView: React.FC = () => {
       setIsLoadingNextNum(true);
       const nextNum = await getNextInvoiceNumber();
       setInvoiceNumber(nextNum);
+      setIsManualInvoiceNumber(false);
     } catch (err) {
       console.warn('Could not auto-fetch invoice number:', err);
     } finally {
@@ -195,7 +197,7 @@ export const GstBillingView: React.FC = () => {
       let offset = 0;
       let hasMore = true;
 
-      while (hasMore && offset < 200) {
+      while (hasMore && offset < 1000) {
         const res = await apiClient<{
           success: boolean;
           data: ProductItem[];
@@ -223,13 +225,30 @@ export const GstBillingView: React.FC = () => {
 
   const fetchCustomers = async () => {
     try {
-      const res = await apiClient<{ success: boolean; customers: CustomerItem[] }>(
-        '/api/v1/khata/customers?limit=200'
-      );
-      const custs = res.data?.customers || (res.data as any)?.data;
-      if (custs && Array.isArray(custs)) {
-        setAvailableCustomers(custs);
+      const all: CustomerItem[] = [];
+      let offset = 0;
+      let hasMore = true;
+
+      while (hasMore && offset < 1000) {
+        const res = await apiClient<{
+          success: boolean;
+          customers: CustomerItem[];
+          pagination?: { hasMore: boolean; nextOffset: number | null };
+        }>(`/api/v1/khata/customers?limit=200&offset=${offset}`);
+
+        const custs = res.data?.customers || (res.data as any)?.data;
+        if (custs && Array.isArray(custs) && custs.length > 0) {
+          all.push(...custs);
+          if (res.data?.pagination?.hasMore && res.data.pagination.nextOffset) {
+            offset = res.data.pagination.nextOffset;
+          } else {
+            hasMore = false;
+          }
+        } else {
+          hasMore = false;
+        }
       }
+      setAvailableCustomers(all);
     } catch (err) {
       console.warn('Error fetching customers:', err);
     }
@@ -428,9 +447,7 @@ export const GstBillingView: React.FC = () => {
   const handleSelectCustomer = (c: CustomerItem) => {
     setCustomerId(c.id);
     setCustomerName(c.name);
-    if (c.address) {
-      setCustomerAddress(c.address);
-    }
+    setCustomerAddress(c.address || '');
     setIsCustomerDropdownOpen(false);
   };
 
@@ -452,7 +469,7 @@ export const GstBillingView: React.FC = () => {
     try {
       setIsSaving(true);
       const created = await createGstInvoice({
-        invoiceNumber: invoiceNumber.trim() || undefined,
+        invoiceNumber: isManualInvoiceNumber ? invoiceNumber.trim() || undefined : undefined,
         invoiceDate,
         state,
         stateCode,
@@ -531,7 +548,7 @@ export const GstBillingView: React.FC = () => {
     try {
       setIsDownloadingPdf(true);
       await downloadDraftPdf({
-        invoiceNumber: invoiceNumber.trim() || undefined,
+        invoiceNumber: isManualInvoiceNumber ? invoiceNumber.trim() || undefined : undefined,
         invoiceDate,
         state,
         stateCode,
@@ -697,7 +714,10 @@ export const GstBillingView: React.FC = () => {
                       <input
                         type="text"
                         value={invoiceNumber}
-                        onChange={(e) => setInvoiceNumber(e.target.value)}
+                        onChange={(e) => {
+                          setInvoiceNumber(e.target.value);
+                          setIsManualInvoiceNumber(true);
+                        }}
                         placeholder={isLoadingNextNum ? 'Fetching...' : 'e.g. 001'}
                         className="neu-input w-full font-mono font-bold text-sm tracking-wide"
                       />
@@ -886,7 +906,10 @@ export const GstBillingView: React.FC = () => {
                           <span className="text-emerald-600 font-bold">✓ Linked Customer</span>
                           <button
                             type="button"
-                            onClick={() => setCustomerId(null)}
+                            onClick={() => {
+                              setCustomerId(null);
+                              setCustomerAddress('');
+                            }}
                             className="text-rose-500 hover:underline font-bold cursor-pointer"
                             title="Unlink customer"
                           >
@@ -900,7 +923,10 @@ export const GstBillingView: React.FC = () => {
                       value={customerName}
                       onChange={(e) => {
                         setCustomerName(e.target.value);
-                        setCustomerId(null);
+                        if (customerId) {
+                          setCustomerId(null);
+                          setCustomerAddress('');
+                        }
                       }}
                       placeholder="e.g. Sharma Construction Co. / M/s ABC Enterprises"
                       className="neu-input w-full font-bold"

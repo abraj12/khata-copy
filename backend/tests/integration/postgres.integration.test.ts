@@ -28,6 +28,12 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     try {
       // 1. Drop public schema tables cleanly for test isolation
       await client.query(`
+        DROP TABLE IF EXISTS "gst_invoice_items" CASCADE;
+        DROP TABLE IF EXISTS "gst_invoices" CASCADE;
+        DROP TABLE IF EXISTS "normal_bill_items" CASCADE;
+        DROP TABLE IF EXISTS "normal_bills" CASCADE;
+        DROP SEQUENCE IF EXISTS "gst_invoice_number_seq" CASCADE;
+        DROP SEQUENCE IF EXISTS "normal_bill_number_seq" CASCADE;
         DROP TABLE IF EXISTS "offline_bill_records" CASCADE;
         DROP TABLE IF EXISTS "idempotency_keys" CASCADE;
         DROP TABLE IF EXISTS "payment_allocations" CASCADE;
@@ -54,6 +60,11 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '007_quantity_strict_scale_and_allocation_integrity.sql',
         '008_strict_quantity_scale.sql',
         '009_product_images_and_offline_bills.sql',
+        '010_product_hsn_code.sql',
+        '011_gst_invoices.sql',
+        '012_normal_bills.sql',
+        '013_customer_address.sql',
+        '014_billing_quantity_and_sequences.sql',
       ];
 
       await client.query(`
@@ -638,5 +649,64 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     `);
     expect(billRes.rows[0].customer_name).toBe('Bill Cust');
     expect(billRes.rows[0].normalized_customer_phone).toBe('9876543210');
+  });
+
+  it('13. Migration 013: Customer address column persists and updates properly', async () => {
+    const custRes = await pool.query(`
+      INSERT INTO customers (name, normalized_name, phone, normalized_phone, address)
+      VALUES ('Address Test User', 'address test user', '9988776655', '9988776655', 'Station Road, Bilaspur')
+      RETURNING id, name, address
+    `);
+    expect(custRes.rows[0].address).toBe('Station Road, Bilaspur');
+
+    await pool.query(`UPDATE customers SET address = $1 WHERE id = $2`, [
+      'New Market, Rampur',
+      custRes.rows[0].id,
+    ]);
+
+    const updated = await pool.query(`SELECT address FROM customers WHERE id = $1`, [custRes.rows[0].id]);
+    expect(updated.rows[0].address).toBe('New Market, Rampur');
+  });
+
+  it('14. Migration 014: Billing sequences start at 1 (001) on empty tables', async () => {
+    const gstSeqRes = await pool.query(`SELECT nextval('gst_invoice_number_seq') AS seq`);
+    expect(parseInt(gstSeqRes.rows[0].seq, 10)).toBe(1);
+
+    const normalSeqRes = await pool.query(`SELECT nextval('normal_bill_number_seq') AS seq`);
+    expect(parseInt(normalSeqRes.rows[0].seq, 10)).toBe(1);
+  });
+
+  it('15. Migration 014: Billing line item quantity strictly enforces 2-decimal scale constraint', async () => {
+    const invRes = await pool.query(`
+      INSERT INTO gst_invoices (
+        invoice_number, invoice_date, state, state_code, customer_name,
+        taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
+        igst_rate, igst_amount, tax_amount, grand_total, amount_in_words
+      ) VALUES (
+        'INV-INT-001', '2026-11-02', 'Uttar Pradesh', '09', 'Test Customer',
+        '100.00', '9.00', '9.00', '9.00', '9.00',
+        '0.00', '0.00', '18.00', '118.00', 'Rupees One Hundred Eighteen Only'
+      ) RETURNING id
+    `);
+    const invId = invRes.rows[0].id;
+
+    const validItem = await pool.query(`
+      INSERT INTO gst_invoice_items (invoice_id, item_index, description, quantity, rate, amount)
+      VALUES ($1, 1, 'Valid Item', 1.25, 100.00, 125.00)
+      RETURNING id, quantity
+    `, [invId]);
+    expect(parseFloat(validItem.rows[0].quantity)).toBe(1.25);
+
+    let rejected = false;
+    try {
+      await pool.query(`
+        INSERT INTO gst_invoice_items (invoice_id, item_index, description, quantity, rate, amount)
+        VALUES ($1, 2, 'Invalid Item', 1.234, 100.00, 123.40)
+      `, [invId]);
+    } catch (err) {
+      rejected = true;
+      expect((err as Error).message).toContain('chk_gst_invoice_items_quantity_scale');
+    }
+    expect(rejected).toBe(true);
   });
 });
