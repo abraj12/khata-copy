@@ -116,11 +116,7 @@ export class NormalBillsService {
       `);
       const row = res.rows[0];
       const maxNum = Number(row?.max_num || 0);
-      let nextNum = Number(row?.next_num ?? (maxNum + 1));
-      if (maxNum === 0) {
-        nextNum = 1;
-        appPool.query("SELECT setval('normal_bill_number_seq', 1, false)").catch(() => {});
-      }
+      const nextNum = Number(row?.next_num ?? (maxNum + 1));
       return String(nextNum).padStart(3, '0');
     } catch {
       const maxRes = await appPool.query(`
@@ -153,14 +149,6 @@ export class NormalBillsService {
       // 1. Resolve bill number atomically using database sequence
       let billNumber = input.billNumber?.trim();
       if (!billNumber) {
-        try {
-          const maxCheck = await client.query("SELECT COALESCE(MAX(CASE WHEN bill_number ~ '^[0-9]+$' THEN bill_number::BIGINT WHEN regexp_replace(bill_number, '[^0-9]', '', 'g') <> '' THEN regexp_replace(bill_number, '[^0-9]', '', 'g')::BIGINT ELSE 0 END), 0) AS max_num FROM normal_bills");
-          if (Number(maxCheck.rows[0]?.max_num || 0) === 0) {
-            await client.query("SELECT setval('normal_bill_number_seq', 1, false)");
-          }
-        } catch {
-          // Ignore in mocks
-        }
         let attempts = 0;
         while (attempts < 10) {
           try {
@@ -195,11 +183,13 @@ export class NormalBillsService {
           billNumber = String(maxNum + 1).padStart(3, '0');
         }
       } else {
-        const numVal = parseInt(billNumber, 10);
+        // Alphanumeric manual number support (e.g., 'NB-101' -> 101, '005' -> 5)
+        const digits = billNumber.replace(/[^0-9]/g, '');
+        const numVal = digits ? parseInt(digits, 10) : NaN;
         if (!isNaN(numVal) && numVal > 0) {
           try {
             await client.query(
-              `SELECT setval('normal_bill_number_seq', GREATEST((SELECT last_value FROM normal_bill_number_seq), $1::BIGINT))`,
+              `SELECT setval('normal_bill_number_seq', GREATEST((SELECT last_value FROM normal_bill_number_seq), $1::BIGINT), true)`,
               [numVal]
             );
           } catch {
@@ -428,26 +418,30 @@ export class NormalBillsService {
           }
         }
 
-        // Update database with R2 key and status
+      } catch (pdfErr) {
+        console.error('[NORMAL BILL PDF GENERATION ERROR]', (pdfErr as Error).message);
+        pdfStatus = 'failed';
+      }
+
+      try {
         await appPool.query(
           'UPDATE normal_bills SET r2_object_key = $1, pdf_status = $2, updated_at = NOW() WHERE id = $3',
           [r2Key, pdfStatus, billRecord.id]
         );
-        billRecord.r2_object_key = r2Key;
-        billRecord.pdf_status = pdfStatus;
-      } catch (pdfErr) {
-        console.error('[NORMAL BILL PDF GENERATION ERROR]', (pdfErr as Error).message);
-        await appPool.query(
-          'UPDATE normal_bills SET pdf_status = $1, updated_at = NOW() WHERE id = $2',
-          ['failed', billRecord.id]
-        );
-        billRecord.pdf_status = 'failed';
+      } catch (statusUpdateErr) {
+        console.warn('[NORMAL BILL STATUS UPDATE NON-FATAL]', (statusUpdateErr as Error).message);
       }
 
+      billRecord.r2_object_key = r2Key;
+      billRecord.pdf_status = pdfStatus;
       billRecord.items = insertedItems;
       return billRecord;
     } catch (err) {
-      await client.query('ROLLBACK');
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Ignore rollback failure if already committed
+      }
       throw err;
     } finally {
       client.release();

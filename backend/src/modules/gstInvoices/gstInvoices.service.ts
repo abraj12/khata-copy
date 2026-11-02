@@ -126,11 +126,7 @@ export class GstInvoicesService {
       `);
       const row = res.rows[0];
       const maxNum = Number(row?.max_num || 0);
-      let nextNum = Number(row?.next_num ?? (maxNum + 1));
-      if (maxNum === 0) {
-        nextNum = 1;
-        appPool.query("SELECT setval('gst_invoice_number_seq', 1, false)").catch(() => {});
-      }
+      const nextNum = Number(row?.next_num ?? (maxNum + 1));
       return String(nextNum).padStart(3, '0');
     } catch {
       const maxRes = await appPool.query(`
@@ -163,14 +159,6 @@ export class GstInvoicesService {
       // 1. Resolve invoice number atomically using database sequence
       let invoiceNumber = input.invoiceNumber?.trim();
       if (!invoiceNumber) {
-        try {
-          const maxCheck = await client.query("SELECT COALESCE(MAX(CASE WHEN invoice_number ~ '^[0-9]+$' THEN invoice_number::BIGINT WHEN regexp_replace(invoice_number, '[^0-9]', '', 'g') <> '' THEN regexp_replace(invoice_number, '[^0-9]', '', 'g')::BIGINT ELSE 0 END), 0) AS max_num FROM gst_invoices");
-          if (Number(maxCheck.rows[0]?.max_num || 0) === 0) {
-            await client.query("SELECT setval('gst_invoice_number_seq', 1, false)");
-          }
-        } catch {
-          // Ignore in mocks
-        }
         let attempts = 0;
         while (attempts < 10) {
           try {
@@ -205,11 +193,13 @@ export class GstInvoicesService {
           invoiceNumber = String(maxNum + 1).padStart(3, '0');
         }
       } else {
-        const numVal = parseInt(invoiceNumber, 10);
+        // Alphanumeric manual number support (e.g., 'INV-101' -> 101, '005' -> 5)
+        const digits = invoiceNumber.replace(/[^0-9]/g, '');
+        const numVal = digits ? parseInt(digits, 10) : NaN;
         if (!isNaN(numVal) && numVal > 0) {
           try {
             await client.query(
-              `SELECT setval('gst_invoice_number_seq', GREATEST((SELECT last_value FROM gst_invoice_number_seq), $1::BIGINT))`,
+              `SELECT setval('gst_invoice_number_seq', GREATEST((SELECT last_value FROM gst_invoice_number_seq), $1::BIGINT), true)`,
               [numVal]
             );
           } catch {
@@ -256,9 +246,9 @@ export class GstInvoicesService {
       const customerStateCode = (input.customerStateCode || '09').trim();
       const isIntraState = shopStateCode === customerStateCode;
 
-      const gstRateDec = new Decimal(input.gstRate || 0);
-      if (gstRateDec.isNegative() || !gstRateDec.isFinite()) {
-        throw new AppError('GST rate cannot be negative.', 400, 'INVALID_GST_RATE');
+      const gstRateDec = new Decimal(input.gstRate || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      if (gstRateDec.isNegative() || !gstRateDec.isFinite() || gstRateDec.greaterThan(100)) {
+        throw new AppError('GST rate must be between 0 and 100 with at most 2 decimal places.', 400, 'INVALID_GST_RATE');
       }
 
       let cgstRateDec = new Decimal(0);
@@ -269,9 +259,9 @@ export class GstInvoicesService {
       let igstAmountDec = new Decimal(0);
 
       if (isIntraState) {
-        // Intra-state: CGST (half) + SGST (half)
-        cgstRateDec = gstRateDec.dividedBy(2);
-        sgstRateDec = gstRateDec.dividedBy(2);
+        // Intra-state: CGST (half) + SGST (half) strictly rounded so displayed rates sum to applied rate
+        cgstRateDec = gstRateDec.dividedBy(2).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+        sgstRateDec = gstRateDec.minus(cgstRateDec);
         cgstAmountDec = taxableAmountDec.times(cgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
         sgstAmountDec = taxableAmountDec.times(sgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
       } else {
@@ -674,7 +664,10 @@ export class GstInvoicesService {
     const shopStateCode = (input.stateCode || '09').trim();
     const customerStateCode = (input.customerStateCode || '09').trim();
     const isIntraState = shopStateCode === customerStateCode;
-    const gstRateDec = new Decimal(input.gstRate || 0);
+    const gstRateDec = new Decimal(input.gstRate || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    if (gstRateDec.isNegative() || !gstRateDec.isFinite() || gstRateDec.greaterThan(100)) {
+      throw new AppError('GST rate must be between 0 and 100 with at most 2 decimal places.', 400, 'INVALID_GST_RATE');
+    }
 
     let cgstRateDec = new Decimal(0);
     let cgstAmountDec = new Decimal(0);
@@ -684,8 +677,8 @@ export class GstInvoicesService {
     let igstAmountDec = new Decimal(0);
 
     if (isIntraState) {
-      cgstRateDec = gstRateDec.dividedBy(2);
-      sgstRateDec = gstRateDec.dividedBy(2);
+      cgstRateDec = gstRateDec.dividedBy(2).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      sgstRateDec = gstRateDec.minus(cgstRateDec);
       cgstAmountDec = taxableAmountDec.times(cgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
       sgstAmountDec = taxableAmountDec.times(sgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     } else {

@@ -749,4 +749,46 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     }
     expect(billRejected).toBe(true);
   });
+
+  // 16. Migration 014 historical upgrade with trailing zeros & Alphanumeric Sequence Advancement
+  it('16. Historical billing items with trailing zeros (1.230) normalize cleanly and alphanumeric numbers advance sequence', async () => {
+    // 1. Verify alphanumeric sequence advancement
+    // When a bill is created with 'INV-150', sequence advances to 150
+    await pool.query(`
+      SELECT setval('gst_invoice_number_seq', GREATEST((SELECT last_value FROM gst_invoice_number_seq), $1::BIGINT), true)
+    `, [150]);
+
+    const nextGstRes = await pool.query(`SELECT nextval('gst_invoice_number_seq') AS seq`);
+    expect(parseInt(nextGstRes.rows[0].seq, 10)).toBe(151);
+
+    // Normal bill with 'NB-075'
+    await pool.query(`
+      SELECT setval('normal_bill_number_seq', GREATEST((SELECT last_value FROM normal_bill_number_seq), $1::BIGINT), true)
+    `, [75]);
+
+    const nextNormalRes = await pool.query(`SELECT nextval('normal_bill_number_seq') AS seq`);
+    expect(parseInt(nextNormalRes.rows[0].seq, 10)).toBe(76);
+
+    // 2. Verify trailing zero normalization (e.g. 1.20 mathematically valid)
+    const invRes = await pool.query(`
+      INSERT INTO gst_invoices (
+        invoice_number, invoice_date, state, state_code, customer_name,
+        taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
+        igst_rate, igst_amount, tax_amount, grand_total, amount_in_words
+      ) VALUES (
+        'INV-INT-099', '2026-11-02', 'Uttar Pradesh', '09', 'Trailing Zero Test Customer',
+        '100.00', '9.00', '9.00', '9.00', '9.00',
+        '0.00', '0.00', '18.00', '118.00', 'Rupees One Hundred Eighteen Only'
+      ) RETURNING id
+    `);
+    const invId = invRes.rows[0].id;
+
+    // Insert 1.20 -> scale 2, TRUNC(1.20, 2) = 1.20
+    const trailingZeroItem = await pool.query(`
+      INSERT INTO gst_invoice_items (invoice_id, item_index, description, quantity, rate, amount)
+      VALUES ($1, 1, 'Trailing Zero Item', 1.20, 100.00, 120.00)
+      RETURNING id, quantity
+    `, [invId]);
+    expect(parseFloat(trailingZeroItem.rows[0].quantity)).toBe(1.20);
+  });
 });

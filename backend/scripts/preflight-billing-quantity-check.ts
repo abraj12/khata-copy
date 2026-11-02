@@ -4,6 +4,10 @@ import { directPool } from '../src/config/database.js';
  * Preflight Safety Audit for Billing Item Quantities:
  * Verifies that no historical records in `gst_invoice_items` or `normal_bill_items`
  * contain quantities with precision exceeding 2 decimal places before running migration 014.
+ *
+ * Trailing fractional zeros (e.g. 1.230 or 2.500) originating from NUMERIC(12,3) columns
+ * are mathematically equal to 2 decimal places and will be normalized by migration 014.
+ * Only genuine fractional precision (e.g. 1.234) is flagged as requiring manual reconciliation.
  */
 export async function runBillingQuantityPreflightCheck(): Promise<{ isSafe: boolean; invalidRowsCount: number }> {
   console.log('[PREFLIGHT] Auditing billing tables for quantities with > 2 decimal places...');
@@ -22,11 +26,11 @@ export async function runBillingQuantityPreflightCheck(): Promise<{ isSafe: bool
     const gstRes = await directPool.query(`
       SELECT id, invoice_id, description, quantity
       FROM gst_invoice_items
-      WHERE quantity <> TRUNC(quantity, 2) OR scale(quantity) > 2;
+      WHERE quantity <> TRUNC(quantity, 2);
     `);
 
     if (gstRes.rows.length > 0) {
-      console.error(`\x1b[31m[PREFLIGHT DANGER] Found ${gstRes.rows.length} row(s) in gst_invoice_items with > 2 decimal places!\x1b[0m`);
+      console.error(`\x1b[31m[PREFLIGHT DANGER] Found ${gstRes.rows.length} row(s) in gst_invoice_items with genuine fractional precision > 2 decimal places!\x1b[0m`);
       console.error('GST items:', gstRes.rows);
       totalInvalid += gstRes.rows.length;
     }
@@ -44,11 +48,11 @@ export async function runBillingQuantityPreflightCheck(): Promise<{ isSafe: bool
     const normalRes = await directPool.query(`
       SELECT id, bill_id, description, quantity
       FROM normal_bill_items
-      WHERE quantity <> TRUNC(quantity, 2) OR scale(quantity) > 2;
+      WHERE quantity <> TRUNC(quantity, 2);
     `);
 
     if (normalRes.rows.length > 0) {
-      console.error(`\x1b[31m[PREFLIGHT DANGER] Found ${normalRes.rows.length} row(s) in normal_bill_items with > 2 decimal places!\x1b[0m`);
+      console.error(`\x1b[31m[PREFLIGHT DANGER] Found ${normalRes.rows.length} row(s) in normal_bill_items with genuine fractional precision > 2 decimal places!\x1b[0m`);
       console.error('Normal bill items:', normalRes.rows);
       totalInvalid += normalRes.rows.length;
     }
@@ -59,17 +63,20 @@ export async function runBillingQuantityPreflightCheck(): Promise<{ isSafe: bool
     return { isSafe: false, invalidRowsCount: totalInvalid };
   }
 
-  console.log('\x1b[32m[PREFLIGHT PASSED] All historical billing quantities comply with 2-decimal scale standard.\x1b[0m');
+  console.log('\x1b[32m[PREFLIGHT PASSED] All billing records have valid <= 2 decimal precision. Migration 014 can proceed safely.\x1b[0m');
   return { isSafe: true, invalidRowsCount: 0 };
 }
 
-if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`) {
+// Standalone execution support
+if (process.argv[1]?.endsWith('preflight-billing-quantity-check.ts') || process.argv[1]?.endsWith('preflight-billing-quantity-check.js')) {
   runBillingQuantityPreflightCheck()
-    .then((res) => {
-      process.exit(res.isSafe ? 0 : 1);
+    .then((result) => {
+      directPool.end();
+      process.exit(result.isSafe ? 0 : 1);
     })
     .catch((err) => {
-      console.error('[PREFLIGHT ERROR]', err);
+      console.error('[PREFLIGHT FATAL]', err);
+      directPool.end();
       process.exit(1);
     });
 }

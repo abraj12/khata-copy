@@ -1,46 +1,46 @@
 import PDFDocument from 'pdfkit';
-import path from 'path';
 import fs from 'fs';
+import path from 'path';
 import { NASREEN_SIGNATURE_BASE64 } from './gstInvoices.signature.js';
 
 export interface GstInvoicePdfItem {
   name: string;
   hsn?: string | null;
-  quantity: number | string;
+  quantity: string | number;
   unit?: string | null;
-  rate: number | string;
+  rate: string | number;
   rateUnit?: string | null;
-  amount: number | string;
+  amount: string | number;
 }
 
 export interface GstInvoicePdfData {
   invoiceNumber: string;
-  invoiceDate: string;
+  invoiceDate: string | Date;
   state?: string;
   stateCode?: string;
   transportationMode?: string | null;
   vehicleNumber?: string | null;
-  dateOfSupply?: string | null;
+  dateOfSupply?: string | Date | null;
   placeOfSupply?: string | null;
-  customer: {
+  customer?: {
     name: string;
     address?: string | null;
     gstin?: string | null;
-    state?: string | null;
-    stateCode?: string | null;
+    state?: string;
+    stateCode?: string;
     phone?: string | null;
   };
   items: GstInvoicePdfItem[];
-  totals: {
-    taxableAmount: number | string;
-    cgstRate?: number | string;
-    cgstAmount?: number | string;
-    sgstRate?: number | string;
-    sgstAmount?: number | string;
-    igstRate?: number | string;
-    igstAmount?: number | string;
-    taxAmount: number | string;
-    grandTotal: number | string;
+  totals?: {
+    taxableAmount?: string | number;
+    cgstRate?: string | number;
+    cgstAmount?: string | number;
+    sgstRate?: string | number;
+    sgstAmount?: string | number;
+    igstRate?: string | number;
+    igstAmount?: string | number;
+    taxAmount?: string | number;
+    grandTotal?: string | number;
   };
   amountInWords?: string;
   isNormalBill?: boolean;
@@ -85,7 +85,10 @@ export function numberToIndianWords(value: number | string): string {
   return `Rupees ${indianInteger(rupees)}${paise ? ` and ${indianInteger(paise)} Paise` : ''} Only`;
 }
 
-export function formatDateToIndian(val?: any): string {
+/**
+ * Strictly format date to DD-MM-YYYY
+ */
+export function formatDateToIndian(val: string | Date | null | undefined): string {
   if (!val) return '';
   if (val instanceof Date) {
     const y = val.getFullYear();
@@ -186,13 +189,19 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       // Bill to Party Section
       const billToHeight = 65;
       doc.font('Helvetica-Bold').fontSize(9).text('Details of Receiver (Bill to Party)', left + 6, y + 6);
-      doc.font('Helvetica-Bold').fontSize(8.5).text('Name : ', left + 6, y + 22, { continued: true });
-      doc.font('Helvetica').fontSize(9).text(data.customer?.name || '');
+      doc.font('Helvetica-Bold').fontSize(8.5).text('Name : ', left + 6, y + 20, { continued: true });
+      doc.font('Helvetica').fontSize(8.5).text(data.customer?.name || '');
 
-      doc.font('Helvetica-Bold').fontSize(8.5).text('Address : ', left + 6, y + 36, { continued: true });
-      doc.font('Helvetica').fontSize(8.5).text(data.customer?.address || '', { width: width - 20 });
+      // Guarded Address Section: Ellipsis clipping prevents long addresses from overflowing into GSTIN
+      doc.font('Helvetica-Bold').fontSize(8.5).text('Address : ', left + 6, y + 33, { continued: true });
+      const addressText = (data.customer?.address || '').trim();
+      doc.font('Helvetica').fontSize(8).text(addressText, {
+        width: width - 70,
+        height: 17,
+        ellipsis: true,
+      });
 
-      const bottomLineY = y + 50;
+      const bottomLineY = y + 51;
       doc.font('Helvetica-Bold').fontSize(8.5).text('GSTIN : ', left + 6, bottomLineY, { continued: true });
       doc.font('Helvetica').fontSize(8.5).text(`${data.customer?.gstin || ''}              `, { continued: true });
       doc.font('Helvetica-Bold').fontSize(8.5).text('State : ', { continued: true });
@@ -276,27 +285,49 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
         doc.lineWidth(0.5).moveTo(x, tableContentTop).lineTo(x, tableBottom).stroke();
       });
 
-      // Draw items with dynamic row height and tax box boundary protection
-      const itemCount = (data.items || []).length;
-      const itemFontSize = itemCount > 16 ? 7 : 8;
-      let itemY = tableContentTop + 4;
+      // Item sizing and strict overflow guard
+      const items = data.items || [];
+      const itemCount = items.length;
+      const itemFontSize = itemCount > 16 ? 6.5 : itemCount > 12 ? 7.5 : 8;
+      const minRowHeight = itemCount > 16 ? 13 : itemCount > 12 ? 14 : 16;
 
-      (data.items || []).forEach((item, idx) => {
+      // 1. Preflight calculation: verify that EVERY item can fit in the printable area
+      let simulatedY = tableContentTop + 4;
+      for (const item of items) {
         doc.font('Helvetica').fontSize(itemFontSize);
         const nameHeight = doc.heightOfString(item.name || '', { width: colWidths[1] - 8 });
-        const rowHeight = Math.max(itemCount > 16 ? 14 : 16, Math.min(nameHeight + 4, 32));
+        const rowHeight = Math.max(minRowHeight, Math.min(nameHeight + 2, 28));
+        simulatedY += rowHeight;
+      }
 
-        // Ensure row does not breach tax summary boundary
-        if (itemY + rowHeight <= taxBoxTop - 2) {
-          doc.text(`${idx + 1}.`, colX[0], itemY, { width: colWidths[0], align: 'center' });
-          doc.text(item.name || '', colX[1] + 4, itemY, { width: colWidths[1] - 8, align: 'left', lineBreak: true });
-          doc.text(item.hsn || '', colX[2], itemY, { width: colWidths[2], align: 'center' });
-          doc.text(`${item.quantity ?? ''}${item.unit ? ' ' + item.unit : ''}`, colX[3], itemY, { width: colWidths[3], align: 'center' });
-          doc.text(item.rate !== undefined && item.rate !== null ? Number(item.rate).toFixed(2) : '', colX[4], itemY, { width: colWidths[4] - 4, align: 'right' });
-          doc.text(item.amount !== undefined && item.amount !== null ? Number(item.amount).toFixed(2) : '', colX[5], itemY, { width: colWidths[5] - 4, align: 'right' });
-          itemY += rowHeight;
-        }
+      if (simulatedY > taxBoxTop - 2) {
+        throw new Error(
+          `Cannot generate PDF: Invoice has ${itemCount} items whose total description heights exceed the single-page printable area. Total required height: ${Math.round(simulatedY - tableContentTop)}pt, available: ${Math.round(taxBoxTop - tableContentTop - 2)}pt. Please split into multiple invoices or shorten item descriptions.`
+        );
+      }
+
+      // 2. Draw all verified items without omitting any item
+      let itemY = tableContentTop + 4;
+      let drawnCount = 0;
+
+      items.forEach((item, idx) => {
+        doc.font('Helvetica').fontSize(itemFontSize);
+        const nameHeight = doc.heightOfString(item.name || '', { width: colWidths[1] - 8 });
+        const rowHeight = Math.max(minRowHeight, Math.min(nameHeight + 2, 28));
+
+        doc.text(`${idx + 1}.`, colX[0], itemY, { width: colWidths[0], align: 'center' });
+        doc.text(item.name || '', colX[1] + 4, itemY, { width: colWidths[1] - 8, align: 'left', lineBreak: true });
+        doc.text(item.hsn || '', colX[2], itemY, { width: colWidths[2], align: 'center' });
+        doc.text(`${item.quantity ?? ''}${item.unit ? ' ' + item.unit : ''}`, colX[3], itemY, { width: colWidths[3], align: 'center' });
+        doc.text(item.rate !== undefined && item.rate !== null ? Number(item.rate).toFixed(2) : '', colX[4], itemY, { width: colWidths[4] - 4, align: 'right' });
+        doc.text(item.amount !== undefined && item.amount !== null ? Number(item.amount).toFixed(2) : '', colX[5], itemY, { width: colWidths[5] - 4, align: 'right' });
+        itemY += rowHeight;
+        drawnCount++;
       });
+
+      if (drawnCount < itemCount) {
+        throw new Error(`PDF generation failure: Only ${drawnCount} of ${itemCount} items were rendered.`);
+      }
 
       // Fill white background for tax box to obscure table dividers
       doc.rect(taxBoxLeft, taxBoxTop, taxBoxWidth, taxBoxHeight).fillAndStroke('#ffffff', '#000000');
@@ -310,7 +341,7 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
           doc.lineWidth(0.5).moveTo(taxBoxLeft, ry).lineTo(taxBoxLeft + taxBoxWidth, ry).stroke();
         }
         const isTotal = idx === taxRows.length - 1;
-        doc.font(isTotal ? 'Helvetica-Bold' : 'Helvetica-Bold').fontSize(isNormalBill ? 9 : isTotal ? 8.5 : 7.5);
+        doc.font('Helvetica-Bold').fontSize(isNormalBill ? 9 : isTotal ? 8.5 : 7.5);
         doc.fillColor('#000000').text(r[0], taxBoxLeft + 4, ry + (taxBoxRowHeight - (isNormalBill ? 10 : 8)) / 2, { width: taxBoxWidth * 0.55 });
         doc.text(r[1], taxSplitX, ry + (taxBoxRowHeight - (isNormalBill ? 10 : 8)) / 2, { width: taxBoxWidth * 0.42 - 4, align: 'right' });
       });
@@ -321,7 +352,7 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       // Amount in words
       const wordsY = tableBottom;
       const wordsHeight = 24;
-      const amountWords = data.amountInWords || numberToIndianWords(totals.grandTotal);
+      const amountWords = data.amountInWords || numberToIndianWords(totals.grandTotal || 0);
       doc.font('Helvetica-BoldOblique').fontSize(8.5).fillColor('#000000').text('Amount in Words : ', left + 6, wordsY + 6, { continued: true });
       doc.font('Helvetica-Oblique').fontSize(8.5).text(amountWords);
       doc.lineWidth(1).moveTo(left, wordsY + wordsHeight).lineTo(left + width, wordsY + wordsHeight).stroke();
