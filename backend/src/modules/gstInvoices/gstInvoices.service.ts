@@ -125,7 +125,12 @@ export class GstInvoicesService {
         ), 0) AS max_num FROM gst_invoices
       `);
       const row = res.rows[0];
-      const nextNum = Number(row?.next_num ?? (Number(row?.max_num || 0) + 1));
+      const maxNum = Number(row?.max_num || 0);
+      let nextNum = Number(row?.next_num ?? (maxNum + 1));
+      if (maxNum === 0) {
+        nextNum = 1;
+        appPool.query("SELECT setval('gst_invoice_number_seq', 1, false)").catch(() => {});
+      }
       return String(nextNum).padStart(3, '0');
     } catch {
       const maxRes = await appPool.query(`
@@ -158,6 +163,14 @@ export class GstInvoicesService {
       // 1. Resolve invoice number atomically using database sequence
       let invoiceNumber = input.invoiceNumber?.trim();
       if (!invoiceNumber) {
+        try {
+          const maxCheck = await client.query("SELECT COALESCE(MAX(CASE WHEN invoice_number ~ '^[0-9]+$' THEN invoice_number::BIGINT WHEN regexp_replace(invoice_number, '[^0-9]', '', 'g') <> '' THEN regexp_replace(invoice_number, '[^0-9]', '', 'g')::BIGINT ELSE 0 END), 0) AS max_num FROM gst_invoices");
+          if (Number(maxCheck.rows[0]?.max_num || 0) === 0) {
+            await client.query("SELECT setval('gst_invoice_number_seq', 1, false)");
+          }
+        } catch {
+          // Ignore in mocks
+        }
         let attempts = 0;
         while (attempts < 10) {
           try {
