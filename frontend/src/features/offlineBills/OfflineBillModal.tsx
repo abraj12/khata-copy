@@ -23,6 +23,7 @@ import {
   resolveImageUrl,
   API_BASE_URL,
 } from './offlineBillsApi.js';
+import { compressImageFile } from '../../utils/imageCompressor.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 
 interface OfflineBillModalProps {
@@ -74,7 +75,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
     };
   }, [previewUrl]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -84,17 +85,27 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
       return;
     }
 
-    if (file.size > 10 * 1024 * 1024) {
-      setUploadError('Image size exceeds 10 MB limit.');
+    if (file.size > 25 * 1024 * 1024) {
+      setUploadError('Image size exceeds 25 MB limit.');
       return;
     }
 
     setUploadError(null);
-    setSelectedFile(file);
-    if (previewUrl && previewUrl.startsWith('blob:')) {
-      URL.revokeObjectURL(previewUrl);
+    try {
+      // Compress camera photos: 1600px max width/height retains clear document text while reducing size by 90%+
+      const processed = await compressImageFile(file, { maxWidth: 1600, maxHeight: 1600, quality: 0.82 });
+      setSelectedFile(processed);
+      if (previewUrl && previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      setPreviewUrl(URL.createObjectURL(processed));
+    } catch {
+      setSelectedFile(file);
+      if (previewUrl && previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      setPreviewUrl(URL.createObjectURL(file));
     }
-    setPreviewUrl(URL.createObjectURL(file));
   };
 
   const handleClearSelectedFile = () => {

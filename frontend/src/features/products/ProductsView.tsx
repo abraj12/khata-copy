@@ -23,6 +23,7 @@ import {
   resolveImageUrl,
   API_BASE_URL,
 } from './productsApi.js';
+import { compressImageFile } from '../../utils/imageCompressor.js';
 
 interface Product {
   id: number;
@@ -193,13 +194,14 @@ export const ProductsView: React.FC = () => {
     if (!allowed.includes(file.type)) {
       return 'Only JPEG, PNG, and WebP images are allowed.';
     }
-    if (file.size > 5 * 1024 * 1024) {
-      return 'Image size must be at most 5 MB.';
+    // High-resolution camera photos up to 25MB will be compressed automatically before upload
+    if (file.size > 25 * 1024 * 1024) {
+      return 'Image size must be at most 25 MB.';
     }
     return null;
   };
 
-  const handleCreateImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCreateImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -210,11 +212,20 @@ export const ProductsView: React.FC = () => {
     }
 
     setCreateError(null);
-    setCreateImageFile(file);
-    if (createImagePreview && createImagePreview.startsWith('blob:')) {
-      URL.revokeObjectURL(createImagePreview);
+    try {
+      const processed = await compressImageFile(file, { maxWidth: 1200, maxHeight: 1200, quality: 0.8 });
+      setCreateImageFile(processed);
+      if (createImagePreview && createImagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(createImagePreview);
+      }
+      setCreateImagePreview(URL.createObjectURL(processed));
+    } catch {
+      setCreateImageFile(file);
+      if (createImagePreview && createImagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(createImagePreview);
+      }
+      setCreateImagePreview(URL.createObjectURL(file));
     }
-    setCreateImagePreview(URL.createObjectURL(file));
   };
 
   const handleClearCreateImage = () => {
@@ -301,7 +312,7 @@ export const ProductsView: React.FC = () => {
     setEditError(null);
   };
 
-  const handleEditImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleEditImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -312,11 +323,20 @@ export const ProductsView: React.FC = () => {
     }
 
     setEditError(null);
-    setEditImageFile(file);
-    if (editImagePreview && editImagePreview.startsWith('blob:')) {
-      URL.revokeObjectURL(editImagePreview);
+    try {
+      const processed = await compressImageFile(file, { maxWidth: 1200, maxHeight: 1200, quality: 0.8 });
+      setEditImageFile(processed);
+      if (editImagePreview && editImagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(editImagePreview);
+      }
+      setEditImagePreview(URL.createObjectURL(processed));
+    } catch {
+      setEditImageFile(file);
+      if (editImagePreview && editImagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(editImagePreview);
+      }
+      setEditImagePreview(URL.createObjectURL(file));
     }
-    setEditImagePreview(URL.createObjectURL(file));
   };
 
   const handleClearEditImage = () => {
