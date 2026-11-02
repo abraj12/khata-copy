@@ -126,7 +126,23 @@ export class GstInvoicesService {
       `);
       const row = res.rows[0];
       const maxNum = Number(row?.max_num || 0);
-      const nextNum = Number(row?.next_num ?? (maxNum + 1));
+      let nextNum = Number(row?.next_num ?? (maxNum + 1));
+      if (maxNum === 0) {
+        nextNum = 1;
+        try {
+          await appPool.query("SELECT setval('gst_invoice_number_seq', 1, false)");
+        } catch {
+          // Non-fatal in mock/test environments
+        }
+      } else if (nextNum > maxNum + 1) {
+        // If sequence drifted ahead because rows were deleted from database, resync to maxNum
+        nextNum = maxNum + 1;
+        try {
+          await appPool.query("SELECT setval('gst_invoice_number_seq', $1::BIGINT, true)", [maxNum]);
+        } catch {
+          // Non-fatal in mock/test environments
+        }
+      }
       return String(nextNum).padStart(3, '0');
     } catch {
       const maxRes = await appPool.query(`
@@ -159,6 +175,29 @@ export class GstInvoicesService {
       // 1. Resolve invoice number atomically using database sequence
       let invoiceNumber = input.invoiceNumber?.trim();
       if (!invoiceNumber) {
+        try {
+          const maxCheck = await client.query(`
+            SELECT COALESCE(MAX(
+              CASE
+                WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
+                WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
+                ELSE 0
+              END
+            ), 0) AS max_num FROM gst_invoices
+          `);
+          const currentMax = Number(maxCheck.rows[0]?.max_num || 0);
+          if (currentMax === 0) {
+            await client.query("SELECT setval('gst_invoice_number_seq', 1, false)");
+          } else {
+            const seqRes = await client.query("SELECT last_value FROM gst_invoice_number_seq");
+            const seqLast = Number(seqRes.rows[0]?.last_value || 0);
+            if (seqLast > currentMax) {
+              await client.query("SELECT setval('gst_invoice_number_seq', $1::BIGINT, true)", [currentMax]);
+            }
+          }
+        } catch {
+          // Non-fatal in mock environments
+        }
         let attempts = 0;
         while (attempts < 10) {
           try {

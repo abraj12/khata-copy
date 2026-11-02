@@ -86,6 +86,27 @@ describe('Normal Billing Module (Non-GST Standard Bills) Test Suite', () => {
     expect(res.body.nextBillNumber).toBe('013');
   });
 
+  it('1a. Suggests 001 and self-heals sequence when normal bills table is empty (e.g. bills were deleted)', async () => {
+    const executedQueries: string[] = [];
+    vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
+      const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
+      executedQueries.push(sqlText);
+      if (sqlText.includes('MAX(') || sqlText.includes('max_num')) {
+        return { rows: [{ max_num: '0', next_num: 3 }], rowCount: 1 } as any;
+      }
+      return { rows: [], rowCount: 0 } as any;
+    });
+
+    const res = await request(app)
+      .get('/api/v1/normal-bills/next-number')
+      .set('Cookie', authCookie);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.nextBillNumber).toBe('001');
+    expect(executedQueries.some(q => q.includes("setval('normal_bill_number_seq', 1, false)"))).toBe(true);
+  });
+
   it('2. Creates a Normal Bill with 0 GST calculations and pure Decimal math', async () => {
     const mockClient = {
       query: vi.fn().mockImplementation(async (sql: any) => {
