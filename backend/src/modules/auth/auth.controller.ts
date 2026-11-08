@@ -90,9 +90,11 @@ export class AuthController {
             return;
           }
 
+          // Return csrfToken over HTTPS response to eliminate redundant fetchCsrfToken round-trip
           res.status(200).json({
             success: true,
             authenticated: true,
+            csrfToken: req.session.csrfToken,
             owner: {
               role: 'OWNER',
             },
@@ -111,23 +113,40 @@ export class AuthController {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('Pragma', 'no-cache');
 
-    if (!req.session || !req.session.authenticated || req.session.role !== 'OWNER') {
-      res.status(401).json({
+    const startTime = Date.now();
+
+    try {
+      if (!req.session || !req.session.authenticated || req.session.role !== 'OWNER') {
+        const durationMs = Date.now() - startTime;
+        console.log(`[AUTH ME] status=401 durationMs=${durationMs} authenticated=false`);
+        res.status(401).json({
+          success: false,
+          authenticated: false,
+          message: 'No active authenticated session found.',
+        });
+        return;
+      }
+
+      const durationMs = Date.now() - startTime;
+      console.log(`[AUTH ME] status=200 durationMs=${durationMs} authenticated=true`);
+      res.status(200).json({
+        success: true,
+        authenticated: true,
+        owner: {
+          role: 'OWNER',
+          phone: req.session.ownerPhone,
+        },
+      });
+    } catch (err) {
+      const durationMs = Date.now() - startTime;
+      console.error(`[AUTH ME] status=503 durationMs=${durationMs} error=SESSION_STORE_UNAVAILABLE`, (err as Error).message);
+      res.status(503).json({
         success: false,
         authenticated: false,
-        message: 'No active authenticated session found.',
+        code: 'SESSION_STORE_UNAVAILABLE',
+        message: 'Authentication session store is temporarily unavailable. Please retry.',
       });
-      return;
     }
-
-    res.status(200).json({
-      success: true,
-      authenticated: true,
-      owner: {
-        role: 'OWNER',
-        phone: req.session.ownerPhone,
-      },
-    });
   };
 
   /**

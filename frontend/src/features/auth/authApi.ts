@@ -8,8 +8,12 @@ export const authApi = {
       body: JSON.stringify({ phone, password }),
     });
 
-    // After login, refresh CSRF token to bind to newly regenerated session
-    await fetchCsrfToken();
+    if (data.csrfToken) {
+      setCsrfToken(data.csrfToken);
+    } else {
+      // Backward-compatible fallback
+      await fetchCsrfToken();
+    }
 
     return data;
   },

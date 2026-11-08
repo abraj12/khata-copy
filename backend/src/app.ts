@@ -64,26 +64,19 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
   app.use(express.urlencoded({ extended: true, limit: '250kb' }));
   app.use(cookieParser());
 
-  // 5. Session Middleware (PostgreSQL store with 7-day rolling TTL)
-  app.use(createSessionMiddleware(options));
-
-  // 6. CSRF and Origin Protection
-  app.use(csrfProtection);
-
-  // 7. Health & Readiness Probes
-  // Liveness: lightweight process-alive probe (does not wake up sleeping Neon instance)
-  app.get('/api/v1/health/live', (req, res) => {
-    res.setHeader('Cache-Control', 'no-store');
-    res.json({
+  // 5. Public Health & Readiness Probes
+  // Registered BEFORE session and CSRF middleware so probes never touch PostgreSQL session store or set cookies
+  app.get('/api/v1/health/live', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.status(200).json({
       status: 'alive',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
     });
   });
 
-  // Readiness: verifies database connectivity, schema migrations table, applied migrations, and core tables
-  app.get('/api/v1/health/ready', async (req, res) => {
-    res.setHeader('Cache-Control', 'no-store');
+  app.get('/api/v1/health/ready', async (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     const dbStatus = await checkDatabaseReadiness();
 
     if (!dbStatus.isReady) {
@@ -100,22 +93,27 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
       return;
     }
 
-    res.json({
+    res.status(200).json({
       status: 'ready',
       database: dbStatus,
       timestamp: new Date().toISOString(),
     });
   });
 
-  // Legacy / backward-compatible health check
-  app.get('/api/v1/health', (req, res) => {
-    res.setHeader('Cache-Control', 'no-store');
-    res.json({
+  app.get('/api/v1/health', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.status(200).json({
       status: 'healthy',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
     });
   });
+
+  // 6. Session Middleware (PostgreSQL store with 7-day rolling TTL)
+  app.use(createSessionMiddleware(options));
+
+  // 7. CSRF and Origin Protection
+  app.use(csrfProtection);
 
   // 8. Application Routes
   app.use('/api/v1/auth', authRoutes);

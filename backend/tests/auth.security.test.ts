@@ -91,6 +91,8 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     expect(res.body.password).toBeUndefined();
     expect(res.body.hash).toBeUndefined();
     expect(res.body.sessionId).toBeUndefined();
+    expect(res.body.csrfToken).toBeDefined();
+    expect(typeof res.body.csrfToken).toBe("string");
 
     // Verify session cookie was set
     const cookies = res.headers['set-cookie'];
@@ -627,5 +629,61 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     const status = await store.checkLockout('192.168.1.100', '9876543210');
     expect(status).toBeDefined();
     expect(status.isLocked).toBe(false);
+  });
+
+  // TEST CASE 37: Liveness probe /api/v1/health/live bypasses session middleware and does not set session cookies
+  it('37. Liveness probe /api/v1/health/live returns 200 alive, bypasses session store, and sets no session cookie', async () => {
+    const res = await request(app).get('/api/v1/health/live');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('alive');
+    expect(res.body.timestamp).toBeDefined();
+    expect(res.headers['cache-control']).toContain('no-store');
+    // Session middleware is registered AFTER health routes: no session cookie must be created
+    expect(res.headers['set-cookie']).toBeUndefined();
+  });
+
+  // TEST CASE 38: Login returns csrfToken directly in response body
+  it('38. Login response directly includes csrfToken to eliminate extra round-trip', async () => {
+    const res = await request(app)
+      .post('/api/v1/auth/login')
+      .set('Origin', 'https://khata.algions.in')
+      .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.authenticated).toBe(true);
+    expect(res.body.csrfToken).toBeDefined();
+    expect(typeof res.body.csrfToken).toBe('string');
+    expect(res.body.csrfToken.length).toBeGreaterThan(16);
+  });
+
+  // TEST CASE 39: Diagnostic logging on /api/v1/auth/me does not leak secrets
+  it('39. /api/v1/auth/me logs diagnostic metrics without logging cookies or session secrets', async () => {
+    const consoleSpy = vi.spyOn(console, 'log');
+
+    // 401 unauthenticated check
+    await request(app).get('/api/v1/auth/me');
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringMatching(/\[AUTH ME\] status=401 durationMs=\d+ authenticated=false/));
+
+    // Authenticated check
+    const loginRes = await request(app)
+      .post('/api/v1/auth/login')
+      .set('Origin', 'https://khata.algions.in')
+      .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
+    const cookie = loginRes.headers['set-cookie']?.[0];
+
+    await request(app)
+      .get('/api/v1/auth/me')
+      .set('Cookie', cookie || '');
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringMatching(/\[AUTH ME\] status=200 durationMs=\d+ authenticated=true/));
+  });
+
+  // TEST CASE 40: Readiness probe returns 503 when database is unready
+  it('40. Readiness probe /api/v1/health/ready returns 503 when database is unavailable', async () => {
+    vi.spyOn(appPool, 'query').mockRejectedValueOnce(new Error('Connection refused'));
+    const res = await request(app).get('/api/v1/health/ready');
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe('unready');
+    expect(res.body.database.isReady).toBe(false);
   });
 });

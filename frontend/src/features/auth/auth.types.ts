@@ -14,6 +14,7 @@ export interface AuthState {
 export interface LoginResponse {
   success: boolean;
   authenticated: boolean;
+  csrfToken?: string;
   owner?: OwnerUser;
   message?: string;
   isLocked?: boolean;

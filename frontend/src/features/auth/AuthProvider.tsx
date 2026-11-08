@@ -1,5 +1,13 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+} from 'react';
 import { authApi } from './authApi.js';
+import { setCsrfToken } from '../../lib/apiClient.js';
 import type { AuthState, OwnerUser } from './auth.types.js';
 
 interface AuthContextType extends AuthState {
@@ -16,61 +24,100 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     isLoading: true,
     owner: null,
     error: null,
+    isOffline: false,
   });
 
-  const checkAuth = async () => {
-    try {
-      setAuthState((prev) => ({ ...prev, isLoading: true, error: null, isOffline: false }));
-      const res = await authApi.me();
-      if (res && res.authenticated) {
-        setAuthState({
-          isAuthenticated: true,
-          isLoading: false,
-          owner: res.owner as OwnerUser,
-          error: null,
-          isOffline: false,
-        });
-      } else {
-        setAuthState({
-          isAuthenticated: false,
-          isLoading: false,
-          owner: null,
-          error: null,
-          isOffline: false,
-        });
-      }
-    } catch (err: unknown) {
-      const status = (err as { status?: number }).status;
-      if (status === 401) {
-        // Authenticated session is definitely invalid or expired
-        setAuthState({
-          isAuthenticated: false,
-          isLoading: false,
-          owner: null,
-          error: null,
-          isOffline: false,
-        });
-      } else {
-        // Network timeout, Render cold boot, or temporary 502/503 service outage
+  const authCheckPromiseRef = useRef<Promise<void> | null>(null);
+
+  const checkAuth = useCallback(async () => {
+    if (authCheckPromiseRef.current) {
+      return authCheckPromiseRef.current;
+    }
+
+    const operation = (async () => {
+      setAuthState((prev) => ({
+        ...prev,
+        isLoading: true,
+        error: null,
+        isOffline: false,
+      }));
+
+      try {
+        const res = await authApi.me();
+
+        if (res && res.authenticated) {
+          setAuthState({
+            isAuthenticated: true,
+            isLoading: false,
+            owner: res.owner as OwnerUser,
+            error: null,
+            isOffline: false,
+          });
+        } else {
+          setAuthState({
+            isAuthenticated: false,
+            isLoading: false,
+            owner: null,
+            error: null,
+            isOffline: false,
+          });
+        }
+      } catch (err: unknown) {
+        const error = err as {
+          status?: number;
+          code?: string;
+          message?: string;
+        };
+
+        if (error.status === 401) {
+          // Only an explicit HTTP 401 means no valid session
+          setCsrfToken(null);
+          setAuthState({
+            isAuthenticated: false,
+            isLoading: false,
+            owner: null,
+            error: null,
+            isOffline: false,
+          });
+          return;
+        }
+
+        let message = 'Unable to verify your session. Please check your internet connection and retry.';
+
+        if (error.code === 'REQUEST_TIMEOUT') {
+          message =
+            'The server is taking too long to respond. Your existing login has not been cleared. Please retry.';
+        } else if (error.code === 'NETWORK_ERROR') {
+          message = 'Cannot connect to Khata. Check your internet connection and retry.';
+        } else if (error.status === 502 || error.status === 503) {
+          message = 'Khata server or database is temporarily unavailable. Please retry.';
+        }
+
+        // Preserve current authentication state; never clear owner or credentials on connection failure
         setAuthState((prev) => ({
           ...prev,
           isLoading: false,
           isOffline: true,
-          error:
-            status === 503 || status === 502
-              ? 'Khata server is temporarily waking up. Please retry in a moment.'
-              : 'Connection temporarily unavailable. Please verify internet connectivity.',
+          error: message,
         }));
       }
-    }
-  };
+    })();
 
-  useEffect(() => {
-    checkAuth();
+    authCheckPromiseRef.current = operation;
+
+    try {
+      await operation;
+    } finally {
+      authCheckPromiseRef.current = null;
+    }
   }, []);
 
+  useEffect(() => {
+    void checkAuth();
+  }, [checkAuth]);
+
   const login = async (phone: string, pass: string) => {
-    setAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
+    setAuthState((prev) => ({ ...prev, isLoading: true, error: null, isOffline: false }));
     try {
       const res = await authApi.login(phone, pass);
       if (res.authenticated) {
@@ -79,6 +126,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           isLoading: false,
           owner: (res.owner as OwnerUser) || { role: 'OWNER' },
           error: null,
+          isOffline: false,
         });
       }
     } catch (err) {
@@ -96,7 +144,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
     try {
       await authApi.logout();
-      // Scenario 1: Successful logout - backend revokes session, frontend clears state
       setAuthState({
         isAuthenticated: false,
         isLoading: false,
@@ -104,14 +151,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         error: null,
         isOffline: false,
       });
-      // Purge cached offline assets and sensitive document data on logout
       if (typeof window !== 'undefined' && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_CACHE' });
       }
     } catch (err: unknown) {
       const status = (err as { status?: number }).status;
       if (status === 401) {
-        // Scenario 3: Session is already unauthenticated/expired on the server
         setAuthState({
           isAuthenticated: false,
           isLoading: false,
@@ -123,8 +168,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_CACHE' });
         }
       } else {
-        // Scenario 2: Network failure / backend unavailable (502/503/timeout)
-        // Do NOT falsely claim server revocation. Keep state and notify user with retry option.
         const failureMessage =
           'Logout could not be confirmed with the server. Please check your network and retry.';
         setAuthState((prev) => ({

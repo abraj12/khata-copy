@@ -53,6 +53,7 @@ export function errorHandler(
     statusCode === 404 ? 'NOT_FOUND' :
     statusCode === 409 ? 'CONFLICT' :
     statusCode === 429 ? 'TOO_MANY_REQUESTS' :
+    statusCode === 503 ? 'SERVICE_UNAVAILABLE' :
     'INTERNAL_SERVER_ERROR'
   );
 
@@ -63,9 +64,11 @@ export function errorHandler(
     publicMessage.includes('postgresql://') ||
     publicMessage.includes('syntax error at or near') ||
     publicMessage.includes('pg_') ||
-    (statusCode >= 500 && env.NODE_ENV === 'production')
+    (statusCode >= 500 && statusCode !== 503 && env.NODE_ENV === 'production')
   ) {
-    publicMessage = 'An unexpected internal server error occurred.';
+    publicMessage = statusCode === 503
+      ? 'The service is temporarily unavailable. Please retry shortly.'
+      : 'An unexpected internal server error occurred.';
   }
 
   if (statusCode >= 500) {
