@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { env } from '../config/env.js';
+import { isSessionStoreError } from '../config/session.js';
 
 export function errorHandler(
   err: Error & { status?: number; statusCode?: number; type?: string; code?: string; candidates?: unknown[] },
@@ -19,6 +20,22 @@ export function errorHandler(
       success: false,
       code: 'CORS_FORBIDDEN',
       message: 'CSRF/CORS validation error: Origin not permitted.',
+      requestId,
+    });
+    return;
+  }
+
+  // Handle Session store errors and database connection failures affecting authentication
+  if (isSessionStoreError(err) || err.code === 'SESSION_STORE_UNAVAILABLE' || err.name === 'SessionStoreError') {
+    if (req.originalUrl?.includes('/api/v1/auth/me') || req.path?.includes('/me')) {
+      console.log('[AUTH ME] status=503 error=SESSION_STORE_UNAVAILABLE source=errorHandler');
+    }
+
+    res.status(503).json({
+      success: false,
+      authenticated: false,
+      code: 'SESSION_STORE_UNAVAILABLE',
+      message: 'Authentication session store is temporarily unavailable. Please retry.',
       requestId,
     });
     return;
@@ -57,13 +74,16 @@ export function errorHandler(
     'INTERNAL_SERVER_ERROR'
   );
 
-  // Redact raw database or connection string leaks from messages
+  // Redact raw database or connection string leaks from messages, including session IDs and cookies
   let publicMessage = err.message || 'Internal Server Error';
   if (
     publicMessage.includes('password') ||
     publicMessage.includes('postgresql://') ||
     publicMessage.includes('syntax error at or near') ||
     publicMessage.includes('pg_') ||
+    publicMessage.includes('sid') ||
+    publicMessage.includes('cookie') ||
+    publicMessage.includes('session') ||
     (statusCode >= 500 && statusCode !== 503 && env.NODE_ENV === 'production')
   ) {
     publicMessage = statusCode === 503

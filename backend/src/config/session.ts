@@ -1,3 +1,4 @@
+import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import session from 'express-session';
 import connectPgSimple from 'connect-pg-simple';
 import { appPool } from './database.js';
@@ -5,10 +6,77 @@ import { env } from './env.js';
 
 const PgSessionStore = connectPgSimple(session);
 
-export function createSessionMiddleware(options?: { useMemoryStoreInTest?: boolean }) {
+export class SessionStoreError extends Error {
+  public readonly status = 503;
+  public readonly statusCode = 503;
+  public readonly code = 'SESSION_STORE_UNAVAILABLE';
+
+  constructor(
+    message = 'Authentication session store is temporarily unavailable. Please retry.',
+    public readonly cause?: unknown
+  ) {
+    super(message);
+    this.name = 'SessionStoreError';
+  }
+}
+
+/**
+ * Checks whether an error is caused by a session store outage or database connectivity drop.
+ */
+export function isSessionStoreError(err: unknown): boolean {
+  if (!err) return false;
+  if (err instanceof SessionStoreError) return true;
+  const error = err as { code?: string; message?: string; name?: string };
+  if (error.name === 'SessionStoreError' || error.code === 'SESSION_STORE_UNAVAILABLE') {
+    return true;
+  }
+  const msg = (error.message || '').toLowerCase();
+  const transientCodes = new Set([
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+    'ENOTFOUND',
+    'EPIPE',
+    'EAI_AGAIN',
+    '08000',
+    '08001',
+    '08003',
+    '08004',
+    '08006',
+    '08007',
+    '57P01',
+    '57P02',
+    '57P03',
+    '53300',
+  ]);
+  if (error.code && transientCodes.has(error.code)) {
+    return true;
+  }
+  return (
+    msg.includes('session') ||
+    msg.includes('connection terminated') ||
+    msg.includes('timeout exceeded') ||
+    msg.includes('connection timeout') ||
+    msg.includes('connection lost') ||
+    msg.includes('cannot connect now') ||
+    msg.includes('server closed the connection') ||
+    msg.includes('could not connect to server') ||
+    msg.includes('read econnreset') ||
+    msg.includes('socket has been ended')
+  );
+}
+
+export function createSessionMiddleware(options?: {
+  useMemoryStoreInTest?: boolean;
+  customStore?: session.Store;
+}): RequestHandler {
   let store: session.Store;
 
-  if (env.NODE_ENV === 'test' && options?.useMemoryStoreInTest) {
+  if (options?.customStore) {
+    store = options.customStore;
+  } else if (env.NODE_ENV === 'test' && options?.useMemoryStoreInTest) {
     store = new session.MemoryStore();
   } else {
     if (env.NODE_ENV === 'production' && options?.useMemoryStoreInTest) {
@@ -29,7 +97,7 @@ export function createSessionMiddleware(options?: { useMemoryStoreInTest?: boole
     store = pgStore;
   }
 
-  return session({
+  const rawSession = session({
     name: env.SESSION_COOKIE_NAME,
     secret: env.SESSION_SECRET,
     resave: false,
@@ -45,4 +113,28 @@ export function createSessionMiddleware(options?: { useMemoryStoreInTest?: boole
       // Host-only cookie: Do NOT set domain attribute!
     },
   });
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    rawSession(req, res, (err) => {
+      if (err) {
+        if (isSessionStoreError(err)) {
+          // Log structured diagnostic without leaking session ID or credentials
+          console.error('[SESSION STORE ERROR] Session retrieval failed in middleware:', (err as Error).message);
+
+          if (req.originalUrl?.includes('/api/v1/auth/me') || req.path?.includes('/me')) {
+            console.log('[AUTH ME] status=503 error=SESSION_STORE_UNAVAILABLE source=middleware');
+          }
+
+          return next(
+            new SessionStoreError(
+              'Authentication session store is temporarily unavailable. Please retry.',
+              err
+            )
+          );
+        }
+        return next(err);
+      }
+      next();
+    });
+  };
 }

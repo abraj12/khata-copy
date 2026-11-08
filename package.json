@@ -35,6 +35,7 @@
   "author": "Algions",
   "license": "UNLICENSED",
   "devDependencies": {
+    "happy-dom": "^21.0.4",
     "vitest": "^2.1.9"
   }
 }

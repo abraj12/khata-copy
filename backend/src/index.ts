@@ -1,10 +1,10 @@
 import { createApp } from './app.js';
 import { env } from './config/env.js';
-import { runPendingMigrations } from './config/migrator.js';
+import { runPendingMigrationsWithRetry } from './config/migrator.js';
 
 async function bootstrap() {
   try {
-    await runPendingMigrations();
+    await runPendingMigrationsWithRetry();
   } catch (err) {
     console.error('[KHATA SERVER] Fatal migration error on startup:', err);
     process.exit(1);

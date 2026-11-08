@@ -144,6 +144,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
     try {
       await authApi.logout();
+      setCsrfToken(null);
       setAuthState({
         isAuthenticated: false,
         isLoading: false,
@@ -157,6 +158,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (err: unknown) {
       const status = (err as { status?: number }).status;
       if (status === 401) {
+        setCsrfToken(null);
         setAuthState({
           isAuthenticated: false,
           isLoading: false,

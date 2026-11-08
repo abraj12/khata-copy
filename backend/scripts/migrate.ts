@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 import dotenv from 'dotenv';
-import { runPendingMigrations } from '../src/config/migrator.js';
+import { runPendingMigrations, runPendingMigrationsWithRetry } from '../src/config/migrator.js';
 
 // Pre-load .env and .env.local from current directory or backend directory
 const envFiles = [
@@ -47,7 +47,7 @@ async function resolveConnectionString(): Promise<string | undefined> {
 
 async function main() {
   const customDbUrl = await resolveConnectionString();
-  await runPendingMigrations(customDbUrl);
+  await runPendingMigrationsWithRetry(customDbUrl);
 }
 
 main().catch((err) => {

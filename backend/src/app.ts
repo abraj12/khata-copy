@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import type session from 'express-session';
 import { env } from './config/env.js';
 import { createSessionMiddleware } from './config/session.js';
 import { checkDatabaseReadiness } from './config/database.js';
@@ -15,7 +16,7 @@ import { offlineBillsRoutes } from './modules/offlineBills/offlineBills.routes.j
 import gstInvoicesRoutes from './modules/gstInvoices/gstInvoices.routes.js';
 import normalBillsRoutes from './modules/normalBills/normalBills.routes.js';
 
-export function createApp(options?: { useMemoryStoreInTest?: boolean }) {
+export function createApp(options?: { useMemoryStoreInTest?: boolean; customStore?: session.Store }) {
   const app = express();
 
   // 1. Trust proxy configuration for Render

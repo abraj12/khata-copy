@@ -5,7 +5,76 @@ import { directPool } from './database.js';
 import { env } from './env.js';
 
 const { Pool } = pg;
-const MIGRATION_LOCK_ID = 987654321;
+export const MIGRATION_LOCK_ID = 987654321;
+
+/**
+ * Custom error class for deterministic SQL / migration preflight failures.
+ * These errors must NEVER be blindly retried by the startup connection loop.
+ */
+export class MigrationSqlError extends Error {
+  public readonly isFatalMigrationError = true;
+  constructor(public readonly file: string, public readonly originalError: Error) {
+    super(`[MIGRATION SQL ERROR] Migration failed in ${file}: ${originalError.message}`);
+    this.name = 'MigrationSqlError';
+  }
+}
+
+/**
+ * Checks whether an error during startup/migration is a transient Neon / PostgreSQL connection failure.
+ */
+export function isTransientNeonConnectionError(err: unknown): boolean {
+  if (!err) return false;
+  if ((err as { isFatalMigrationError?: boolean }).isFatalMigrationError) {
+    return false;
+  }
+
+  const error = err as { code?: string; message?: string };
+  const transientCodes = new Set([
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'ETIMEDOUT',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+    'ENOTFOUND',
+    'EPIPE',
+    'EAI_AGAIN',
+    '08000',
+    '08001',
+    '08003',
+    '08004',
+    '08006',
+    '08007',
+    '57P01',
+    '57P02',
+    '57P03', // Neon wake-up / cannot_connect_now
+    '53300', // too_many_connections
+  ]);
+
+  if (error.code && transientCodes.has(error.code)) {
+    return true;
+  }
+
+  const message = (error.message || '').toLowerCase();
+  return (
+    message.includes('connection terminated') ||
+    message.includes('timeout exceeded') ||
+    message.includes('connection timeout') ||
+    message.includes('connection lost') ||
+    message.includes('cannot connect now') ||
+    message.includes('server closed the connection') ||
+    message.includes('failed to connect') ||
+    message.includes('could not connect to server') ||
+    message.includes('read econnreset') ||
+    message.includes('socket has been ended')
+  );
+}
+
+export interface MigrationRetryOptions {
+  maxRetries?: number;
+  initialDelayMs?: number;
+  maxDelayMs?: number;
+  backoffFactor?: number;
+}
 
 /**
  * Finds the migrations directory across dev and production paths.
@@ -87,7 +156,10 @@ export async function runPendingMigrations(overrideDbUrl?: string): Promise<void
         console.log('[MIGRATION] Performing preflight fractional quantity audit on udhar_items...');
         const fracRes = await client.query('SELECT id, quantity FROM udhar_items WHERE quantity <> TRUNC(quantity)');
         if (fracRes.rows.length > 0) {
-          throw new Error(`[PREFLIGHT ERROR] Found ${fracRes.rows.length} row(s) in udhar_items with non-integer quantities. Migration aborted to prevent data loss.`);
+          throw new MigrationSqlError(
+            file,
+            new Error(`[PREFLIGHT ERROR] Found ${fracRes.rows.length} row(s) in udhar_items with non-integer quantities. Migration aborted to prevent data loss.`)
+          );
         }
         console.log('\x1b[32m[PREFLIGHT PASSED] 0 fractional rows found in udhar_items.\x1b[0m');
       }
@@ -104,9 +176,20 @@ export async function runPendingMigrations(overrideDbUrl?: string): Promise<void
         appliedCount++;
         console.log(`[MIGRATION SUCCESS] Applied ${file}`);
       } catch (err) {
-        await client.query('ROLLBACK');
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // Ignore rollback failure if connection died
+        }
         console.error(`[MIGRATION FAILED] Error executing ${file}:`, (err as Error).message);
-        throw err;
+
+        // If the error during SQL execution is a transient connection drop, let it be retried as a connection drop
+        if (isTransientNeonConnectionError(err)) {
+          throw err;
+        }
+
+        // Otherwise, it is an actual SQL syntax / constraint / schema error: NEVER retry!
+        throw new MigrationSqlError(file, err as Error);
       }
     }
 
@@ -119,11 +202,69 @@ export async function runPendingMigrations(overrideDbUrl?: string): Promise<void
     try {
       await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_ID]);
     } catch {
-      // Ignore unlock cleanup failure
+      // Ignore unlock cleanup failure if connection died
     }
     client.release();
     if (activePool !== directPool) {
       await activePool.end();
+    }
+  }
+}
+
+/**
+ * Runs pending migrations with bounded exponential-backoff retries for transient Neon connection failures.
+ * Distinguishes connection drops from deterministic SQL errors (which fail fast without retry).
+ */
+export async function runPendingMigrationsWithRetry(
+  overrideDbUrl?: string,
+  options?: MigrationRetryOptions
+): Promise<void> {
+  if (env.NODE_ENV === 'test') {
+    return;
+  }
+
+  const maxRetries = options?.maxRetries ?? 5;
+  const initialDelayMs = options?.initialDelayMs ?? 1000;
+  const maxDelayMs = options?.maxDelayMs ?? 10000;
+  const backoffFactor = options?.backoffFactor ?? 2;
+
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    try {
+      await runPendingMigrations(overrideDbUrl);
+      return;
+    } catch (err) {
+      if ((err as { isFatalMigrationError?: boolean }).isFatalMigrationError) {
+        console.error(
+          `[MIGRATION FATAL] Non-transient migration failure: ${(err as Error).message}. Startup aborted without retry.`
+        );
+        throw err;
+      }
+
+      if (!isTransientNeonConnectionError(err)) {
+        console.error(
+          `[MIGRATION FATAL] Non-connection migration error: ${(err as Error).message}. Startup aborted without retry.`
+        );
+        throw err;
+      }
+
+      if (attempt >= maxRetries) {
+        console.error(
+          `[MIGRATION FAILED] Exhausted all ${maxRetries} connection attempts to database: ${(err as Error).message}. Startup aborted.`
+        );
+        throw err;
+      }
+
+      const rawDelay = initialDelayMs * Math.pow(backoffFactor, attempt - 1);
+      const jitter = Math.floor(Math.random() * 200);
+      const delay = Math.min(rawDelay + jitter, maxDelayMs);
+
+      console.warn(
+        `[MIGRATION RETRY] Transient Neon connection failure on attempt ${attempt}/${maxRetries} (${(err as Error).message}). Retrying in ${delay}ms...`
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 }
