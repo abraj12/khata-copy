@@ -3,6 +3,8 @@ import pg from 'pg';
 import fs from 'fs';
 import path from 'path';
 import Decimal from 'decimal.js';
+import session from 'express-session';
+import connectPgSimple from 'connect-pg-simple';
 import { assertSafeTestDatabaseUrl } from '../../src/config/testDbGuard.js';
 
 const { Pool } = pg;
@@ -148,8 +150,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
   // 2. Session Row Persistence
   it('2. Session records can be written, read, and deleted across sessions', async () => {
     const sid = 'sess_test_real_integration_12345';
-    const sessData = { cookie: { originalMaxAge: 604800000 }, authenticated: true, owner: { role: 'OWNER' } };
-    const expire = new Date(Date.now() + 604800000);
+    const sessData = { cookie: { originalMaxAge: 2592000000 }, authenticated: true, owner: { role: 'OWNER' } };
+    const expire = new Date(Date.now() + 2592000000);
 
     await pool.query(
       `INSERT INTO "session" ("sid", "sess", "expire") VALUES ($1, $2, $3)
@@ -164,6 +166,49 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     await pool.query(`DELETE FROM "session" WHERE "sid" = $1`, [sid]);
     const deleteRes = await pool.query(`SELECT "sid" FROM "session" WHERE "sid" = $1`, [sid]);
     expect(deleteRes.rows.length).toBe(0);
+  });
+
+  // 2b. Real connect-pg-simple Store Revocation
+  it('2b. Real connect-pg-simple store destroy() physically deletes session row from PostgreSQL session table', async () => {
+    const PgSessionStore = connectPgSimple(session);
+    const store = new PgSessionStore({
+      pool,
+      tableName: 'session',
+      createTableIfMissing: false,
+      pruneSessionInterval: false,
+      ttl: 2592000,
+    });
+
+    const sid = 'sess_test_real_pg_destroy_9988';
+    const sessData = {
+      cookie: { originalMaxAge: 2592000000, maxAge: 2592000000, expires: new Date(Date.now() + 2592000000) } as unknown as session.Cookie,
+      authenticated: true,
+      role: 'OWNER',
+    };
+
+    // Set session in store
+    await new Promise<void>((resolve, reject) => {
+      store.set(sid, sessData as session.SessionData, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    // Verify row exists in PostgreSQL session table
+    const beforeRes = await pool.query('SELECT "sid" FROM "session" WHERE "sid" = $1', [sid]);
+    expect(beforeRes.rows.length).toBe(1);
+
+    // Call store.destroy(sid)
+    await new Promise<void>((resolve, reject) => {
+      store.destroy(sid, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    // Verify row is physically deleted from PostgreSQL session table
+    const afterRes = await pool.query('SELECT "sid" FROM "session" WHERE "sid" = $1', [sid]);
+    expect(afterRes.rows.length).toBe(0);
   });
 
   // 3. Product Reference Catalog & Historical Item Snapshots

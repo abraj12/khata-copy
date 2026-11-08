@@ -110,7 +110,7 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean; customStor
     });
   });
 
-  // 6. Session Middleware (PostgreSQL store with 7-day rolling TTL)
+  // 6. Session Middleware (PostgreSQL store with 30-day rolling TTL)
   app.use(createSessionMiddleware(options));
 
   // 7. CSRF and Origin Protection

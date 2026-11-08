@@ -4,6 +4,7 @@ import { authService } from './auth.service.js';
 import { loginSchema } from './auth.validation.js';
 import { loginAttemptStore } from './loginAttemptStore.js';
 import { generateCsrfToken } from '../../middleware/csrf.js';
+import { pruneExpiredSessionsOpportunistically } from '../../config/session.js';
 
 export class AuthController {
   /**
@@ -99,6 +100,9 @@ export class AuthController {
               role: 'OWNER',
             },
           });
+
+          // Opportunistic expired session cleanup (non-blocking, at most once per 24 hours)
+          void pruneExpiredSessionsOpportunistically();
         });
       });
     } catch (err) {
@@ -137,6 +141,9 @@ export class AuthController {
           phone: req.session.ownerPhone,
         },
       });
+
+      // Opportunistic expired session cleanup (non-blocking, at most once per 24 hours)
+      void pruneExpiredSessionsOpportunistically();
     } catch (err) {
       const durationMs = Date.now() - startTime;
       console.error(`[AUTH ME] status=503 durationMs=${durationMs} error=SESSION_STORE_UNAVAILABLE`, (err as Error).message);

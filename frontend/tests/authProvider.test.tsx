@@ -4,6 +4,7 @@ import { createRoot, Root } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { AuthProvider, useAuth } from '../src/features/auth/AuthProvider.js';
 import { ProtectedRoute } from '../src/components/ProtectedRoute.js';
+import { Navbar } from '../src/components/Navbar.js';
 import { ThemeAccessibilityProvider } from '../src/context/ThemeAccessibilityContext.js';
 import { authApi } from '../src/features/auth/authApi.js';
 import { setCsrfToken, getCsrfToken, ApiClientError } from '../src/lib/apiClient.js';
@@ -427,5 +428,177 @@ describe('Real React AuthProvider & ProtectedRoute Authentication Test Suite', (
     expect(authContextConsumer!.error).toContain('Logout could not be confirmed with the server');
     // Content is preserved
     expect(container.textContent).toContain('Authenticated View');
+  });
+
+  it('12. Real Navbar Logout button click initiates logout, disables button during transit, prevents duplicate clicks, and transitions to login on server success', async () => {
+    let resolveLogout: (val: { success: boolean; message: string }) => void;
+    const logoutPromise = new Promise<{ success: boolean; message: string }>((resolve) => {
+      resolveLogout = resolve;
+    });
+
+    vi.spyOn(authApi, 'me').mockResolvedValue({
+      authenticated: true,
+      owner: { role: 'OWNER', phone: '9876543210' },
+    });
+    const logoutSpy = vi.spyOn(authApi, 'logout').mockReturnValue(logoutPromise);
+    setCsrfToken('active-owner-csrf-token');
+
+    await act(async () => {
+      root.render(
+        <ThemeAccessibilityProvider>
+          <AuthProvider>
+            <Navbar currentTab="khata" onTabChange={() => {}} onOpenAppearance={() => {}} />
+            <ProtectedRoute>
+              <div>Owner Dashboard Content</div>
+            </ProtectedRoute>
+          </AuthProvider>
+        </ThemeAccessibilityProvider>
+      );
+    });
+
+    // Verify initial authenticated state with dashboard and logout button
+    expect(container.textContent).toContain('Owner Dashboard Content');
+    const logoutBtn = container.querySelector('button[aria-label="Log out of Khata"]') as HTMLButtonElement;
+    expect(logoutBtn).not.toBeNull();
+    expect(logoutBtn.disabled).toBe(false);
+
+    // Click logout
+    await act(async () => {
+      logoutBtn.click();
+    });
+
+    // While in-flight: button is disabled to prevent duplicate clicks, and shows spinner/loading text
+    expect(logoutSpy).toHaveBeenCalledTimes(1);
+    expect(logoutBtn.disabled).toBe(true);
+
+    // Duplicate clicks while in-flight must be ignored
+    await act(async () => {
+      logoutBtn.click();
+    });
+    expect(logoutSpy).toHaveBeenCalledTimes(1);
+
+    // Resolve server-side logout
+    await act(async () => {
+      resolveLogout!({ success: true, message: 'Logged out successfully.' });
+      await logoutPromise;
+    });
+
+    // Verify transitions to login screen and CSRF token is cleared
+    expect(container.textContent).toContain('Owner Authentication');
+    expect(container.textContent).not.toContain('Owner Dashboard Content');
+    expect(getCsrfToken()).toBeNull();
+  });
+
+  it('13. HTTP 500 on logout preserves authentication, displays error banner in Navbar, and Retry recovers', async () => {
+    vi.spyOn(authApi, 'me').mockResolvedValue({
+      authenticated: true,
+      owner: { role: 'OWNER', phone: '9876543210' },
+    });
+    const logoutSpy = vi.spyOn(authApi, 'logout').mockRejectedValueOnce(
+      new ApiClientError('Server database failed to destroy session.', {
+        status: 500,
+        code: 'INTERNAL_ERROR',
+      })
+    );
+    setCsrfToken('preserved-csrf-token');
+
+    await act(async () => {
+      root.render(
+        <ThemeAccessibilityProvider>
+          <AuthProvider>
+            <Navbar currentTab="khata" onTabChange={() => {}} onOpenAppearance={() => {}} />
+            <ProtectedRoute>
+              <div>Owner Dashboard Content</div>
+            </ProtectedRoute>
+          </AuthProvider>
+        </ThemeAccessibilityProvider>
+      );
+    });
+
+    const logoutBtn = container.querySelector('button[aria-label="Log out of Khata"]') as HTMLButtonElement;
+    expect(logoutBtn).not.toBeNull();
+
+    // Click logout (fails with HTTP 500)
+    await act(async () => {
+      logoutBtn.click();
+    });
+
+    // Content is preserved (user is not logged out falsely)
+    expect(container.textContent).toContain('Owner Dashboard Content');
+    // Error banner is displayed in Navbar
+    expect(container.textContent).toContain('Logout could not be confirmed with the server');
+    // CSRF token is NOT cleared on 500
+    expect(getCsrfToken()).toBe('preserved-csrf-token');
+
+    // Find the Retry button in the banner
+    const retryBtn = Array.from(container.querySelectorAll('button')).find(
+      (btn) => btn.textContent?.trim() === 'Retry'
+    );
+    expect(retryBtn).toBeDefined();
+
+    // Now mock successful logout on retry
+    logoutSpy.mockResolvedValueOnce({ success: true, message: 'Logged out successfully.' });
+
+    // Click Retry
+    await act(async () => {
+      retryBtn!.click();
+    });
+
+    // Transitions to login page, error banner is gone, CSRF token is wiped
+    expect(container.textContent).toContain('Owner Authentication');
+    expect(container.textContent).not.toContain('Owner Dashboard Content');
+    expect(getCsrfToken()).toBeNull();
+  });
+
+  it('14. Network failure on logout preserves authentication and Retry completes logout when reconnected', async () => {
+    vi.spyOn(authApi, 'me').mockResolvedValue({
+      authenticated: true,
+      owner: { role: 'OWNER', phone: '9876543210' },
+    });
+    const logoutSpy = vi.spyOn(authApi, 'logout').mockRejectedValueOnce(
+      new ApiClientError('Connection timeout', {
+        code: 'NETWORK_ERROR',
+      })
+    );
+    setCsrfToken('network-preserved-csrf');
+
+    await act(async () => {
+      root.render(
+        <ThemeAccessibilityProvider>
+          <AuthProvider>
+            <Navbar currentTab="khata" onTabChange={() => {}} onOpenAppearance={() => {}} />
+            <ProtectedRoute>
+              <div>Protected Financial Data</div>
+            </ProtectedRoute>
+          </AuthProvider>
+        </ThemeAccessibilityProvider>
+      );
+    });
+
+    const logoutBtn = container.querySelector('button[aria-label="Log out of Khata"]') as HTMLButtonElement;
+
+    // Trigger logout
+    await act(async () => {
+      logoutBtn.click();
+    });
+
+    // Preserved on network failure
+    expect(container.textContent).toContain('Protected Financial Data');
+    expect(container.textContent).toContain('Logout could not be confirmed with the server');
+    expect(getCsrfToken()).toBe('network-preserved-csrf');
+
+    // Click Retry with restored connection
+    logoutSpy.mockResolvedValueOnce({ success: true, message: 'Logged out successfully.' });
+    const retryBtn = Array.from(container.querySelectorAll('button')).find(
+      (btn) => btn.textContent?.trim() === 'Retry'
+    );
+
+    await act(async () => {
+      retryBtn!.click();
+    });
+
+    expect(container.textContent).toContain('Owner Authentication');
+    expect(container.textContent).not.toContain('Protected Financial Data');
+    expect(getCsrfToken()).toBeNull();
   });
 });

@@ -29,7 +29,7 @@ services:
       - key: SESSION_SECRET
         generateValue: true
       - key: SESSION_MAX_AGE_MS
-        value: "604800000"
+        value: "2592000000"
       - key: SESSION_COOKIE_NAME
         value: khata_session
       - key: SESSION_COOKIE_SECURE

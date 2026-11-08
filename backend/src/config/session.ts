@@ -4,7 +4,18 @@ import connectPgSimple from 'connect-pg-simple';
 import { appPool } from './database.js';
 import { env } from './env.js';
 
+export const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 2592000000 ms (30 days)
+export const SESSION_PRUNE_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours cooldown for opportunistic cleanup
+
 const PgSessionStore = connectPgSimple(session);
+
+let lastPrunedAt = 0;
+let pruneInFlight: Promise<void> | null = null;
+let activeSessionStore: session.Store | null = null;
+
+export function getActiveSessionStore(): session.Store | null {
+  return activeSessionStore;
+}
 
 export class SessionStoreError extends Error {
   public readonly status = 503;
@@ -92,6 +103,60 @@ export function isSessionStoreError(err: unknown): boolean {
   );
 }
 
+/**
+ * Opportunistically prunes expired sessions using connect-pg-simple pruneSessions().
+ * Enforces a 24-hour cooldown and single-flight execution to minimize Neon compute queries.
+ * Safe, non-blocking, and never fails or blocks caller requests.
+ */
+export function pruneExpiredSessionsOpportunistically(
+  storeToPrune?: session.Store,
+  options?: { now?: () => number }
+): Promise<void> {
+  const targetStore = (storeToPrune || activeSessionStore) as (session.Store & {
+    pruneSessions?: (cb: (err?: Error) => void) => void;
+  }) | null;
+
+  if (!targetStore || typeof targetStore.pruneSessions !== 'function') {
+    return Promise.resolve();
+  }
+
+  const now = options?.now ? options.now() : Date.now();
+
+  if (now - lastPrunedAt < SESSION_PRUNE_COOLDOWN_MS) {
+    return Promise.resolve();
+  }
+
+  if (pruneInFlight) {
+    return pruneInFlight;
+  }
+
+  pruneInFlight = new Promise<void>((resolve) => {
+    try {
+      targetStore.pruneSessions!((err?: Error) => {
+        if (err) {
+          console.error('[SESSION PRUNE ERROR] Opportunistic session cleanup failed:', err.message);
+        } else {
+          lastPrunedAt = now;
+        }
+        resolve();
+      });
+    } catch (unexpectedErr) {
+      console.error('[SESSION PRUNE ERROR] Unexpected failure during session prune:', unexpectedErr);
+      resolve();
+    }
+  }).finally(() => {
+    pruneInFlight = null;
+  });
+
+  return pruneInFlight;
+}
+
+export function _resetSessionPruneStateForTesting(): void {
+  lastPrunedAt = 0;
+  pruneInFlight = null;
+  activeSessionStore = null;
+}
+
 export function createSessionMiddleware(options?: {
   useMemoryStoreInTest?: boolean;
   customStore?: session.Store;
@@ -110,8 +175,8 @@ export function createSessionMiddleware(options?: {
       pool: appPool,
       tableName: 'session',
       createTableIfMissing: false, // Migrations manage table creation
-      pruneSessionInterval: 60 * 15, // Prune expired sessions every 15 minutes
-      ttl: Math.floor(env.SESSION_MAX_AGE_MS / 1000), // In seconds
+      pruneSessionInterval: false, // Controlled cleanup: Disable background interval timer to prevent unnecessary Neon compute wakeups
+      ttl: Math.floor(env.SESSION_MAX_AGE_MS / 1000), // In seconds (2,592,000s = 30 days)
     });
 
     pgStore.on('error', (err) => {
@@ -121,12 +186,14 @@ export function createSessionMiddleware(options?: {
     store = pgStore;
   }
 
+  activeSessionStore = store;
+
   const rawSession = session({
     name: env.SESSION_COOKIE_NAME,
     secret: env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    rolling: true, // Refreshes 7-day inactivity TTL on valid activity
+    rolling: true, // Refreshes 30-day inactivity TTL on valid activity
     store,
     cookie: {
       httpOnly: env.SESSION_COOKIE_HTTP_ONLY,

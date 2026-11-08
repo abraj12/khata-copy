@@ -71,7 +71,7 @@ export const envSchema = z.object({
     .string()
     .min(32, 'SESSION_SECRET must be at least 32 characters')
     .default('super_secret_session_key_at_least_32_characters_long_khata'),
-  SESSION_MAX_AGE_MS: strictPositiveIntSchema.default(604800000), // 7 days
+  SESSION_MAX_AGE_MS: strictPositiveIntSchema.default(2592000000), // 30 days
   SESSION_COOKIE_NAME: z.string().min(1).default('khata_session'),
   SESSION_COOKIE_SECURE: booleanStringSchema.default(false),
   SESSION_COOKIE_HTTP_ONLY: booleanStringSchema.default(true),
