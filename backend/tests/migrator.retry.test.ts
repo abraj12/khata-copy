@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
+  retryTransientMigration,
   isTransientNeonConnectionError,
   MigrationSqlError,
-  runPendingMigrationsWithRetry,
 } from '../src/config/migrator.js';
 
 describe('Migrator Startup Reliability & Retry Test Suite', () => {
@@ -30,114 +30,147 @@ describe('Migrator Startup Reliability & Retry Test Suite', () => {
     expect(isTransientNeonConnectionError(fatalErr)).toBe(false);
   });
 
-  it('2. Retries transient connection errors with bounded backoff and succeeds on reconnect', async () => {
-    let callCount = 0;
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('2. Returns immediately when the migration succeeds (Test A)', async () => {
+    const operation = vi.fn().mockResolvedValue('success');
+    const sleep = vi.fn().mockResolvedValue(undefined);
 
-    // Mock an operation that fails twice with transient Neon errors and succeeds on the 3rd attempt
-    const mockRunner = vi.fn().mockImplementation(async () => {
-      callCount++;
-      if (callCount < 3) {
-        const transientErr = new Error('Connection terminated unexpectedly');
-        (transientErr as { code?: string }).code = '57P03';
-        throw transientErr;
-      }
-      return Promise.resolve();
+    const result = await retryTransientMigration(operation, {
+      sleep,
+      random: () => 0,
     });
 
-    // Run retry loop with small delay for testing
-    let attempt = 0;
-    const maxRetries = 5;
-    const initialDelayMs = 10;
-    const backoffFactor = 2;
-
-    while (true) {
-      attempt++;
-      try {
-        await mockRunner();
-        break;
-      } catch (err) {
-        if (!isTransientNeonConnectionError(err)) throw err;
-        if (attempt >= maxRetries) throw err;
-        const delay = initialDelayMs * Math.pow(backoffFactor, attempt - 1);
-        console.warn(`[MIGRATION RETRY] Attempt ${attempt}/${maxRetries}`);
-        await new Promise((r) => setTimeout(r, delay));
-      }
-    }
-
-    expect(callCount).toBe(3);
-    expect(warnSpy).toHaveBeenCalledTimes(2);
+    expect(result).toBe('success');
+    expect(operation).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 
-  it('3. Fails immediately without retry when encountering a MigrationSqlError', async () => {
-    let callCount = 0;
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('3. Retries the actual migration operation and succeeds after transient Neon failures (Test B)', async () => {
+    let attempts = 0;
 
-    const mockRunner = vi.fn().mockImplementation(async () => {
-      callCount++;
-      throw new MigrationSqlError('015_broken.sql', new Error('syntax error in migration script'));
+    const operation = vi.fn().mockImplementation(async () => {
+      attempts++;
+
+      if (attempts < 3) {
+        const error = new Error('Connection terminated unexpectedly');
+        (error as NodeJS.ErrnoException).code = '57P03';
+        throw error;
+      }
+
+      return 'connected';
     });
 
-    let caughtError: unknown = null;
-    let attempt = 0;
-    const maxRetries = 5;
+    const delays: number[] = [];
 
-    try {
-      while (true) {
-        attempt++;
-        try {
-          await mockRunner();
-          break;
-        } catch (err) {
-          if ((err as { isFatalMigrationError?: boolean }).isFatalMigrationError) {
-            throw err; // Fail-fast without retry
-          }
-          if (!isTransientNeonConnectionError(err)) throw err;
-          if (attempt >= maxRetries) throw err;
-          await new Promise((r) => setTimeout(r, 10));
-        }
-      }
-    } catch (e) {
-      caughtError = e;
-    }
+    const result = await retryTransientMigration(operation, {
+      maxRetries: 5,
+      initialDelayMs: 100,
+      maxDelayMs: 1000,
+      backoffFactor: 2,
+      random: () => 0,
+      sleep: async (ms) => {
+        delays.push(ms);
+      },
+    });
 
-    expect(callCount).toBe(1); // Exactly 1 attempt - no retries
-    expect(warnSpy).not.toHaveBeenCalled();
-    expect((caughtError as Error).message).toContain('015_broken.sql');
+    expect(result).toBe('connected');
+    expect(operation).toHaveBeenCalledTimes(3);
+    expect(delays).toEqual([100, 200]);
   });
 
-  it('4. Exhausts bounded retries if connection drops persist and reports clear failure', async () => {
-    let callCount = 0;
-    const mockRunner = vi.fn().mockImplementation(async () => {
-      callCount++;
-      const err = new Error('connect ECONNREFUSED 127.0.0.1:5432');
-      (err as { code?: string }).code = 'ECONNREFUSED';
-      throw err;
-    });
+  it('4. Does not retry deterministic SQL migration failures (Test C)', async () => {
+    const error = new MigrationSqlError(
+      '015_test.sql',
+      new Error('Syntax error in migration')
+    );
 
-    let caughtError: unknown = null;
-    let attempt = 0;
-    const maxRetries = 3;
+    const operation = vi.fn().mockRejectedValue(error);
+    const sleep = vi.fn().mockResolvedValue(undefined);
 
-    try {
-      while (true) {
-        attempt++;
-        try {
-          await mockRunner();
-          break;
-        } catch (err) {
-          if (!isTransientNeonConnectionError(err)) throw err;
-          if (attempt >= maxRetries) {
-            throw new Error(`Exhausted all ${maxRetries} connection attempts: ${(err as Error).message}`);
-          }
-          await new Promise((r) => setTimeout(r, 5));
-        }
-      }
-    } catch (e) {
-      caughtError = e;
-    }
+    await expect(
+      retryTransientMigration(operation, {
+        maxRetries: 5,
+        sleep,
+      })
+    ).rejects.toBe(error);
 
-    expect(callCount).toBe(3);
-    expect((caughtError as Error).message).toContain('Exhausted all 3 connection attempts');
+    expect(operation).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('5. Stops after the configured maximum attempts (Test D)', async () => {
+    const error = Object.assign(
+      new Error('Connection refused'),
+      { code: 'ECONNREFUSED' }
+    );
+
+    const operation = vi.fn().mockRejectedValue(error);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      retryTransientMigration(operation, {
+        maxRetries: 3,
+        initialDelayMs: 10,
+        random: () => 0,
+        sleep,
+      })
+    ).rejects.toBe(error);
+
+    expect(operation).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
+
+  it('6. Does not retry non-transient errors like SQL constraints and validation (Test E)', async () => {
+    const constraintErr = Object.assign(
+      new Error('duplicate key value violates unique constraint'),
+      { code: '23505' }
+    );
+
+    const opConstraint = vi.fn().mockRejectedValue(constraintErr);
+    const sleepConstraint = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      retryTransientMigration(opConstraint, { maxRetries: 5, sleep: sleepConstraint })
+    ).rejects.toBe(constraintErr);
+
+    expect(opConstraint).toHaveBeenCalledTimes(1);
+    expect(sleepConstraint).not.toHaveBeenCalled();
+
+    const missingTableErr = Object.assign(
+      new Error('relation "unknown_table" does not exist'),
+      { code: '42P01' }
+    );
+
+    const opTable = vi.fn().mockRejectedValue(missingTableErr);
+    await expect(
+      retryTransientMigration(opTable, { maxRetries: 5, sleep: sleepConstraint })
+    ).rejects.toBe(missingTableErr);
+
+    expect(opTable).toHaveBeenCalledTimes(1);
+  });
+
+  it('7. Validates retry configuration parameters (Test F)', async () => {
+    const operation = vi.fn().mockResolvedValue('ok');
+
+    await expect(
+      retryTransientMigration(operation, { maxRetries: 0 })
+    ).rejects.toThrow('Invalid migration retry configuration.');
+
+    await expect(
+      retryTransientMigration(operation, { maxRetries: -2 })
+    ).rejects.toThrow('Invalid migration retry configuration.');
+
+    await expect(
+      retryTransientMigration(operation, { initialDelayMs: -100 })
+    ).rejects.toThrow('Invalid migration retry configuration.');
+
+    await expect(
+      retryTransientMigration(operation, { maxDelayMs: -50 })
+    ).rejects.toThrow('Invalid migration retry configuration.');
+
+    await expect(
+      retryTransientMigration(operation, { backoffFactor: 0.5 })
+    ).rejects.toThrow('Invalid migration retry configuration.');
+
+    expect(operation).not.toHaveBeenCalled();
   });
 });

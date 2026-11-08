@@ -14,20 +14,61 @@ describe('PostgreSQL Session Store Error Handling Test Suite', () => {
     vi.restoreAllMocks();
   });
 
-  it('1. isSessionStoreError correctly identifies store connection failures', () => {
+  it('1. isSessionStoreError correctly identifies genuine store connection failures', () => {
     expect(isSessionStoreError(new SessionStoreError())).toBe(true);
     expect(isSessionStoreError({ code: 'SESSION_STORE_UNAVAILABLE' })).toBe(true);
     expect(isSessionStoreError({ code: 'ECONNREFUSED' })).toBe(true);
     expect(isSessionStoreError({ code: '57P03' })).toBe(true);
+    expect(isSessionStoreError({ code: '08006' })).toBe(true);
     expect(isSessionStoreError(new Error('Connection terminated unexpectedly'))).toBe(true);
-    expect(isSessionStoreError(new Error('Error querying session table: read ECONNRESET'))).toBe(true);
+    expect(isSessionStoreError(new Error('connection timeout'))).toBe(true);
+    expect(isSessionStoreError(new Error('read ECONNRESET'))).toBe(true);
+    expect(isSessionStoreError(new Error('server closed the connection unexpectedly'))).toBe(true);
 
     // Unrelated errors
     expect(isSessionStoreError(new Error('User not found'))).toBe(false);
     expect(isSessionStoreError({ code: 'VALIDATION_ERROR' })).toBe(false);
+    expect(isSessionStoreError(null)).toBe(false);
+    expect(isSessionStoreError(undefined)).toBe(false);
+    expect(isSessionStoreError('string error')).toBe(false);
   });
 
-  it('2. Returns HTTP 503 when session retrieval in middleware fails before authController.me', async () => {
+  it('2. Does not classify arbitrary messages containing "session" or deterministic SQL errors as transient', () => {
+    expect(
+      isSessionStoreError(
+        new Error('Invalid session configuration supplied')
+      )
+    ).toBe(false);
+
+    expect(
+      isSessionStoreError(
+        new Error('Session table does not exist')
+      )
+    ).toBe(false);
+
+    expect(
+      isSessionStoreError({
+        code: '42P01',
+        message: 'relation session does not exist',
+      })
+    ).toBe(false);
+
+    expect(
+      isSessionStoreError({
+        code: '42601',
+        message: 'syntax error at or near "FROM" in session query',
+      })
+    ).toBe(false);
+
+    expect(
+      isSessionStoreError({
+        code: '23505',
+        message: 'duplicate key value violates unique constraint on session',
+      })
+    ).toBe(false);
+  });
+
+  it('3. Returns HTTP 503 when session retrieval in middleware fails before authController.me', async () => {
     // Create a mock store where store.get fails with a database connection error
     let getCalled = false;
     class FailingSessionStore extends session.Store {
@@ -77,7 +118,7 @@ describe('PostgreSQL Session Store Error Handling Test Suite', () => {
     expect(diagLog).toContain('SESSION_STORE_UNAVAILABLE');
   });
 
-  it('3. Preserves secure error handling and redacts sensitive cookie and credential tokens', async () => {
+  it('4. Preserves secure error handling and redacts sensitive cookie and credential tokens', async () => {
     class FailingSaveSessionStore extends session.Store {
       get(_sid: string, fn: (err?: unknown, session?: session.SessionData | null) => void): void {
         fn(null, {

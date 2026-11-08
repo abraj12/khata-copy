@@ -22,16 +22,32 @@ export class SessionStoreError extends Error {
 
 /**
  * Checks whether an error is caused by a session store outage or database connectivity drop.
+ * Only genuine transient connection failures are classified as session store outages.
+ * Deterministic SQL errors (such as 42P01 undefined table or 42601 syntax errors) return false.
  */
 export function isSessionStoreError(err: unknown): boolean {
-  if (!err) return false;
-  if (err instanceof SessionStoreError) return true;
-  const error = err as { code?: string; message?: string; name?: string };
-  if (error.name === 'SessionStoreError' || error.code === 'SESSION_STORE_UNAVAILABLE') {
+  if (!err || typeof err !== 'object') {
+    return false;
+  }
+
+  if (err instanceof SessionStoreError) {
     return true;
   }
-  const msg = (error.message || '').toLowerCase();
-  const transientCodes = new Set([
+
+  const error = err as {
+    code?: string;
+    message?: string;
+    name?: string;
+  };
+
+  if (
+    error.name === 'SessionStoreError' ||
+    error.code === 'SESSION_STORE_UNAVAILABLE'
+  ) {
+    return true;
+  }
+
+  const transientPgCodes = new Set([
     'ECONNREFUSED',
     'ECONNRESET',
     'ETIMEDOUT',
@@ -51,20 +67,28 @@ export function isSessionStoreError(err: unknown): boolean {
     '57P03',
     '53300',
   ]);
-  if (error.code && transientCodes.has(error.code)) {
+
+  if (error.code && transientPgCodes.has(error.code)) {
     return true;
   }
-  return (
-    msg.includes('session') ||
-    msg.includes('connection terminated') ||
-    msg.includes('timeout exceeded') ||
-    msg.includes('connection timeout') ||
-    msg.includes('connection lost') ||
-    msg.includes('cannot connect now') ||
-    msg.includes('server closed the connection') ||
-    msg.includes('could not connect to server') ||
-    msg.includes('read econnreset') ||
-    msg.includes('socket has been ended')
+
+  const message = (error.message || '').toLowerCase();
+
+  const connectionFailurePatterns = [
+    'connection terminated unexpectedly',
+    'connection timeout',
+    'timeout exceeded when trying to connect',
+    'connection lost',
+    'cannot connect now',
+    'server closed the connection unexpectedly',
+    'could not connect to server',
+    'read econnreset',
+    'connect econnrefused',
+    'socket has been ended',
+  ];
+
+  return connectionFailurePatterns.some((pattern) =>
+    message.includes(pattern)
   );
 }
 

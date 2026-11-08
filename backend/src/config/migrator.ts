@@ -74,6 +74,88 @@ export interface MigrationRetryOptions {
   initialDelayMs?: number;
   maxDelayMs?: number;
   backoffFactor?: number;
+
+  // Injectable dependencies for deterministic unit tests.
+  sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
+}
+
+/**
+ * Executes an operation using bounded exponential-backoff retries.
+ *
+ * Only recognized transient Neon connection errors are retried.
+ * Fatal SQL migration errors and other deterministic errors fail immediately.
+ *
+ * maxRetries represents the maximum TOTAL number of attempts,
+ * including the initial attempt, preserving existing behaviour.
+ */
+export async function retryTransientMigration<T>(
+  operation: () => Promise<T>,
+  options: MigrationRetryOptions = {}
+): Promise<T> {
+  const maxRetries = options.maxRetries ?? 5;
+  const initialDelayMs = options.initialDelayMs ?? 1000;
+  const maxDelayMs = options.maxDelayMs ?? 10000;
+  const backoffFactor = options.backoffFactor ?? 2;
+
+  const sleep =
+    options.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
+  const random = options.random ?? Math.random;
+
+  if (
+    !Number.isInteger(maxRetries) ||
+    maxRetries < 1 ||
+    initialDelayMs < 0 ||
+    maxDelayMs < 0 ||
+    backoffFactor < 1
+  ) {
+    throw new Error('Invalid migration retry configuration.');
+  }
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (err) {
+      // Deterministic SQL/preflight failures must never be retried.
+      if (
+        (err as { isFatalMigrationError?: boolean })?.isFatalMigrationError ||
+        !isTransientNeonConnectionError(err)
+      ) {
+        throw err;
+      }
+
+      if (attempt >= maxRetries) {
+        console.error(
+          `[MIGRATION FAILED] Exhausted all ${maxRetries} attempts: ${
+            (err as Error).message
+          }`
+        );
+
+        throw err;
+      }
+
+      const rawDelay =
+        initialDelayMs * Math.pow(backoffFactor, attempt - 1);
+
+      const jitter = Math.floor(random() * 200);
+
+      const delay = Math.min(
+        rawDelay + jitter,
+        maxDelayMs
+      );
+
+      console.warn(
+        `[MIGRATION RETRY] Transient Neon failure on attempt ${attempt}/${maxRetries}. Retrying in ${delay}ms.`
+      );
+
+      await sleep(delay);
+    }
+  }
+
+  throw new Error('Migration retry loop terminated unexpectedly.');
 }
 
 /**
@@ -101,7 +183,7 @@ function getMigrationsDir(): string {
  * @param overrideDbUrl Optional connection string (e.g. from CLI arguments)
  */
 export async function runPendingMigrations(overrideDbUrl?: string): Promise<void> {
-  if (env.NODE_ENV === 'test') {
+  if (env.NODE_ENV === 'test' && !overrideDbUrl && process.env.NODE_ENV === 'test') {
     return;
   }
 
@@ -120,12 +202,17 @@ export async function runPendingMigrations(overrideDbUrl?: string): Promise<void
       })
     : directPool;
 
-  console.log('[MIGRATION] Connecting to PostgreSQL to verify schema migrations...');
-  const client = await activePool.connect();
+  let client: pg.PoolClient | undefined;
+  let releaseError: Error | undefined;
+  let advisoryLockAcquired = false;
 
   try {
+    console.log('[MIGRATION] Connecting to PostgreSQL to verify schema migrations...');
+    client = await activePool.connect();
+
     // 1. Acquire advisory lock
     await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_ID]);
+    advisoryLockAcquired = true;
 
     // 2. Ensure schema_migrations table exists
     await client.query(`
@@ -198,15 +285,31 @@ export async function runPendingMigrations(overrideDbUrl?: string): Promise<void
     } else {
       console.log('[MIGRATION] Schema is up to date. All migrations already applied.');
     }
+  } catch (err) {
+    releaseError = err instanceof Error ? err : new Error(String(err));
+    throw err;
   } finally {
-    try {
-      await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_ID]);
-    } catch {
-      // Ignore unlock cleanup failure if connection died
+    if (client) {
+      if (advisoryLockAcquired && !releaseError) {
+        try {
+          await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_ID]);
+        } catch (unlockError) {
+          releaseError = unlockError instanceof Error ? unlockError : new Error(String(unlockError));
+          console.error('[MIGRATION] Advisory lock cleanup failed.');
+        }
+      }
+
+      // A failed client must be discarded instead of re-entering the pool.
+      client.release(releaseError);
     }
-    client.release();
+
+    // Always close a temporary override pool, including failed connection attempts.
     if (activePool !== directPool) {
-      await activePool.end();
+      try {
+        await activePool.end();
+      } catch (closeError) {
+        console.error('[MIGRATION] Temporary pool cleanup failed:', (closeError as Error).message);
+      }
     }
   }
 }
@@ -219,52 +322,12 @@ export async function runPendingMigrationsWithRetry(
   overrideDbUrl?: string,
   options?: MigrationRetryOptions
 ): Promise<void> {
-  if (env.NODE_ENV === 'test') {
+  if (env.NODE_ENV === 'test' && !overrideDbUrl && process.env.NODE_ENV === 'test') {
     return;
   }
 
-  const maxRetries = options?.maxRetries ?? 5;
-  const initialDelayMs = options?.initialDelayMs ?? 1000;
-  const maxDelayMs = options?.maxDelayMs ?? 10000;
-  const backoffFactor = options?.backoffFactor ?? 2;
-
-  let attempt = 0;
-  while (true) {
-    attempt++;
-    try {
-      await runPendingMigrations(overrideDbUrl);
-      return;
-    } catch (err) {
-      if ((err as { isFatalMigrationError?: boolean }).isFatalMigrationError) {
-        console.error(
-          `[MIGRATION FATAL] Non-transient migration failure: ${(err as Error).message}. Startup aborted without retry.`
-        );
-        throw err;
-      }
-
-      if (!isTransientNeonConnectionError(err)) {
-        console.error(
-          `[MIGRATION FATAL] Non-connection migration error: ${(err as Error).message}. Startup aborted without retry.`
-        );
-        throw err;
-      }
-
-      if (attempt >= maxRetries) {
-        console.error(
-          `[MIGRATION FAILED] Exhausted all ${maxRetries} connection attempts to database: ${(err as Error).message}. Startup aborted.`
-        );
-        throw err;
-      }
-
-      const rawDelay = initialDelayMs * Math.pow(backoffFactor, attempt - 1);
-      const jitter = Math.floor(Math.random() * 200);
-      const delay = Math.min(rawDelay + jitter, maxDelayMs);
-
-      console.warn(
-        `[MIGRATION RETRY] Transient Neon connection failure on attempt ${attempt}/${maxRetries} (${(err as Error).message}). Retrying in ${delay}ms...`
-      );
-
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
+  await retryTransientMigration(
+    () => runPendingMigrations(overrideDbUrl),
+    options
+  );
 }

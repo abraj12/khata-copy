@@ -326,4 +326,106 @@ describe('Real React AuthProvider & ProtectedRoute Authentication Test Suite', (
     expect(container.textContent).toContain('Owner Authentication');
     expect(container.textContent).not.toContain('Authenticated View');
   });
+
+  it('10. HTTP 401 logout clears in-memory CSRF token and redirects to LoginPage', async () => {
+    let authContextConsumer: ReturnType<typeof useAuth> | null = null;
+
+    function AuthSpy() {
+      authContextConsumer = useAuth();
+      return null;
+    }
+
+    vi.spyOn(authApi, 'me').mockResolvedValue({
+      authenticated: true,
+      owner: { role: 'OWNER', phone: '9876543210' },
+    });
+    vi.spyOn(authApi, 'logout').mockRejectedValue(
+      new ApiClientError('Session expired.', {
+        status: 401,
+        code: 'UNAUTHORIZED',
+      })
+    );
+    setCsrfToken('stale-session-csrf-token');
+
+    await act(async () => {
+      root.render(
+        <ThemeAccessibilityProvider>
+          <AuthProvider>
+            <AuthSpy />
+            <ProtectedRoute>
+              <div>Authenticated View</div>
+            </ProtectedRoute>
+          </AuthProvider>
+        </ThemeAccessibilityProvider>
+      );
+    });
+
+    expect(container.textContent).toContain('Authenticated View');
+    expect(authContextConsumer!.isAuthenticated).toBe(true);
+    expect(getCsrfToken()).toBe('stale-session-csrf-token');
+
+    // Trigger logout (which encounters HTTP 401 on server)
+    await act(async () => {
+      await authContextConsumer?.logout();
+    });
+
+    // Crucial check: Auth state is cleared, owner is null, CSRF token is wiped from memory, and LoginPage is shown
+    expect(authContextConsumer!.isAuthenticated).toBe(false);
+    expect(authContextConsumer!.owner).toBeNull();
+    expect(getCsrfToken()).toBeNull();
+    expect(container.textContent).toContain('Owner Authentication');
+    expect(container.textContent).not.toContain('Authenticated View');
+  });
+
+  it('11. Network failure during logout does NOT falsely claim session was cleared on the server', async () => {
+    let authContextConsumer: ReturnType<typeof useAuth> | null = null;
+
+    function AuthSpy() {
+      authContextConsumer = useAuth();
+      return null;
+    }
+
+    vi.spyOn(authApi, 'me').mockResolvedValue({
+      authenticated: true,
+      owner: { role: 'OWNER', phone: '9876543210' },
+    });
+    vi.spyOn(authApi, 'logout').mockRejectedValue(
+      new ApiClientError('Network disconnected', {
+        code: 'NETWORK_ERROR',
+      })
+    );
+    setCsrfToken('valid-csrf-token');
+
+    await act(async () => {
+      root.render(
+        <ThemeAccessibilityProvider>
+          <AuthProvider>
+            <AuthSpy />
+            <ProtectedRoute>
+              <div>Authenticated View</div>
+            </ProtectedRoute>
+          </AuthProvider>
+        </ThemeAccessibilityProvider>
+      );
+    });
+
+    expect(authContextConsumer!.isAuthenticated).toBe(true);
+    expect(getCsrfToken()).toBe('valid-csrf-token');
+
+    // Trigger logout (which encounters network error)
+    await act(async () => {
+      try {
+        await authContextConsumer?.logout();
+      } catch {
+        // Expected logout failure error thrown
+      }
+    });
+
+    // Session is NOT falsely marked unauthenticated
+    expect(authContextConsumer!.isAuthenticated).toBe(true);
+    expect(authContextConsumer!.isOffline).toBe(true);
+    expect(authContextConsumer!.error).toContain('Logout could not be confirmed with the server');
+    // Content is preserved
+    expect(container.textContent).toContain('Authenticated View');
+  });
 });
