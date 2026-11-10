@@ -42,6 +42,8 @@ export interface Quotation {
   customer_address: string | null;
   customer_phone: string | null;
   customer_gstin: string | null;
+  customer_state?: string | null;
+  customer_state_code?: string | null;
   project_title: string | null;
   subject: string | null;
   company_snapshot: QuotationCompanySnapshot;

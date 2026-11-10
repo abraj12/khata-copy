@@ -103,13 +103,13 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
     expect(res.body.nextInvoiceNumber).toBe('004');
   });
 
-  it('2a. Suggests 001 and self-heals sequence when invoice table is empty (e.g. bills were deleted)', async () => {
+  it('2a. Suggests 001 via read-only preview when invoice table is empty without calling setval/nextval', async () => {
     const executedQueries: string[] = [];
     vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
       const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
       executedQueries.push(sqlText);
       if (sqlText.includes('MAX(') || sqlText.includes('max_num')) {
-        return { rows: [{ max_num: '0', next_num: 3 }], rowCount: 1 } as any;
+        return { rows: [{ max_num: '0', seq_last: 1, seq_called: false }], rowCount: 1 } as any;
       }
       return { rows: [], rowCount: 0 } as any;
     });
@@ -121,7 +121,8 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.nextInvoiceNumber).toBe('001');
-    expect(executedQueries.some(q => q.includes("setval('gst_invoice_number_seq', 1, false)"))).toBe(true);
+    expect(executedQueries.some(q => q.includes("setval"))).toBe(false);
+    expect(executedQueries.some(q => q.includes("nextval"))).toBe(false);
   });
 
   it('3. Creates an Intra-State GST Invoice (UP to UP) with CGST and SGST correctly calculated', async () => {

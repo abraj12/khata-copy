@@ -109,6 +109,7 @@ export const GstBillingView: React.FC = () => {
   const [isLoadingNextNum, setIsLoadingNextNum] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const idempotencyKeyRef = useRef<string>(typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
   const [successRecord, setSuccessRecord] = useState<GstInvoiceRecord | null>(null);
   const [previewInvoice, setPreviewInvoice] = useState<MannatInvoiceProps | null>(null);
   const [autoPrintAfterPreview, setAutoPrintAfterPreview] = useState(false);
@@ -473,6 +474,7 @@ export const GstBillingView: React.FC = () => {
     try {
       setIsSaving(true);
       const created = await createGstInvoice({
+        idempotencyKey: idempotencyKeyRef.current,
         invoiceNumber: isManualInvoiceNumber ? invoiceNumber.trim() || undefined : undefined,
         invoiceDate,
         state,
@@ -512,6 +514,7 @@ export const GstBillingView: React.FC = () => {
 
   // Reset form after saving
   const handleResetForm = () => {
+    idempotencyKeyRef.current = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
     setSuccessRecord(null);
     setInvoiceDate(getTodayLocalDate());
     setDateOfSupply(getTodayLocalDate());
@@ -992,7 +995,7 @@ export const GstBillingView: React.FC = () => {
 
                 {!isIntraState && (
                   <div className="text-[11px] p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 font-semibold">
-                    ⚡ Inter-State transaction detected (State Code {customerStateCode} ≠ 09). IGST will be applied automatically instead of CGST + SGST.
+                    ⚡ Inter-State transaction detected (Supplier State Code: {stateCode} ≠ Customer State Code: {customerStateCode}). IGST will be applied automatically instead of CGST + SGST.
                   </div>
                 )}
               </div>

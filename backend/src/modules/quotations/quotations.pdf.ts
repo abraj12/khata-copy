@@ -181,7 +181,12 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
 
         if (data.company.gstin) {
           doc.font('Helvetica-Bold').text(`GSTIN: ${data.company.gstin}`, margin, companyY);
-          companyY += 12;
+          companyY += 11;
+        }
+
+        if (data.company.state || data.company.stateCode) {
+          doc.font('Helvetica').text(`State: ${data.company.state || ''}${data.company.stateCode ? ` (Code: ${data.company.stateCode})` : ''}`, margin, companyY);
+          companyY += 11;
         }
 
         // Right Quotation Info Card
@@ -240,6 +245,9 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
         const custContact = [
           data.customer.phone ? `Phone: ${data.customer.phone}` : null,
           data.customer.gstin ? `GSTIN: ${data.customer.gstin}` : null,
+          (data.customer.state || data.customer.stateCode)
+            ? `State: ${data.customer.state || ''}${data.customer.stateCode ? ` (${data.customer.stateCode})` : ''}`
+            : null,
         ].filter(Boolean).join('  |  ');
         if (custContact) {
           doc.text(custContact, custBoxX + 8, custSubY, { width: custBoxWidth - 16, ellipsis: true });
@@ -429,6 +437,18 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
         doc.text(`• ${term.trim()}`, termsX + 8, termLineY, { width: termsWidth - 16 });
         termLineY += 10;
       });
+
+      if (data.company.bankName || data.company.bankAccountNumber) {
+        termLineY += 2;
+        const bankInfo = [
+          data.company.bankName ? `Bank: ${data.company.bankName}` : null,
+          data.company.bankAccountNumber ? `A/C: ${data.company.bankAccountNumber}` : null,
+          data.company.bankIfsc ? `IFSC: ${data.company.bankIfsc}` : null,
+          data.company.bankBranch ? `Branch: ${data.company.bankBranch}` : null,
+        ].filter(Boolean).join(' | ');
+        doc.font('Helvetica-Bold').text(bankInfo, termsX + 8, termLineY, { width: termsWidth - 16 });
+        termLineY += 10;
+      }
 
       if (data.notes) {
         termLineY += 2;

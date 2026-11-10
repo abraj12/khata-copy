@@ -146,14 +146,16 @@ export async function convertQuotationToBill(
   id: number,
   billType: 'normal' | 'gst',
   force: boolean = false,
-  gstRateOverride?: number | string
+  gstRateOverride?: number | string,
+  customerState?: string,
+  customerStateCode?: string
 ): Promise<{ quotation: Quotation; billType: 'normal' | 'gst'; billId: number; billNumber: string }> {
   const res = await apiClient<{
     success: boolean;
     data: { quotation: Quotation; billType: 'normal' | 'gst'; billId: number; billNumber: string };
   }>(`/api/v1/quotations/${id}/convert-to-bill`, {
     method: 'POST',
-    body: JSON.stringify({ billType, force, gstRateOverride }),
+    body: JSON.stringify({ billType, force, gstRateOverride, customerState, customerStateCode }),
   });
   return res.data?.data;
 }

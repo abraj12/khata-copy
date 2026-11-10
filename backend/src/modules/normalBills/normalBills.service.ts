@@ -1,6 +1,12 @@
+import crypto from 'crypto';
 import Decimal from 'decimal.js';
 import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
+import {
+  allocateDocumentNumber,
+  getSuggestedNextDocumentNumber,
+  NORMAL_BILL_NUMBERING_CONFIG,
+} from '../billing/numbering.js';
 import { StorageService } from '../../services/storage.service.js';
 import { AppError } from '../../utils/errors.js';
 import { validateMoneyInput, validateDecimalQuantityInput } from '../../utils/validation.js';
@@ -40,6 +46,7 @@ export interface CreateNormalBillInput {
   discountAmount?: number | string;
   items: CreateNormalBillItemInput[];
   notes?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface NormalBillRecord {
@@ -94,72 +101,16 @@ export class NormalBillsService {
     this.storageService = storageService || new StorageService();
   }
 
-  /**
-   * Generates the next sequential normal bill number from the database.
-   * Finds the maximum existing numerical bill number and increments it by 1,
-   * formatted as 3-digit padded (001, 002, 003...).
-   * Pure, idempotent, and non-destructive.
+    /**
+   * Generates the next sequential normal bill number suggestion from the database.
+   * Pure, read-only, idempotent, and non-destructive. Never calls setval() or nextval().
    */
   public async getNextBillNumber(): Promise<string> {
-    try {
-      const res = await appPool.query(`
-        SELECT GREATEST(
-          (SELECT CASE WHEN is_called THEN last_value + 1 ELSE last_value END FROM normal_bill_number_seq),
-          COALESCE((
-            SELECT MAX(
-              CASE
-                WHEN bill_number ~ '^\\d+$' THEN bill_number::BIGINT
-                WHEN regexp_replace(bill_number, '\\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\\D', '', 'g')::BIGINT
-                ELSE 0
-              END
-            ) FROM normal_bills
-          ), 0) + 1
-        ) AS next_num,
-        COALESCE((
-          SELECT MAX(
-            CASE
-              WHEN bill_number ~ '^\\d+$' THEN bill_number::BIGINT
-              WHEN regexp_replace(bill_number, '\\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\\D', '', 'g')::BIGINT
-              ELSE 0
-            END
-          ) FROM normal_bills
-        ), 0) AS max_num;
-      `);
+    return getSuggestedNextDocumentNumber(appPool, NORMAL_BILL_NUMBERING_CONFIG);
+  }
 
-      const row = res.rows[0];
-      const maxNum = Number(row?.max_num || 0);
-      let nextNum = Number(row?.next_num ?? (maxNum + 1));
-
-      if (maxNum === 0) {
-        nextNum = 1;
-        try {
-          await appPool.query("SELECT setval('normal_bill_number_seq', 1, false)");
-        } catch {
-          // Non-fatal in mock/test environments
-        }
-      } else if (nextNum > maxNum + 1) {
-        nextNum = maxNum + 1;
-        try {
-          await appPool.query("SELECT setval('normal_bill_number_seq', $1::BIGINT, true)", [maxNum]);
-        } catch {
-          // Non-fatal in mock/test environments
-        }
-      }
-
-      return String(nextNum).padStart(3, '0');
-    } catch {
-      const maxRes = await appPool.query(`
-        SELECT COALESCE(MAX(
-          CASE
-            WHEN bill_number ~ '^\\d+$' THEN bill_number::BIGINT
-            WHEN regexp_replace(bill_number, '\\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\\D', '', 'g')::BIGINT
-            ELSE 0
-          END
-        ), 0) AS max_num FROM normal_bills;
-      `);
-      const maxNum = Number(maxRes.rows[0]?.max_num || 0);
-      return String(maxNum + 1).padStart(3, '0');
-    }
+  private hashPayload(payload: unknown): string {
+    return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
   }
 
   /**
@@ -172,84 +123,8 @@ export class NormalBillsService {
       throw new AppError('At least one line item is required.', 400, 'ITEMS_REQUIRED');
     }
 
-    // 1. Resolve bill number atomically using database sequence
-    let billNumber = input.billNumber?.trim();
-    if (!billNumber) {
-      try {
-        const maxCheck = await client.query(`
-          SELECT COALESCE(MAX(
-            CASE
-              WHEN bill_number ~ '^\\d+$' THEN bill_number::BIGINT
-              WHEN regexp_replace(bill_number, '\\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\\D', '', 'g')::BIGINT
-              ELSE 0
-            END
-          ), 0) AS max_num FROM normal_bills
-        `);
-        const currentMax = Number(maxCheck.rows[0]?.max_num || 0);
-        if (currentMax === 0) {
-          await client.query("SELECT setval('normal_bill_number_seq', 1, false)");
-        } else {
-          const seqRes = await client.query("SELECT last_value FROM normal_bill_number_seq");
-          const seqLast = Number(seqRes.rows[0]?.last_value || 0);
-          if (seqLast > currentMax) {
-            await client.query("SELECT setval('normal_bill_number_seq', $1::BIGINT, true)", [currentMax]);
-          }
-        }
-      } catch {
-        // Non-fatal in mock environments
-      }
-      let attempts = 0;
-      while (attempts < 10) {
-        try {
-          const seqRes = await client.query(`SELECT nextval('normal_bill_number_seq') AS seq_num`);
-          const seqVal = seqRes.rows[0]?.seq_num;
-          if (seqVal) {
-            const candidate = String(seqVal).padStart(3, '0');
-            const exists = await client.query('SELECT 1 FROM normal_bills WHERE bill_number = $1', [candidate]);
-            if ((exists.rowCount ?? 0) === 0) {
-              billNumber = candidate;
-              break;
-            }
-          }
-        } catch {
-          break;
-        }
-        attempts++;
-      }
-
-      if (!billNumber) {
-        const maxRes = await client.query(`
-          SELECT COALESCE(MAX(
-            CASE
-              WHEN bill_number ~ '^\\d+$' THEN bill_number::BIGINT
-              WHEN regexp_replace(bill_number, '\\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\\D', '', 'g')::BIGINT
-              ELSE 0
-            END
-          ), 0) AS max_num FROM normal_bills
-        `);
-        const maxNum = Number(maxRes.rows[0]?.max_num || 0);
-        billNumber = String(maxNum + 1).padStart(3, '0');
-      }
-    } else {
-      const digits = billNumber.replace(/[^0-9]/g, '');
-      const numVal = digits ? parseInt(digits, 10) : NaN;
-      if (!isNaN(numVal) && numVal > 0) {
-        try {
-          await client.query(
-            `SELECT setval('normal_bill_number_seq', GREATEST((SELECT last_value FROM normal_bill_number_seq), $1::BIGINT), true)`,
-            [numVal]
-          );
-        } catch {
-          // Non-fatal if sequence absent in mock
-        }
-      }
-    }
-
-    // Check collision
-    const existsRes = await client.query('SELECT 1 FROM normal_bills WHERE bill_number = $1', [billNumber]);
-    if ((existsRes.rowCount ?? 0) > 0) {
-      throw new AppError(`Bill number "${billNumber}" already exists.`, 409, 'DUPLICATE_BILL_NUMBER');
-    }
+    // 1. Resolve bill number atomically using sequence advisory lock allocator
+    const billNumber = await allocateDocumentNumber(client, NORMAL_BILL_NUMBERING_CONFIG, input.billNumber);
 
     // Auto-update customer address if linked customer lacks one
     if (input.customerId && input.customerAddress?.trim()) {
@@ -448,19 +323,80 @@ export class NormalBillsService {
    * Creates a Normal Bill without GST calculations, manages transaction boundaries, and generates PDF.
    */
   public async createBill(input: CreateNormalBillInput): Promise<NormalBillRecord> {
+    const idempotencyPayload = {
+      customerId: input.customerId,
+      customerName: input.customerName?.trim(),
+      customerAddress: input.customerAddress,
+      customerPhone: input.customerPhone,
+      items: input.items,
+      discountType: input.discountType,
+      discountValue: input.discountValue,
+      discountAmount: input.discountAmount,
+      billNumber: input.billNumber,
+      billDate: input.billDate,
+    };
+    const currentHash = this.hashPayload(idempotencyPayload);
+
     const client = await appPool.connect();
     let billRecord: NormalBillRecord;
 
     try {
       await client.query('BEGIN');
+
+      if (input.idempotencyKey) {
+        const idempRes = await client.query(
+          'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
+          [input.idempotencyKey]
+        );
+        if (idempRes.rows.length > 0) {
+          const row = idempRes.rows[0];
+          if (row.request_hash === currentHash) {
+            await client.query('COMMIT');
+            return row.response_body;
+          } else {
+            throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
+          }
+        }
+      }
+
       billRecord = await this.createBillInTransaction(client, input);
+
+      if (input.idempotencyKey) {
+        await client.query(
+          `INSERT INTO idempotency_keys (key, action, request_hash, response_status, response_body, created_at)
+           VALUES ($1, $2, $3, $4, $5, NOW())`,
+          [input.idempotencyKey, 'CREATE_NORMAL_BILL', currentHash, 201, JSON.stringify(billRecord)]
+        );
+      }
+
       await client.query('COMMIT');
-    } catch (err) {
+    } catch (err: any) {
       try {
         await client.query('ROLLBACK');
       } catch {
-        // Ignore rollback failure if already rolled back
+        // Ignore rollback failure
       }
+
+      if (input.idempotencyKey && err?.code === '23505' && err?.constraint?.includes('idempotency')) {
+        try {
+          const checkRes = await appPool.query(
+            'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
+            [input.idempotencyKey]
+          );
+          if (checkRes.rows.length > 0) {
+            const row = checkRes.rows[0];
+            if (row.request_hash === currentHash) {
+              return row.response_body;
+            } else {
+              throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
+            }
+          }
+        } catch (innerErr) {
+          if (innerErr instanceof AppError) throw innerErr;
+        }
+        throw new AppError('A request with this idempotency key is currently processing. Please retry in a moment.', 409, 'IDEMPOTENCY_IN_FLIGHT');
+      }
+
       throw err;
     } finally {
       client.release();

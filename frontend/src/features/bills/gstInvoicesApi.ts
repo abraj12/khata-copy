@@ -29,6 +29,7 @@ export interface CreateGstInvoicePayload {
   gstRate: number | string;
   items: GstInvoiceItemPayload[];
   notes?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface GstInvoiceRecord {

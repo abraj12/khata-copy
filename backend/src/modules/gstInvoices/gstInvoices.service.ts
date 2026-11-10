@@ -1,6 +1,13 @@
+import crypto from 'crypto';
 import Decimal from 'decimal.js';
 import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
+import {
+  allocateDocumentNumber,
+  getSuggestedNextDocumentNumber,
+  GST_INVOICE_NUMBERING_CONFIG,
+} from '../billing/numbering.js';
+import { normalizeGstStateCode, validateGstinForState } from '../../utils/indianTax.js';
 import { StorageService } from '../../services/storage.service.js';
 import { AppError } from '../../utils/errors.js';
 import { validateMoneyInput, validateDecimalQuantityInput } from '../../utils/validation.js';
@@ -43,6 +50,7 @@ export interface CreateGstInvoiceInput {
   discountAmount?: number | string;
   items: CreateGstInvoiceItemInput[];
   notes?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface GstInvoiceRecord {
@@ -105,72 +113,16 @@ export class GstInvoicesService {
     this.storageService = storageService || new StorageService();
   }
 
-  /**
-   * Generates the next sequential invoice number from the database.
-   * Finds the maximum existing numerical invoice number and increments it by 1,
-   * formatted as 3-digit padded (001, 002, 003...).
-   * Pure, idempotent, and non-destructive.
+    /**
+   * Generates the next sequential invoice number suggestion from the database.
+   * Pure, read-only, idempotent, and non-destructive. Never calls setval() or nextval().
    */
   public async getNextInvoiceNumber(): Promise<string> {
-    try {
-      const res = await appPool.query(`
-        SELECT GREATEST(
-          (SELECT CASE WHEN is_called THEN last_value + 1 ELSE last_value END FROM gst_invoice_number_seq),
-          COALESCE((
-            SELECT MAX(
-              CASE
-                WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
-                WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
-                ELSE 0
-              END
-            ) FROM gst_invoices
-          ), 0) + 1
-        ) AS next_num,
-        COALESCE((
-          SELECT MAX(
-            CASE
-              WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
-              WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
-              ELSE 0
-            END
-          ) FROM gst_invoices
-        ), 0) AS max_num;
-      `);
+    return getSuggestedNextDocumentNumber(appPool, GST_INVOICE_NUMBERING_CONFIG);
+  }
 
-      const row = res.rows[0];
-      const maxNum = Number(row?.max_num || 0);
-      let nextNum = Number(row?.next_num ?? (maxNum + 1));
-
-      if (maxNum === 0) {
-        nextNum = 1;
-        try {
-          await appPool.query("SELECT setval('gst_invoice_number_seq', 1, false)");
-        } catch {
-          // Non-fatal in mock/test environments
-        }
-      } else if (nextNum > maxNum + 1) {
-        nextNum = maxNum + 1;
-        try {
-          await appPool.query("SELECT setval('gst_invoice_number_seq', $1::BIGINT, true)", [maxNum]);
-        } catch {
-          // Non-fatal in mock/test environments
-        }
-      }
-
-      return String(nextNum).padStart(3, '0');
-    } catch {
-      const maxRes = await appPool.query(`
-        SELECT COALESCE(MAX(
-          CASE
-            WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
-            WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
-            ELSE 0
-          END
-        ), 0) AS max_num FROM gst_invoices;
-      `);
-      const maxNum = Number(maxRes.rows[0]?.max_num || 0);
-      return String(maxNum + 1).padStart(3, '0');
-    }
+  private hashPayload(payload: unknown): string {
+    return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
   }
 
   /**
@@ -183,84 +135,8 @@ export class GstInvoicesService {
       throw new AppError('At least one line item is required.', 400, 'ITEMS_REQUIRED');
     }
 
-    // 1. Resolve invoice number atomically using database sequence
-    let invoiceNumber = input.invoiceNumber?.trim();
-    if (!invoiceNumber) {
-      try {
-        const maxCheck = await client.query(`
-          SELECT COALESCE(MAX(
-            CASE
-              WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
-              WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
-              ELSE 0
-            END
-          ), 0) AS max_num FROM gst_invoices
-        `);
-        const currentMax = Number(maxCheck.rows[0]?.max_num || 0);
-        if (currentMax === 0) {
-          await client.query("SELECT setval('gst_invoice_number_seq', 1, false)");
-        } else {
-          const seqRes = await client.query("SELECT last_value FROM gst_invoice_number_seq");
-          const seqLast = Number(seqRes.rows[0]?.last_value || 0);
-          if (seqLast > currentMax) {
-            await client.query("SELECT setval('gst_invoice_number_seq', $1::BIGINT, true)", [currentMax]);
-          }
-        }
-      } catch {
-        // Non-fatal in mock environments
-      }
-      let attempts = 0;
-      while (attempts < 10) {
-        try {
-          const seqRes = await client.query(`SELECT nextval('gst_invoice_number_seq') AS seq_num`);
-          const seqVal = seqRes.rows[0]?.seq_num;
-          if (seqVal) {
-            const candidate = String(seqVal).padStart(3, '0');
-            const exists = await client.query('SELECT 1 FROM gst_invoices WHERE invoice_number = $1', [candidate]);
-            if ((exists.rowCount ?? 0) === 0) {
-              invoiceNumber = candidate;
-              break;
-            }
-          }
-        } catch {
-          break;
-        }
-        attempts++;
-      }
-
-      if (!invoiceNumber) {
-        const maxRes = await client.query(`
-          SELECT COALESCE(MAX(
-            CASE
-              WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
-              WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
-              ELSE 0
-            END
-          ), 0) AS max_num FROM gst_invoices
-        `);
-        const maxNum = Number(maxRes.rows[0]?.max_num || 0);
-        invoiceNumber = String(maxNum + 1).padStart(3, '0');
-      }
-    } else {
-      const digits = invoiceNumber.replace(/[^0-9]/g, '');
-      const numVal = digits ? parseInt(digits, 10) : NaN;
-      if (!isNaN(numVal) && numVal > 0) {
-        try {
-          await client.query(
-            `SELECT setval('gst_invoice_number_seq', GREATEST((SELECT last_value FROM gst_invoice_number_seq), $1::BIGINT), true)`,
-            [numVal]
-          );
-        } catch {
-          // Non-fatal if sequence absent in mock
-        }
-      }
-    }
-
-    // Check collision
-    const existsRes = await client.query('SELECT 1 FROM gst_invoices WHERE invoice_number = $1', [invoiceNumber]);
-    if ((existsRes.rowCount ?? 0) > 0) {
-      throw new AppError(`Invoice number "${invoiceNumber}" already exists.`, 409, 'DUPLICATE_INVOICE_NUMBER');
-    }
+    // 1. Resolve invoice number atomically using sequence advisory lock allocator
+    const invoiceNumber = await allocateDocumentNumber(client, GST_INVOICE_NUMBERING_CONFIG, input.invoiceNumber);
 
     // Auto-update customer address if linked customer lacks one
     if (input.customerId && input.customerAddress?.trim()) {
@@ -313,8 +189,9 @@ export class GstInvoicesService {
     const taxableAmountDec = subtotalDec.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 
     // 4. Tax calculations (Intra-state vs Inter-state)
-    const shopStateCode = (input.stateCode || '10').trim();
-    const customerStateCode = (input.customerStateCode || '10').trim();
+    const shopStateCode = normalizeGstStateCode(input.stateCode || '10');
+    const customerStateCode = normalizeGstStateCode(input.customerStateCode);
+    validateGstinForState(input.customerGstin, customerStateCode);
     const isIntraState = shopStateCode === customerStateCode;
 
     const gstRateDec = new Decimal(input.gstRate || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
@@ -437,19 +314,83 @@ export class GstInvoicesService {
    * Creates a GST Tax Invoice, manages transaction boundaries, and generates PDF.
    */
   public async createInvoice(input: CreateGstInvoiceInput): Promise<GstInvoiceRecord> {
+    const idempotencyPayload = {
+      customerId: input.customerId,
+      customerName: input.customerName?.trim(),
+      customerAddress: input.customerAddress,
+      customerPhone: input.customerPhone,
+      customerGstin: input.customerGstin,
+      customerStateCode: input.customerStateCode,
+      gstRate: input.gstRate,
+      items: input.items,
+      discountType: input.discountType,
+      discountValue: input.discountValue,
+      discountAmount: input.discountAmount,
+      invoiceNumber: input.invoiceNumber,
+      invoiceDate: input.invoiceDate,
+    };
+    const currentHash = this.hashPayload(idempotencyPayload);
+
     const client = await appPool.connect();
     let createdInvoice: GstInvoiceRecord;
 
     try {
       await client.query('BEGIN');
+
+      if (input.idempotencyKey) {
+        const idempRes = await client.query(
+          'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
+          [input.idempotencyKey]
+        );
+        if (idempRes.rows.length > 0) {
+          const row = idempRes.rows[0];
+          if (row.request_hash === currentHash) {
+            await client.query('COMMIT');
+            return row.response_body;
+          } else {
+            throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
+          }
+        }
+      }
+
       createdInvoice = await this.createInvoiceInTransaction(client, input);
+
+      if (input.idempotencyKey) {
+        await client.query(
+          `INSERT INTO idempotency_keys (key, action, request_hash, response_status, response_body, created_at)
+           VALUES ($1, $2, $3, $4, $5, NOW())`,
+          [input.idempotencyKey, 'CREATE_GST_INVOICE', currentHash, 201, JSON.stringify(createdInvoice)]
+        );
+      }
+
       await client.query('COMMIT');
-    } catch (err) {
+    } catch (err: any) {
       try {
         await client.query('ROLLBACK');
       } catch {
-        // Ignore rollback failure if already rolled back
+        // Ignore rollback failure
       }
+
+      if (input.idempotencyKey && err?.code === '23505' && err?.constraint?.includes('idempotency')) {
+        try {
+          const checkRes = await appPool.query(
+            'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
+            [input.idempotencyKey]
+          );
+          if (checkRes.rows.length > 0) {
+            const row = checkRes.rows[0];
+            if (row.request_hash === currentHash) {
+              return row.response_body;
+            } else {
+              throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
+            }
+          }
+        } catch (innerErr) {
+          if (innerErr instanceof AppError) throw innerErr;
+        }
+        throw new AppError('A request with this idempotency key is currently processing. Please retry in a moment.', 409, 'IDEMPOTENCY_IN_FLIGHT');
+      }
+
       throw err;
     } finally {
       client.release();

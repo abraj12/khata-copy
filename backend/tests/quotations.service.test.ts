@@ -58,8 +58,9 @@ describe('Professional Quotations Module Test Suite', () => {
             { version: '015_product_barcode.sql' },
             { version: '016_quotations.sql' },
             { version: '017_quotation_conversion_financial_fields.sql' },
+            { version: '018_numbering_and_legacy_data_integrity.sql' },
           ],
-          rowCount: 4,
+          rowCount: 5,
         } as any;
       }
       if (sqlText.includes('FROM quotation_settings')) {

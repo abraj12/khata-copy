@@ -157,6 +157,7 @@ export const NormalBillingView: React.FC = () => {
 
   const customerDropdownRef = useRef<HTMLDivElement>(null);
   const productPickerRef = useRef<HTMLDivElement>(null);
+  const idempotencyKeyRef = useRef<string>(typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
 
   // 1. Fetch next sequential bill number on mount
   const fetchNextNumber = async () => {
@@ -557,6 +558,7 @@ export const NormalBillingView: React.FC = () => {
     try {
       setIsSaving(true);
       const payload: CreateNormalBillPayload = {
+        idempotencyKey: idempotencyKeyRef.current,
         billNumber: isManualBillNumber ? billNumber.trim() || undefined : undefined,
         billDate: billDate || undefined,
         state,
@@ -619,6 +621,7 @@ export const NormalBillingView: React.FC = () => {
     ]);
     setNotes('');
     setErrorMessage(null);
+    idempotencyKeyRef.current = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
     setSuccessRecord(null);
     fetchNextNumber();
   };

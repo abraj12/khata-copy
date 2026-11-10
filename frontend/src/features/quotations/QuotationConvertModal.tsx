@@ -3,6 +3,7 @@ import { X, ArrowRight, FileText, CheckCircle, AlertTriangle, Loader2 } from 'lu
 import { Quotation } from './quotation.types.js';
 import { convertQuotationToBill } from './quotationApi.js';
 import { formatCurrency } from '../../lib/formatters.js';
+import { INDIAN_STATES } from '../../lib/indianStates.js';
 
 export interface QuotationConvertModalProps {
   isOpen: boolean;
@@ -19,6 +20,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
 }) => {
   const [billType, setBillType] = useState<'normal' | 'gst'>('normal');
   const [gstRateOverride, setGstRateOverride] = useState<number>(18);
+  const [selectedStateCode, setSelectedStateCode] = useState<string>(quotation?.customer_state_code || '10');
   const [force, setForce] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +38,10 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
 
     try {
       const appliedRate = (!quotation.gst_enabled && billType === 'gst') ? gstRateOverride : undefined;
-      const result = await convertQuotationToBill(quotation.id, billType, force, appliedRate);
+      const selectedStateObj = INDIAN_STATES.find((s) => s.code === selectedStateCode);
+      const custState = quotation.customer_state || selectedStateObj?.name;
+      const custStateCode = quotation.customer_state_code || selectedStateCode;
+      const result = await convertQuotationToBill(quotation.id, billType, force, appliedRate, custState, custStateCode);
       onConverted(result.billType, result.billId, result.billNumber);
       onClose();
     } catch (err: any) {
@@ -190,6 +195,30 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Buyer State selector for legacy quotations missing state code */}
+        {billType === 'gst' && !quotation.customer_state_code && (
+          <div className="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs space-y-2">
+            <div className="flex items-center gap-2 text-amber-500 font-bold">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+              <span>Legacy Quotation: Buyer State Required</span>
+            </div>
+            <p className="text-[11px] text-[var(--khata-text-muted)]">
+              This quotation was created without recorded buyer state. Select the customer's state for accurate GST tax calculation:
+            </p>
+            <select
+              value={selectedStateCode}
+              onChange={(e) => setSelectedStateCode(e.target.value)}
+              className="neu-input w-full text-xs font-medium"
+            >
+              {INDIAN_STATES.map((s) => (
+                <option key={s.code} value={s.code}>
+                  {s.code} – {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Explicit GST Rate selector when converting GST-disabled quotation to GST Tax Invoice */}
         {billType === 'gst' && !quotation.gst_enabled && (

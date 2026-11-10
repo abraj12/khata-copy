@@ -19,7 +19,7 @@ Rather than bundling static web assets inside the APK (which would require gener
 
 ### Key Benefits:
 1. **Immediate Frontend Updates:** Any frontend change deployed to `https://erp.algions.in` is immediately reflected in the installed Android application on refresh or reopen via the Network-First Service Worker (`sw.js`). No new APK rebuild is required.
-2. **Single Shopkeeper Experience:** Both the browser website and the installed Android app communicate with the same backend API (`https://api-erp.algions.in`) and the same Neon PostgreSQL database.
+2. **Single Shopkeeper Experience:** Both the browser website and the installed Android app communicate with the same backend API (`https://erp-api.algions.in`) and the same Neon PostgreSQL database.
 3. **Full Screen Chrome-Free Experience:** When Digital Asset Links verification succeeds, the browser URL address bar is hidden completely, presenting an app experience indistinguishable from a native application.
 4. **Lightweight APK:** Zero bundled HTML/JS assets inside the binary.
 

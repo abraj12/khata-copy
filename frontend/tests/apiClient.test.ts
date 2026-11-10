@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   apiClient,
+  apiClientBlob,
   ApiClientError,
   setCsrfToken,
   getCsrfToken,
@@ -282,5 +283,71 @@ describe('Frontend API Client Test Suite (Timeouts, Errors, Credentials & CSRF)'
     expect(AUTH_CHECK_TIMEOUT_MS).toBe(75_000);
     expect(DEFAULT_REQUEST_TIMEOUT_MS).toBe(30_000);
     expect(CSRF_REQUEST_TIMEOUT_MS).toBe(45_000);
+  });
+  it('16. apiClientBlob returns blob and filename header on success', async () => {
+    const mockBlob = new Blob(['%PDF-1.4 test'], { type: 'application/pdf' });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({
+        'content-disposition': 'attachment; filename="quotation-123.pdf"',
+      }),
+      blob: async () => mockBlob,
+    } as any);
+
+    const res = await apiClientBlob('/api/v1/quotations/1/pdf');
+    expect(res).toBe(mockBlob);
+  });
+
+  it('17. apiClientBlob converts abort to REQUEST_ABORTED when signal is aborted', async () => {
+    const controller = new AbortController();
+    global.fetch = vi.fn().mockImplementation((_url, opts) => {
+      return new Promise((_, reject) => {
+        opts.signal.addEventListener('abort', () => {
+          const err = new Error('The user aborted a request.');
+          err.name = 'AbortError';
+          reject(err);
+        });
+      });
+    });
+
+    const promise = apiClientBlob('/api/v1/slow-pdf', { signal: controller.signal });
+    controller.abort();
+
+    await expect(promise).rejects.toMatchObject({
+      code: 'REQUEST_ABORTED',
+    });
+  });
+
+  it('18. Non-CSRF 403 (e.g. Origin rejected) does not attempt to refresh CSRF token', async () => {
+    setCsrfToken('existing_token_xyz');
+    let csrfFetched = false;
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/v1/auth/csrf-token')) {
+        csrfFetched = true;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ csrfToken: 'new_token' }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 403,
+        text: async () => JSON.stringify({ success: false, message: 'Forbidden origin' }),
+      } as Response);
+    });
+
+    await expect(
+      apiClient('/api/v1/khata/transactions', {
+        method: 'POST',
+        body: JSON.stringify({ amount: 100 }),
+      })
+    ).rejects.toMatchObject({
+      status: 403,
+      code: 'FORBIDDEN',
+    });
+
+    expect(csrfFetched).toBe(false);
   });
 });

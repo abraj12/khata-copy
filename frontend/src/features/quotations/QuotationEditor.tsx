@@ -29,6 +29,16 @@ import { fetchProductByBarcode } from '../barcode/barcodeApi.js';
 import { QuotationPreview } from './QuotationPreview.js';
 import { apiClient } from '../../lib/apiClient.js';
 import { formatCurrency } from '../../lib/formatters.js';
+import { INDIAN_STATES } from '../../lib/indianStates.js';
+
+function addLocalCalendarDays(days: number): string {
+  const today = new Date();
+  const result = new Date(today.getFullYear(), today.getMonth(), today.getDate() + days);
+  const year = result.getFullYear();
+  const month = String(result.getMonth() + 1).padStart(2, '0');
+  const day = String(result.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 export interface QuotationEditorProps {
   onCancel: () => void;
@@ -120,10 +130,8 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
           setQuotationNumber(nextNum);
           setSettings(s);
 
-          // Calculate default valid until
-          const d = new Date();
-          d.setDate(d.getDate() + (s?.standard_validity_days || 30));
-          setValidUntil(d.toISOString().split('T')[0]);
+          // Calculate default valid until without UTC timezone shift
+          setValidUntil(addLocalCalendarDays(s?.standard_validity_days || 30));
 
           // Default terms
           const defaultTerms = [
@@ -158,12 +166,12 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     const t = setTimeout(async () => {
       setIsSearchingCustomer(true);
       try {
-        const res = await apiClient<{ success: boolean; data: any[] }>(
+        const res = await apiClient<{ success: boolean; customers: any[] }>(
           `/api/v1/khata/customers?search=${encodeURIComponent(customerSearch.trim())}&limit=5`,
           { method: 'GET' }
         );
         if (currentReqId === customerReqIdRef.current) {
-          setMatchedCustomers(res.data?.data || []);
+          setMatchedCustomers(res.data?.customers || []);
         }
       } catch {
         if (currentReqId === customerReqIdRef.current) {
@@ -185,11 +193,14 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     setCustomerPhone(c.phone || '');
     setCustomerAddress(c.address || '');
     setCustomerGstin(c.gstin || '');
-    if (c.state) {
-      setCustomerState(c.state);
-    }
     if (c.state_code) {
       setCustomerStateCode(c.state_code);
+      const st = INDIAN_STATES.find((s) => s.code === c.state_code);
+      if (st) setCustomerState(st.name);
+    } else if (c.state) {
+      setCustomerState(c.state);
+      const st = INDIAN_STATES.find((s) => s.name.toLowerCase() === c.state.toLowerCase());
+      if (st) setCustomerStateCode(st.code);
     }
     setCustomerSearch('');
     setMatchedCustomers([]);
@@ -514,7 +525,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
             ) : (
               <Send className="w-4 h-4" />
             )}
-            <span>Save & Send</span>
+            <span>Save & Mark as Sent</span>
           </button>
         </div>
       </div>
@@ -616,7 +627,10 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
               <input
                 type="text"
                 value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
+                onChange={(e) => {
+                  setCustomerName(e.target.value);
+                  setCustomerId(null);
+                }}
                 placeholder="e.g. Acme Corporation"
                 className="neu-input w-full text-xs font-medium"
               />
@@ -650,16 +664,25 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
 
             <div>
               <label className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1">
-                State Code
+                Customer State <span className="text-rose-500">*</span>
               </label>
-              <input
-                type="text"
+              <select
                 value={customerStateCode}
-                onChange={(e) => setCustomerStateCode(e.target.value)}
-                placeholder="e.g. 10 (Bihar)"
-                maxLength={2}
-                className="neu-input w-full text-xs font-mono font-medium"
-              />
+                onChange={(e) => {
+                  const st = INDIAN_STATES.find((s) => s.code === e.target.value);
+                  if (st) {
+                    setCustomerStateCode(st.code);
+                    setCustomerState(st.name);
+                  }
+                }}
+                className="neu-input w-full text-xs font-medium"
+              >
+                {INDIAN_STATES.map((s) => (
+                  <option key={s.code} value={s.code}>
+                    {s.code} – {s.name}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
@@ -1254,7 +1277,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
             ) : (
               <Send className="w-4 h-4" />
             )}
-            <span>Save & Send Quotation</span>
+            <span>Save & Mark as Sent</span>
           </button>
         </div>
       </div>

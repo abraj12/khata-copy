@@ -69,6 +69,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '015_product_barcode.sql' },
             { version: '016_quotations.sql' },
             { version: '017_quotation_conversion_financial_fields.sql' },
+            { version: '018_numbering_and_legacy_data_integrity.sql' },
             {
             version: '011_gst_invoices.sql',
           },
@@ -76,7 +77,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             version: '012_normal_bills.sql',
           },
           ],
-          rowCount: 17,
+          rowCount: 18,
         } as any;
       }
       return { rows: [], rowCount: 0 } as any;
@@ -610,16 +611,16 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     expect(status.isLocked).toBe(false);
   });
 
-  // TEST CASE 35: Readiness probe returns healthy when tables and migrations are present
-  it('35. Readiness probe /api/v1/health/ready checks connection, schema_migrations, and all core tables', async () => {
+  // TEST CASE 35: Readiness probe returns healthy minimal response without leaking schema internals
+  it('35. Readiness probe /api/v1/health/ready returns minimal ready status and does NOT disclose internal schema or migration details', async () => {
     const res = await request(app).get('/api/v1/health/ready');
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ready');
-    expect(res.body.database.isReady).toBe(true);
-    expect(res.body.database.checks.connection).toBe(true);
-    expect(res.body.database.checks.schemaMigrationsTable).toBe(true);
-    expect(res.body.database.checks.migrationsApplied.missing.length).toBe(0);
-    expect(res.body.database.checks.coreTables.missing.length).toBe(0);
+    expect(res.body.timestamp).toBeDefined();
+    expect(res.body.database).toBeUndefined();
+    expect(res.body.checks).toBeUndefined();
+    expect(res.body.migrationsApplied).toBeUndefined();
+    expect(res.body.coreTables).toBeUndefined();
   });
 
   // TEST CASE 36: LoginAttemptStore background pruning handles connection failure safely
@@ -684,12 +685,12 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringMatching(/\[AUTH ME\] status=200 durationMs=\d+ authenticated=true/));
   });
 
-  // TEST CASE 40: Readiness probe returns 503 when database is unready
+  // TEST CASE 40: Readiness probe returns 503 when database is unready without leaking internals
   it('40. Readiness probe /api/v1/health/ready returns 503 when database is unavailable', async () => {
     vi.spyOn(appPool, 'query').mockRejectedValueOnce(new Error('Connection refused'));
     const res = await request(app).get('/api/v1/health/ready');
     expect(res.status).toBe(503);
     expect(res.body.status).toBe('unready');
-    expect(res.body.database.isReady).toBe(false);
+    expect(res.body.database).toBeUndefined();
   });
 });

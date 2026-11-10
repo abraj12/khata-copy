@@ -40,6 +40,8 @@ services:
         value: lax
       - key: FRONTEND_URL
         value: https://erp.algions.in
+      - key: BUSINESS_TIME_ZONE
+        value: Asia/Kolkata
       - key: LOGIN_MAX_ATTEMPTS
         value: "5"
       - key: LOGIN_FAILURE_WINDOW_MS

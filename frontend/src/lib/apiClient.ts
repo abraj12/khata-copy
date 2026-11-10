@@ -264,8 +264,29 @@ export async function apiClientBlob(
   endpoint: string,
   options: ApiClientOptions = {}
 ): Promise<Blob> {
-  const url = `${API_BASE_URL}${endpoint}`;
   const method = (options.method || 'GET').toUpperCase();
+  const url = `${API_BASE_URL}${endpoint}`;
+
+  const controller = new AbortController();
+  let didTimeout = false;
+
+  const externalSignal = options.signal;
+  const abortFromExternal = () => {
+    controller.abort();
+  };
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort();
+    } else {
+      externalSignal.addEventListener('abort', abortFromExternal, { once: true });
+    }
+  }
+
+  const timeoutId = setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
 
   const headers: Record<string, string> = {
     ...(options.headers as Record<string, string>),
@@ -274,8 +295,6 @@ export async function apiClientBlob(
   if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json';
   }
-
-  const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
     if (!inMemoryCsrfToken) {
@@ -286,23 +305,35 @@ export async function apiClientBlob(
     }
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
     const response = await fetch(url, {
       ...options,
-      signal: options.signal || controller.signal,
+      method,
       credentials: 'include',
       headers,
+      signal: controller.signal,
+      cache: 'no-store',
     });
 
     if (!response.ok) {
-      if (response.status === 403 && !options._isCsrfRetry) {
+      const errorText = await response.text();
+      let payload: any = {};
+      try {
+        payload = errorText ? JSON.parse(errorText) : {};
+      } catch {
+        payload = {};
+      }
+
+      const isCsrfFailure =
+        response.status === 403 &&
+        /csrf.*(token|invalid|missing)|(token).*(csrf)/i.test(payload.message || '');
+
+      if (isCsrfFailure && !options._isCsrfRetry) {
         const refreshedToken = await fetchCsrfToken();
         if (refreshedToken) {
           return apiClientBlob(endpoint, {
             ...options,
+            signal: externalSignal,
             headers: {
               ...headers,
               'X-CSRF-Token': refreshedToken,
@@ -311,20 +342,34 @@ export async function apiClientBlob(
           });
         }
       }
-      let errMsg = 'Blob request failed with status ' + response.status;
-      try {
-        const text = await response.text();
-        const json = JSON.parse(text);
-        if (json.message) errMsg = json.message;
-      } catch {}
-      throw new ApiClientError(errMsg, {
-        status: response.status,
-        code: response.status === 403 ? 'FORBIDDEN' : 'BLOB_ERROR',
-      });
+
+      throw new ApiClientError(
+        payload.message || `Blob request failed with status ${response.status}`,
+        {
+          status: response.status,
+          code: payload.code || (response.status === 403 ? 'FORBIDDEN' : 'BLOB_ERROR'),
+          payload,
+        }
+      );
     }
 
     return await response.blob();
+  } catch (error) {
+    if (error instanceof ApiClientError) {
+      throw error;
+    }
+
+    if (didTimeout) {
+      throw new ApiClientError('The request timed out.', { code: 'REQUEST_TIMEOUT' });
+    }
+
+    if (externalSignal?.aborted) {
+      throw new ApiClientError('The request was cancelled.', { code: 'REQUEST_ABORTED' });
+    }
+
+    throw error;
   } finally {
     clearTimeout(timeoutId);
+    externalSignal?.removeEventListener('abort', abortFromExternal);
   }
 }

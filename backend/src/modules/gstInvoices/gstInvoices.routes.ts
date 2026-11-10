@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { gstInvoicesService } from './gstInvoices.service.js';
+import { isValidCalendarDate as checkCalendarDate } from '../../utils/businessDate.js';
 
 const router = Router();
 
@@ -10,14 +11,7 @@ router.use(requireOwnerSession);
 
 function isValidCalendarDate(val?: string | null): boolean {
   if (!val) return true;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(val)) return false;
-  const [yStr, mStr, dStr] = val.split('-');
-  const y = Number(yStr);
-  const m = Number(mStr);
-  const d = Number(dStr);
-  if (y < 1900 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return false;
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+  return checkCalendarDate(val);
 }
 
 const optionalIntegerIdSchema = z
@@ -74,6 +68,7 @@ const createGstInvoiceSchema = z.object({
   discountAmount: z.union([z.number(), z.string()]).optional(),
   items: z.array(gstInvoiceItemSchema).min(1, 'At least one item is required in the invoice').max(20, 'A single invoice can have at most 20 line items to ensure standard A4 print layout integrity'),
   notes: z.string().trim().max(1000).nullable().optional(),
+  idempotencyKey: z.string().trim().nullable().optional(),
 });
 
 const listInvoicesQuerySchema = z.object({
@@ -112,7 +107,11 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       return;
     }
 
-    const created = await gstInvoicesService.createInvoice(parsed.data);
+    const idempotencyKey = (req.headers['idempotency-key'] as string) || parsed.data.idempotencyKey || null;
+    const created = await gstInvoicesService.createInvoice({
+      ...parsed.data,
+      idempotencyKey,
+    });
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     next(err);

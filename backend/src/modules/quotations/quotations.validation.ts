@@ -1,16 +1,7 @@
 import { z } from 'zod';
 
-/**
- * Validates that a string is a real Gregorian calendar date in YYYY-MM-DD format.
- * Prevents invalid dates like 2026-02-30 or 2026-04-31.
- */
-export function isValidCalendarDate(str: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return false;
-  const [y, m, d] = str.split('-').map(Number);
-  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
-  const date = new Date(y, m - 1, d);
-  return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
-}
+import { isValidCalendarDate } from '../../utils/businessDate.js';
+export { isValidCalendarDate };
 
 export const quantityValidator = z.union([z.number(), z.string()]).refine((val) => {
   const s = String(val).trim();
@@ -94,6 +85,8 @@ export const convertToBillSchema = z.object({
   billType: z.enum(['normal', 'gst']),
   force: z.boolean().optional().default(false),
   gstRateOverride: gstRateValidator.optional(),
+  customerState: z.string().trim().max(100).optional(),
+  customerStateCode: z.string().trim().max(10).optional(),
 });
 
 export const quotationSettingsSchema = z.object({

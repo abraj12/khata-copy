@@ -82,22 +82,21 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean; customStor
     const dbStatus = await checkDatabaseReadiness();
 
     if (!dbStatus.isReady) {
+      console.warn('[DATABASE READINESS UNREADY]', {
+        latencyMs: dbStatus.latencyMs,
+        checks: dbStatus.checks,
+        error: dbStatus.error,
+      });
       res.status(503).json({
         status: 'unready',
-        database: {
-          isReady: false,
-          latencyMs: dbStatus.latencyMs,
-          checks: dbStatus.checks,
-          error: dbStatus.error,
-        },
-        message: 'Database service is unready: missing tables or unapplied migrations.',
+        message: 'Database service is unready.',
+        timestamp: new Date().toISOString(),
       });
       return;
     }
 
     res.status(200).json({
       status: 'ready',
-      database: dbStatus,
       timestamp: new Date().toISOString(),
     });
   });

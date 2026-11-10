@@ -80,6 +80,9 @@ export const envSchema = z.object({
   // Frontend origin for credentialed CORS
   FRONTEND_URL: z.string().url().default('https://erp.algions.in'),
 
+  // Configured Business Timezone
+  BUSINESS_TIME_ZONE: z.string().default('Asia/Kolkata'),
+
   // Login abuse protection thresholds
   LOGIN_MAX_ATTEMPTS: strictPositiveIntSchema.default(5),
   LOGIN_FAILURE_WINDOW_MS: strictPositiveIntSchema.default(900000), // 15 mins

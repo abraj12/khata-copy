@@ -28,6 +28,7 @@ export interface CreateNormalBillPayload {
   customerStateCode?: string;
   items: NormalBillItemPayload[];
   notes?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface NormalBillRecord {

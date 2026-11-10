@@ -1,7 +1,10 @@
 import Decimal from 'decimal.js';
 import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
+import { env } from '../../config/env.js';
 import { AppError } from '../../utils/errors.js';
+import { getBusinessDateISO } from '../../utils/businessDate.js';
+import { normalizeGstStateCode, validateGstinForState, getStateNameByCode } from '../../utils/indianTax.js';
 import { validateMoneyInput, validateDecimalQuantityInput, escapeLike } from '../../utils/validation.js';
 import { numberToIndianWords } from '../gstInvoices/gstInvoices.pdf.js';
 import { normalBillsService } from '../normalBills/normalBills.service.js';
@@ -34,8 +37,8 @@ export interface QuotationRecord {
   customer_address: string | null;
   customer_phone: string | null;
   customer_gstin: string | null;
-  customer_state: string;
-  customer_state_code: string;
+  customer_state: string | null;
+  customer_state_code: string | null;
   project_title: string | null;
   subject: string | null;
   company_snapshot: QuotationCompanySnapshot;
@@ -323,6 +326,35 @@ export class QuotationsService {
   }
 
   /**
+   * Helper wrapper for financial calculations used in testing, simulations, and regression verification.
+   */
+  public calculateQuotationFinancials(options: {
+    items: QuotationItemInput[];
+    discountType?: 'percentage' | 'fixed' | null;
+    discountValue?: number | string;
+    gstEnabled?: boolean;
+    gstRate?: number | string;
+    supplierStateCode?: string;
+    customerStateCode?: string;
+    isIntraState?: boolean;
+  }) {
+    const supplier = options.supplierStateCode || '10';
+    let customer = options.customerStateCode;
+    if (!customer) {
+      customer = options.isIntraState === false ? '09' : supplier;
+    }
+    return this.calculateQuotationTotals(
+      options.items,
+      options.discountType,
+      options.discountValue,
+      options.gstEnabled ?? false,
+      options.gstRate ?? 18,
+      supplier,
+      customer
+    );
+  }
+
+  /**
    * Creates a new professional quotation with independent recalculated totals,
    * snapshot of company profile, and authoritative sequential numbering.
    */
@@ -388,14 +420,24 @@ export class QuotationsService {
         signatoryTitle: settings.signatory_title,
       };
 
-      const quotationDate = input.quotationDate || new Date().toISOString().split('T')[0];
+      const quotationDate = input.quotationDate || getBusinessDateISO(env.BUSINESS_TIME_ZONE);
 
       // Default validity if not specified: quotationDate + standardValidityDays
       let validUntil = input.validUntil || null;
       if (!validUntil && settings.standard_validity_days > 0) {
-        const d = new Date(quotationDate);
-        d.setDate(d.getDate() + settings.standard_validity_days);
-        validUntil = d.toISOString().split('T')[0];
+        const [y, m, d] = quotationDate.split('-').map(Number);
+        const dt = new Date(Date.UTC(y, m - 1, d));
+        dt.setUTCDate(dt.getUTCDate() + settings.standard_validity_days);
+        validUntil = dt.toISOString().split('T')[0];
+      }
+
+      let customerState = input.customerState?.trim() || null;
+      let customerStateCode = input.customerStateCode ? normalizeGstStateCode(input.customerStateCode) : null;
+      if (customerStateCode && !customerState) {
+        customerState = getStateNameByCode(customerStateCode) || null;
+      }
+      if (input.customerGstin && customerStateCode) {
+        validateGstinForState(input.customerGstin, customerStateCode);
       }
 
       const termsAndConditions = input.termsAndConditions !== undefined
@@ -661,7 +703,13 @@ export class QuotationsService {
    */
   public async convertToBill(
     id: number,
-    input: { billType: 'normal' | 'gst'; force?: boolean; gstRateOverride?: number | string }
+    input: {
+      billType: 'normal' | 'gst';
+      force?: boolean;
+      gstRateOverride?: number | string;
+      customerState?: string;
+      customerStateCode?: string;
+    }
   ): Promise<{ quotation: QuotationRecord; billType: 'normal' | 'gst'; billId: number; billNumber: string }> {
     const client = await appPool.connect();
 
@@ -685,8 +733,8 @@ export class QuotationsService {
         throw new AppError('This quotation has already been converted to a bill.', 409, 'ALREADY_CONVERTED');
       }
 
-      // 3. Expiry check: if valid_until < CURRENT_DATE, reject unless forced
-      const todayStr = new Date().toISOString().slice(0, 10);
+      // 3. Expiry check: if valid_until < CURRENT_DATE (configured business date), reject unless forced
+      const todayStr = getBusinessDateISO(env.BUSINESS_TIME_ZONE);
       if (quotation.valid_until && quotation.valid_until < todayStr && !input.force) {
         throw new AppError(
           `This quotation expired on ${quotation.valid_until}. Set force=true to convert anyway.`,
@@ -715,15 +763,32 @@ export class QuotationsService {
       let billNumber: string;
       let updatedQuotation: QuotationRecord;
 
+      const companySnapshot = (quotation.company_snapshot || {}) as any;
+      const supplierState = companySnapshot?.state || 'Bihar';
+      const supplierStateCode = normalizeGstStateCode(companySnapshot?.stateCode || '10');
+
+      let buyerStateCode: string | null = null;
+      let buyerState: string | null = null;
+
+      if (quotation.customer_state_code) {
+        buyerStateCode = normalizeGstStateCode(quotation.customer_state_code);
+        buyerState = quotation.customer_state || getStateNameByCode(buyerStateCode) || null;
+      } else if (input.customerStateCode) {
+        buyerStateCode = normalizeGstStateCode(input.customerStateCode);
+        buyerState = input.customerState || getStateNameByCode(buyerStateCode) || null;
+      }
+
       if (input.billType === 'normal') {
         // Convert to Normal Bill within the SAME transaction
         const normalBill = await normalBillsService.createBillInTransaction(client, {
+          state: supplierState,
+          stateCode: supplierStateCode,
           customerName: quotation.customer_name,
           customerAddress: quotation.customer_address,
           customerPhone: quotation.customer_phone,
           customerId: quotation.customer_id,
-          customerState: quotation.customer_state || 'Bihar',
-          customerStateCode: quotation.customer_state_code || '10',
+          customerState: buyerState || undefined,
+          customerStateCode: buyerStateCode || undefined,
           subtotalAmount: quotation.subtotal,
           discountType: quotation.discount_type,
           discountValue: quotation.discount_value,
@@ -774,13 +839,23 @@ export class QuotationsService {
           appliedGstRate = input.gstRateOverride;
         }
 
+        if (!buyerStateCode) {
+          throw new AppError(
+            'Customer state code is required for GST conversion. Please specify customerStateCode.',
+            400,
+            'STATE_CODE_REQUIRED'
+          );
+        }
+
         const gstInvoice = await gstInvoicesService.createInvoiceInTransaction(client, {
+          state: supplierState,
+          stateCode: supplierStateCode,
           customerName: quotation.customer_name,
           customerAddress: quotation.customer_address,
           customerGstin: quotation.customer_gstin,
           customerPhone: quotation.customer_phone,
-          customerState: quotation.customer_state || 'Bihar',
-          customerStateCode: quotation.customer_state_code || '10',
+          customerState: buyerState || getStateNameByCode(buyerStateCode) || 'Bihar',
+          customerStateCode: buyerStateCode,
           customerId: quotation.customer_id,
           gstRate: appliedGstRate,
           subtotalAmount: quotation.subtotal,

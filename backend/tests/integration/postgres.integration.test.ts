@@ -30,6 +30,10 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     try {
       // 1. Drop public schema tables cleanly for test isolation
       await client.query(`
+        DROP TABLE IF EXISTS "quotation_items" CASCADE;
+        DROP TABLE IF EXISTS "quotations" CASCADE;
+        DROP TABLE IF EXISTS "quotation_settings" CASCADE;
+        DROP SEQUENCE IF EXISTS "quotation_number_seq" CASCADE;
         DROP TABLE IF EXISTS "gst_invoice_items" CASCADE;
         DROP TABLE IF EXISTS "gst_invoices" CASCADE;
         DROP TABLE IF EXISTS "normal_bill_items" CASCADE;
@@ -67,6 +71,10 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '012_normal_bills.sql',
         '013_customer_address.sql',
         '014_billing_quantity_and_sequences.sql',
+        '015_product_barcode.sql',
+        '016_quotations.sql',
+        '017_quotation_conversion_financial_fields.sql',
+        '018_numbering_and_legacy_data_integrity.sql',
       ];
 
       await client.query(`
@@ -100,7 +108,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
   });
 
   // 1. Migration tracking & Core Tables Verification
-  it('1. All migrations are tracked and all 14 core tables exist in PostgreSQL schema', async () => {
+  it('1. All migrations 001-018 are tracked and all 17 core tables exist in PostgreSQL schema', async () => {
     const migRes = await pool.query('SELECT version FROM schema_migrations ORDER BY version ASC');
     expect(migRes.rows.map((r) => r.version)).toEqual([
       '001_auth_tables.sql',
@@ -117,6 +125,10 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '012_normal_bills.sql',
       '013_customer_address.sql',
       '014_billing_quantity_and_sequences.sql',
+      '015_product_barcode.sql',
+      '016_quotations.sql',
+      '017_quotation_conversion_financial_fields.sql',
+      '018_numbering_and_legacy_data_integrity.sql',
     ]);
 
     const expectedTables = [
@@ -134,6 +146,9 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       'gst_invoice_items',
       'normal_bills',
       'normal_bill_items',
+      'quotations',
+      'quotation_items',
+      'quotation_settings',
     ];
 
     const tablesRes = await pool.query(
@@ -861,5 +876,55 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     expect(parseFloat(afterRes.rows[0].quantity)).toBe(1.23);
 
     await pool.query(`DROP TABLE test_hist_items`);
+  });
+
+  // 18. End-to-End Inter-State & Intra-State 531.00 Financial Math Integration
+  it('18. Verifies exact ₹531.00 financial breakdown for Inter-State and Intra-State invoices in PostgreSQL', async () => {
+    // Inter-State (Bihar 10 -> UP 09): Subtotal 500.00, 10% Discount 50.00, Taxable 450.00, 18% IGST 81.00 -> 531.00
+    const interStateRes = await pool.query(`
+      INSERT INTO gst_invoices (
+        invoice_number, invoice_date, state, state_code,
+        customer_name, customer_state, customer_state_code,
+        subtotal_amount, discount_type, discount_value, discount_amount, taxable_amount,
+        gst_rate, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
+        igst_rate, igst_amount, tax_amount, grand_total, amount_in_words
+      ) VALUES (
+        'INV-FIN-531', '2026-11-11', 'Bihar', '10',
+        'UP Customer', 'Uttar Pradesh', '09',
+        500.00, 'percentage', 10.00, 50.00, 450.00,
+        18.00, 0.00, 0.00, 0.00, 0.00,
+        18.00, 81.00, 81.00, 531.00, 'Rupees Five Hundred Thirty One Only'
+      ) RETURNING *
+    `);
+    const inv = interStateRes.rows[0];
+    expect(Number(inv.subtotal_amount)).toBe(500);
+    expect(Number(inv.discount_amount)).toBe(50);
+    expect(Number(inv.taxable_amount)).toBe(450);
+    expect(Number(inv.igst_amount)).toBe(81);
+    expect(Number(inv.cgst_amount)).toBe(0);
+    expect(Number(inv.sgst_amount)).toBe(0);
+    expect(Number(inv.grand_total)).toBe(531);
+
+    // Intra-State (Bihar 10 -> Bihar 10): 450.00 Taxable, 9% CGST 40.50, 9% SGST 40.50, IGST 0.00 -> 531.00
+    const intraStateRes = await pool.query(`
+      INSERT INTO gst_invoices (
+        invoice_number, invoice_date, state, state_code,
+        customer_name, customer_state, customer_state_code,
+        subtotal_amount, discount_type, discount_value, discount_amount, taxable_amount,
+        gst_rate, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
+        igst_rate, igst_amount, tax_amount, grand_total, amount_in_words
+      ) VALUES (
+        'INV-INTRA-531', '2026-11-11', 'Bihar', '10',
+        'Bihar Customer', 'Bihar', '10',
+        500.00, 'percentage', 10.00, 50.00, 450.00,
+        18.00, 9.00, 40.50, 9.00, 40.50,
+        0.00, 0.00, 81.00, 531.00, 'Rupees Five Hundred Thirty One Only'
+      ) RETURNING *
+    `);
+    const intraInv = intraStateRes.rows[0];
+    expect(Number(intraInv.cgst_amount)).toBe(40.5);
+    expect(Number(intraInv.sgst_amount)).toBe(40.5);
+    expect(Number(intraInv.igst_amount)).toBe(0);
+    expect(Number(intraInv.grand_total)).toBe(531);
   });
 });
