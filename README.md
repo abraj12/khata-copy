@@ -3,9 +3,9 @@
 Khata is a production-grade, highly reliable digital ledger application engineered specifically for a single retail shopkeeper. It provides rapid recording of credit sales (*udhar*) with itemized product breakdowns, a fast-lookup product catalog, transparent customer debt tracking with mathematical FIFO (*First-In, First-Out*) payment settlement, and zero floating-point rounding drift.
 
 The application operates as a unified multi-platform system:
-- **Web Interface:** Responsive Progressive Web App (PWA) served from Vercel (`https://khata.algions.in`).
+- **Web Interface:** Responsive Progressive Web App (PWA) served from Vercel (`https://erp.algions.in`).
 - **Android App:** Native Android Trusted Web Activity (TWA) pointing directly to the production website (`in.algions.khata`). Updates deployed to the web interface reflect immediately in the Android application without requiring an APK rebuild.
-- **Backend API:** Express REST API running on Node.js 22 LTS on Render (`https://api-khata.algions.in`).
+- **Backend API:** Express REST API running on Node.js 22 LTS on Render (`https://api-erp.algions.in`).
 - **Database:** PostgreSQL 16 on Neon Serverless with strict ACID constraints and connection pooling.
 
 ---
@@ -98,11 +98,11 @@ npm run dev --workspace=frontend
 
 ## 4. Android TWA Application
 
-The Android app is located in `android-twa/` and uses Google's `androidbrowserhelper` (TWA) to render the production web application (`https://khata.algions.in`) in standalone full-screen mode.
+The Android app is located in `android-twa/` and uses Google's `androidbrowserhelper` (TWA) to render the production web application (`https://erp.algions.in`) in standalone full-screen mode.
 
 - **Package ID:** `in.algions.khata`
-- **Target URL:** `https://khata.algions.in`
-- **Asset Links:** Served at `https://khata.algions.in/.well-known/assetlinks.json`
+- **Target URL:** `https://erp.algions.in`
+- **Asset Links:** Served at `https://erp.algions.in/.well-known/assetlinks.json`
 
 ### Build TWA APK:
 

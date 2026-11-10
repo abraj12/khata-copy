@@ -78,7 +78,7 @@ export const envSchema = z.object({
   SESSION_COOKIE_SAME_SITE: z.enum(['lax', 'strict', 'none']).default('lax'),
 
   // Frontend origin for credentialed CORS
-  FRONTEND_URL: z.string().url().default('https://khata.algions.in'),
+  FRONTEND_URL: z.string().url().default('https://erp.algions.in'),
 
   // Login abuse protection thresholds
   LOGIN_MAX_ATTEMPTS: strictPositiveIntSchema.default(5),

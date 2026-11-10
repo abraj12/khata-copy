@@ -151,7 +151,7 @@ describe('Frontend API Client Test Suite (Timeouts, Errors, Credentials & CSRF)'
     } as unknown as Response);
 
     await expect(
-      fetchTextWithTimeout('https://api-khata.algions.in/api/v1/hang', {}, 40)
+      fetchTextWithTimeout('https://api-erp.algions.in/api/v1/hang', {}, 40)
     ).rejects.toMatchObject({
       code: 'REQUEST_TIMEOUT',
     });

@@ -50,7 +50,7 @@ describe('30-Day Rolling Session Expiry & Opportunistic Pruning Test Suite', () 
 
     const res = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
     expect(res.status).toBe(200);
@@ -86,7 +86,7 @@ describe('30-Day Rolling Session Expiry & Opportunistic Pruning Test Suite', () 
       const app = createApp({ useMemoryStoreInTest: true });
       const res = await request(app)
         .post('/api/v1/auth/login')
-        .set('Origin', 'https://khata.algions.in')
+        .set('Origin', 'https://erp.algions.in')
         .set('X-Forwarded-Proto', 'https')
         .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
@@ -106,7 +106,7 @@ describe('30-Day Rolling Session Expiry & Opportunistic Pruning Test Suite', () 
     // Step 1: Login
     const loginRes = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
     const sessionCookie = loginRes.headers['set-cookie'][0];
@@ -141,7 +141,7 @@ describe('30-Day Rolling Session Expiry & Opportunistic Pruning Test Suite', () 
     // Login to get a cookie
     const loginRes = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
     const sessionCookie = loginRes.headers['set-cookie'][0];

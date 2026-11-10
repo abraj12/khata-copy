@@ -81,7 +81,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
   it('1. Correct phone + correct password succeeds and returns minimal owner state', async () => {
     const res = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
     expect(res.status).toBe(200);
@@ -108,7 +108,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
   it('2. Wrong password fails with generic error and does not disclose reason', async () => {
     const res = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: TEST_PHONE, password: 'WrongPassword123!' });
 
     expect(res.status).toBe(401);
@@ -120,7 +120,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
   it('3. Unknown phone fails with exactly the same generic error (preventing account enumeration)', async () => {
     const res = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: '9999999999', password: 'SomeRandomPassword!' });
 
     expect(res.status).toBe(401);
@@ -141,7 +141,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     for (const sqlPayload of payloads) {
       const res = await request(app)
         .post('/api/v1/auth/login')
-        .set('Origin', 'https://khata.algions.in')
+        .set('Origin', 'https://erp.algions.in')
         .send({ phone: TEST_PHONE, password: sqlPayload });
 
       expect(res.status).toBe(401);
@@ -160,7 +160,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     for (const badPhone of badPhones) {
       const res = await request(app)
         .post('/api/v1/auth/login')
-        .set('Origin', 'https://khata.algions.in')
+        .set('Origin', 'https://erp.algions.in')
         .send({ phone: badPhone, password: TEST_PASSWORD });
 
       expect(res.status).toBe(400);
@@ -172,7 +172,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
   it('6. <script>alert(1)</script> in phone or password does not execute or corrupt responses', async () => {
     const res = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: '<script>alert(1)</script>', password: '<script>alert(1)</script>' });
 
     expect(res.status).toBe(400);
@@ -197,7 +197,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     // 1. Log in
     const loginRes = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
     const sessionCookie = loginRes.headers['set-cookie'];
@@ -231,7 +231,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     // Log in
     const loginRes = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
     const sessionCookie = loginRes.headers['set-cookie'];
@@ -245,7 +245,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     // Log out
     const logoutRes = await request(app)
       .post('/api/v1/auth/logout')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .set('Cookie', sessionCookie)
       .set('X-CSRF-Token', csrfToken);
 
@@ -270,7 +270,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     // Log in with the initial session
     const loginRes = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .set('Cookie', initialCookie)
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
@@ -284,7 +284,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
   it('11. Session cookie has HttpOnly, SameSite=Lax, Path=/, and no Domain attribute', async () => {
     const res = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
     const cookie = res.headers['set-cookie'][0];
@@ -308,7 +308,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     // 1. Log in
     const loginRes = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
     const sessionCookie = loginRes.headers['set-cookie'];
 
@@ -324,7 +324,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     // 3. Try POST with valid origin but missing CSRF token
     const missingCsrfRes = await request(app)
       .post('/api/v1/ledger/entry')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .set('Cookie', sessionCookie)
       .send({ customer_id: 1, type: 'UDHAR_GIVEN', amount: 500 });
     expect(missingCsrfRes.status).toBe(403);
@@ -350,7 +350,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     for (let i = 0; i < 5; i++) {
       const res = await request(app)
         .post('/api/v1/auth/login')
-        .set('Origin', 'https://khata.algions.in')
+        .set('Origin', 'https://erp.algions.in')
         .set('X-Forwarded-For', clientIp)
         .send({ phone: TEST_PHONE, password: 'WrongPassword!' });
       expect(res.status).toBe(401);
@@ -359,7 +359,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     // 6th attempt should be blocked with 429
     const blockedRes = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .set('X-Forwarded-For', clientIp)
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
@@ -372,7 +372,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
   it('18. Malformed JSON returns 400 Bad Request', async () => {
     const res = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .set('Content-Type', 'application/json')
       .send('{"phone": "9876543210", "password": '); // Incomplete JSON
 
@@ -392,11 +392,11 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
   });
 
   // TEST CASE 21: Production Origin & Security Defense
-  it('21. Production website origin (https://khata.algions.in) is permitted and authenticated; unauthorized origins are rejected', async () => {
+  it('21. Production website origin (https://erp.algions.in) is permitted and authenticated; unauthorized origins are rejected', async () => {
     // 1. Production website login
     const loginRes = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
     expect(loginRes.status).toBe(200);
@@ -407,7 +407,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     // 2. Production website accessing protected route
     const meRes = await request(app)
       .get('/api/v1/auth/me')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .set('Cookie', cookie);
 
     expect(meRes.status).toBe(200);
@@ -425,7 +425,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
   it('25. NEON_REALTIME_SECRET, SESSION_SECRET, and database credentials are never leaked in responses', async () => {
     const res = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
     const bodyString = JSON.stringify(res.body);
@@ -447,7 +447,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     for (let i = 0; i < 4; i++) {
       const res = await request(app)
         .post('/api/v1/auth/login')
-        .set('Origin', 'https://khata.algions.in')
+        .set('Origin', 'https://erp.algions.in')
         .set('X-Forwarded-For', clientIp)
         .send({ phone: '+91 9876543210', password: 'WrongPassword!' });
       expect(res.status).toBe(401);
@@ -456,7 +456,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     // 5th failure with "9876543210" (no country code)
     const fifthRes = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .set('X-Forwarded-For', clientIp)
       .send({ phone: '9876543210', password: 'WrongPassword!' });
     expect(fifthRes.status).toBe(401);
@@ -464,7 +464,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     // 6th attempt with "+91-9876543210" must now be locked out with HTTP 429
     const blockedRes = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .set('X-Forwarded-For', clientIp)
       .send({ phone: '+91-9876543210', password: TEST_PASSWORD });
 
@@ -481,7 +481,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
       expect(isAllowedOrigin('http://localhost:5173')).toBe(false);
       expect(isAllowedOrigin('http://localhost:3000')).toBe(false);
       expect(isAllowedOrigin('http://127.0.0.1:5173')).toBe(false);
-      expect(isAllowedOrigin('https://khata.algions.in')).toBe(true);
+      expect(isAllowedOrigin('https://erp.algions.in')).toBe(true);
       expect(isAllowedOrigin('capacitor://localhost')).toBe(false);
       expect(isAllowedOrigin('https://localhost')).toBe(false);
       expect(isAllowedOrigin('https://evil.com')).toBe(false);
@@ -505,12 +505,12 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
   it('29. CORS OPTIONS preflight with Idempotency-Key returns 204, exact origin, credentials, and allowed header', async () => {
     const res = await request(app)
       .options('/api/v1/khata/transactions')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .set('Access-Control-Request-Method', 'POST')
       .set('Access-Control-Request-Headers', 'content-type,x-csrf-token,idempotency-key');
 
     expect(res.status).toBe(204);
-    expect(res.headers['access-control-allow-origin']).toBe('https://khata.algions.in');
+    expect(res.headers['access-control-allow-origin']).toBe('https://erp.algions.in');
     expect(res.headers['access-control-allow-credentials']).toBe('true');
     const allowedHeaders = (res.headers['access-control-allow-headers'] || '').toLowerCase();
     expect(allowedHeaders).toContain('idempotency-key');
@@ -646,7 +646,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
   it('38. Login response directly includes csrfToken to eliminate extra round-trip', async () => {
     const res = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
 
     expect(res.status).toBe(200);
@@ -668,7 +668,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     // Authenticated check
     const loginRes = await request(app)
       .post('/api/v1/auth/login')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
     const cookie = loginRes.headers['set-cookie']?.[0];
 

@@ -13,7 +13,7 @@ Write-Host "==========================================================" -Foregro
 Write-Host "   Khata Android TWA Keystore & Fingerprint Utility       " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "Target Package: in.algions.khata"
-Write-Host "Target Origin:  https://khata.algions.in"
+Write-Host "Target Origin:  https://erp.algions.in"
 Write-Host ""
 
 $twaDir = Join-Path $PSScriptRoot "..\..\android-twa"

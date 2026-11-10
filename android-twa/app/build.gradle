@@ -28,9 +28,9 @@ android {
 
         // Trusted Web Activity remote web URL configuration
         manifestPlaceholders = [
-            hostName: "khata.algions.in",
-            defaultUrl: "https://khata.algions.in",
-            assetStatements: '[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"web","site":"https://khata.algions.in"}}]'
+            hostName: "erp.algions.in",
+            defaultUrl: "https://erp.algions.in",
+            assetStatements: '[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"web","site":"https://erp.algions.in"}}]'
         ]
     }
 

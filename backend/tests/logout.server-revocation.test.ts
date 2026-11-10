@@ -85,7 +85,7 @@ describe('Server-Side Logout Session Revocation Test Suite', () => {
     // Step 2: Perform server-side logout
     const logoutRes = await request(app)
       .post('/api/v1/auth/logout')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .set('Cookie', cookieHeader)
       .set('X-CSRF-Token', VALID_CSRF_TOKEN);
 
@@ -141,7 +141,7 @@ describe('Server-Side Logout Session Revocation Test Suite', () => {
 
     const logoutRes = await request(app)
       .post('/api/v1/auth/logout')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .set('Cookie', cookieHeader)
       .set('X-CSRF-Token', VALID_CSRF_TOKEN);
 
@@ -166,7 +166,7 @@ describe('Server-Side Logout Session Revocation Test Suite', () => {
 
     const logoutRes = await request(app)
       .post('/api/v1/auth/logout')
-      .set('Origin', 'https://khata.algions.in')
+      .set('Origin', 'https://erp.algions.in')
       .set('Cookie', cookieHeader)
       .set('X-CSRF-Token', 'tampered_invalid_csrf_token');
 

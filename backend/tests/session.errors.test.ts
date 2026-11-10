@@ -98,7 +98,7 @@ describe('PostgreSQL Session Store Error Handling Test Suite', () => {
     const res = await request(app)
       .get('/api/v1/auth/me')
       .set('Cookie', `${env.SESSION_COOKIE_NAME}=${signedVal}`)
-      .set('Origin', 'https://khata.algions.in');
+      .set('Origin', 'https://erp.algions.in');
 
     expect(getCalled).toBe(true);
     expect(res.status).toBe(503);
@@ -145,7 +145,7 @@ describe('PostgreSQL Session Store Error Handling Test Suite', () => {
     const res = await request(app)
       .get('/api/v1/auth/me')
       .set('Cookie', `${env.SESSION_COOKIE_NAME}=${signedVal}`)
-      .set('Origin', 'https://khata.algions.in');
+      .set('Origin', 'https://erp.algions.in');
 
     // Response should be safe
     const bodyStr = JSON.stringify(res.body);

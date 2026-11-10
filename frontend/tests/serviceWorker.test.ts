@@ -72,13 +72,13 @@ describe('Service Worker Vite Asset Matching & Security Exclusions (Phase 9)', (
     const externalR2Urls = [
       'https://3088e12e1c6d61c9875c479ea549ff7b.r2.cloudflarestorage.com/khata/offline-bills/1/abc.jpg',
       'https://khata.3088e12e1c6d61c9875c479ea549ff7b.r2.cloudflarestorage.com/offline-bills/1/bill.png',
-      'https://api-khata.algions.in/api/v1/products/10/image',
+      'https://api-erp.algions.in/api/v1/products/10/image',
     ];
 
     for (const urlStr of externalR2Urls) {
       const url = new URL(urlStr);
       // External origin must not equal mock PWA origin
-      const pwaOrigin = 'https://khata.algions.in';
+      const pwaOrigin = 'https://erp.algions.in';
       expect(url.origin !== pwaOrigin).toBe(true);
       // Must also fail immutable asset regex
       expect(IMMUTABLE_ASSET_REGEX.test(url.pathname)).toBe(false);

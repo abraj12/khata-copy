@@ -39,7 +39,7 @@ services:
       - key: SESSION_COOKIE_SAME_SITE
         value: lax
       - key: FRONTEND_URL
-        value: https://khata.algions.in
+        value: https://erp.algions.in
       - key: LOGIN_MAX_ATTEMPTS
         value: "5"
       - key: LOGIN_FAILURE_WINDOW_MS
