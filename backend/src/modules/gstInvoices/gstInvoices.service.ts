@@ -282,8 +282,8 @@ export class GstInvoicesService {
       }
 
       // 3. Tax calculations (Intra-state vs Inter-state)
-      const shopStateCode = (input.stateCode || '09').trim();
-      const customerStateCode = (input.customerStateCode || '09').trim();
+      const shopStateCode = (input.stateCode || '10').trim();
+      const customerStateCode = (input.customerStateCode || '10').trim();
       const isIntraState = shopStateCode === customerStateCode;
 
       const gstRateDec = new Decimal(input.gstRate || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
@@ -339,17 +339,17 @@ export class GstInvoicesService {
       const invoiceRes = await client.query(insertInvoiceSql, [
         invoiceNumber,
         invoiceDate,
-        input.state || 'Uttar Pradesh',
+        input.state || 'Bihar',
         shopStateCode,
         input.transportationMode || null,
         input.vehicleNumber || null,
         input.dateOfSupply || invoiceDate,
-        input.placeOfSupply || 'Uttar Pradesh',
+        input.placeOfSupply || 'Bihar',
         input.customerId || null,
         input.customerName.trim(),
         input.customerAddress?.trim() || null,
         input.customerGstin?.trim() || null,
-        input.customerState || 'Uttar Pradesh',
+        input.customerState || 'Bihar',
         customerStateCode,
         taxableAmountDec.toFixed(2),
         cgstRateDec.toFixed(2),
@@ -701,8 +701,8 @@ export class GstInvoicesService {
       });
     }
 
-    const shopStateCode = (input.stateCode || '09').trim();
-    const customerStateCode = (input.customerStateCode || '09').trim();
+    const shopStateCode = (input.stateCode || '10').trim();
+    const customerStateCode = (input.customerStateCode || '10').trim();
     const isIntraState = shopStateCode === customerStateCode;
     const gstRateDec = new Decimal(input.gstRate || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     if (gstRateDec.isNegative() || !gstRateDec.isFinite() || gstRateDec.greaterThan(100)) {
@@ -736,17 +736,17 @@ export class GstInvoicesService {
     const pdfData: GstInvoicePdfData = {
       invoiceNumber,
       invoiceDate,
-      state: input.state || 'Uttar Pradesh',
+      state: input.state || 'Bihar',
       stateCode: shopStateCode,
       transportationMode: input.transportationMode || null,
       vehicleNumber: input.vehicleNumber || null,
       dateOfSupply: input.dateOfSupply || invoiceDate,
-      placeOfSupply: input.placeOfSupply || 'Uttar Pradesh',
+      placeOfSupply: input.placeOfSupply || 'Bihar',
       customer: {
         name: input.customerName || 'Customer / Receiver',
         address: input.customerAddress || null,
         gstin: input.customerGstin || null,
-        state: input.customerState || 'Uttar Pradesh',
+        state: input.customerState || 'Bihar',
         stateCode: customerStateCode,
       },
       items: pdfItems,

@@ -72,20 +72,20 @@ export const GstBillingView: React.FC = () => {
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [isManualInvoiceNumber, setIsManualInvoiceNumber] = useState(false);
   const [invoiceDate, setInvoiceDate] = useState<string>(() => getTodayLocalDate());
-  const [state] = useState('Uttar Pradesh');
-  const [stateCode] = useState('09');
+  const [state] = useState('Bihar');
+  const [stateCode] = useState('10');
   const [transportationMode, setTransportationMode] = useState('');
   const [vehicleNumber, setVehicleNumber] = useState('');
   const [dateOfSupply, setDateOfSupply] = useState<string>(() => getTodayLocalDate());
-  const [placeOfSupply, setPlaceOfSupply] = useState('Uttar Pradesh');
+  const [placeOfSupply, setPlaceOfSupply] = useState('Bihar');
 
   // Customer states
   const [customerId, setCustomerId] = useState<number | null>(null);
   const [customerName, setCustomerName] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [customerGstin, setCustomerGstin] = useState('');
-  const [customerState, setCustomerState] = useState('Uttar Pradesh');
-  const [customerStateCode, setCustomerStateCode] = useState('09');
+  const [customerState, setCustomerState] = useState('Bihar');
+  const [customerStateCode, setCustomerStateCode] = useState('10');
 
   // Line items
   const [items, setItems] = useState<FormLineItem[]>([
@@ -761,7 +761,7 @@ export const GstBillingView: React.FC = () => {
                     </label>
                     <input
                       type="text"
-                      value="Uttar Pradesh (09)"
+                      value="Bihar (10)"
                       readOnly
                       className="neu-input w-full font-bold cursor-default"
                       style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-text)' }}
@@ -943,7 +943,7 @@ export const GstBillingView: React.FC = () => {
                       type="text"
                       value={customerGstin}
                       onChange={(e) => setCustomerGstin(e.target.value.toUpperCase())}
-                      placeholder="e.g. 09DFEPN5357D1ZB"
+                      placeholder="e.g. 10ABGCA8624E1Z3"
                       maxLength={15}
                       className="neu-input w-full font-mono uppercase"
                     />
@@ -957,7 +957,7 @@ export const GstBillingView: React.FC = () => {
                       type="text"
                       value={customerAddress}
                       onChange={(e) => setCustomerAddress(e.target.value)}
-                      placeholder="e.g. Station Road, Bilaspur, Rampur"
+                      placeholder="e.g. Ward no 26, Haziyapur, Gopalganj"
                       className="neu-input w-full"
                     />
                   </div>

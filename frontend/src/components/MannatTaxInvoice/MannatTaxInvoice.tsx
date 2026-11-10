@@ -2,13 +2,14 @@ import { useState, useEffect } from 'react';
 import './MannatTaxInvoice.css';
 
 const SHOP = Object.freeze({
-  gstin: '09DFEPN5357D1ZB',
+  gstin: '10ABGCA8624E1Z3',
   mobile: '94938 40000',
-  name: 'Algions AI Labs Private Limited',
-  address: 'Bilaspur (Rampur) U. P.',
-  state: 'Uttar Pradesh',
-  stateCode: '09',
-  jurisdiction: 'Jurisdiction only.',
+  name: 'ALGIONS AI LABS PRIVATE LIMITED',
+  tradeName: 'ALGIONS AI LABS',
+  address: 'House no 145A, Ward no 26, Haziyapur, Gopalganj, Bihar - 841428',
+  state: 'Bihar',
+  stateCode: '10',
+  jurisdiction: 'Gopalganj Jurisdiction only.',
 });
 
 export const numberWords = (value: number | string): string => {
@@ -310,8 +311,8 @@ export default function MannatTaxInvoice({
             <div className="mhi-customer-line"><strong>Address :</strong><span>{customer.address || ''}</span></div>
             <div className="mhi-customer-bottom">
               <div className="mhi-customer-gstin"><strong>GSTIN :</strong><span>{customer.gstin || ''}</span></div>
-              <div><strong>State :</strong><span>{customer.state || 'Uttar Pradesh'}</span></div>
-              <div><strong>State Code :</strong><span>{customer.stateCode || '09'}</span></div>
+              <div><strong>State :</strong><span>{customer.state || 'Bihar'}</span></div>
+              <div><strong>State Code :</strong><span>{customer.stateCode || '10'}</span></div>
             </div>
           </section>
 

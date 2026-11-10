@@ -77,20 +77,20 @@ export const NormalBillingView: React.FC = () => {
   const [billNumber, setBillNumber] = useState('');
   const [isManualBillNumber, setIsManualBillNumber] = useState(false);
   const [billDate, setBillDate] = useState(getTodayLocalDate);
-  const [state, setState] = useState('Uttar Pradesh');
-  const [stateCode, setStateCode] = useState('09');
+  const [state, setState] = useState('Bihar');
+  const [stateCode, setStateCode] = useState('10');
   const [transportationMode, setTransportationMode] = useState('');
   const [vehicleNumber, setVehicleNumber] = useState('');
   const [dateOfSupply, setDateOfSupply] = useState(getTodayLocalDate);
-  const [placeOfSupply, setPlaceOfSupply] = useState('Bilaspur (Rampur) U. P.');
+  const [placeOfSupply, setPlaceOfSupply] = useState('Gopalganj, Bihar');
 
   // Customer states
   const [customerId, setCustomerId] = useState<number | null>(null);
   const [customerName, setCustomerName] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
-  const [customerState, setCustomerState] = useState('Uttar Pradesh');
-  const [customerStateCode, setCustomerStateCode] = useState('09');
+  const [customerState, setCustomerState] = useState('Bihar');
+  const [customerStateCode, setCustomerStateCode] = useState('10');
 
   // Line items
   const [items, setItems] = useState<FormLineItem[]>([
@@ -853,7 +853,7 @@ export const NormalBillingView: React.FC = () => {
                   type="text"
                   value={placeOfSupply}
                   onChange={(e) => setPlaceOfSupply(e.target.value)}
-                  placeholder="e.g. Bilaspur (Rampur)"
+                  placeholder="e.g. Gopalganj"
                   className="neu-input w-full text-xs"
                 />
               </div>

@@ -142,13 +142,13 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
 
       // Top Header
       doc.font('Helvetica-Bold').fontSize(9).fillColor('#000000');
-      doc.text('GSTIN : 09DFEPN5357D1ZB', left + 6, top + 6);
+      doc.text('GSTIN : 10ABGCA8624E1Z3', left + 6, top + 6);
       doc.fontSize(14).text(invoiceTitle, left, top + 5, { align: 'center', underline: true });
       doc.fontSize(9).text('Mob.: 94938 40000', left, top + 6, { align: 'right', width: width - 6 });
 
       // Company Name & Address
-      doc.fontSize(20).font('Helvetica-Bold').text('Algions AI Labs Private Limited', left, top + 26, { align: 'center' });
-      doc.fontSize(9.5).font('Helvetica-Bold').text('Bilaspur (Rampur) U. P.', left, top + 52, { align: 'center' });
+      doc.fontSize(18).font('Helvetica-Bold').text('ALGIONS AI LABS PRIVATE LIMITED', left, top + 26, { align: 'center' });
+      doc.fontSize(8.5).font('Helvetica-Bold').text('House no 145A, Ward no 26, Haziyapur, Gopalganj, Bihar - 841428', left, top + 52, { align: 'center' });
 
       // Horizontal line below header
       let y = top + 70;
@@ -166,9 +166,9 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
       doc.font('Helvetica-Bold').fontSize(9).text(formatDateToIndian(data.invoiceDate));
 
       doc.font('Helvetica').fontSize(8).text('State : ', left + 6, y + 26, { continued: true });
-      doc.font('Helvetica-Bold').fontSize(9).text('Uttar Pradesh   ', { continued: true });
+      doc.font('Helvetica-Bold').fontSize(9).text(`${data.state || 'Bihar'}   `, { continued: true });
       doc.font('Helvetica').fontSize(8).text('State Code : ', { continued: true });
-      doc.font('Helvetica-Bold').fontSize(9).text(data.stateCode || '09');
+      doc.font('Helvetica-Bold').fontSize(9).text(data.stateCode || '10');
 
       // Right meta
       const rightColLeft = metaMidX + 6;
@@ -205,9 +205,9 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
       doc.font('Helvetica-Bold').fontSize(8.5).text('GSTIN : ', left + 6, bottomLineY, { continued: true });
       doc.font('Helvetica').fontSize(8.5).text(`${data.customer?.gstin || ''}              `, { continued: true });
       doc.font('Helvetica-Bold').fontSize(8.5).text('State : ', { continued: true });
-      doc.font('Helvetica').fontSize(8.5).text(`${data.customer?.state || 'Uttar Pradesh'}           `, { continued: true });
+      doc.font('Helvetica').fontSize(8.5).text(`${data.customer?.state || 'Bihar'}           `, { continued: true });
       doc.font('Helvetica-Bold').fontSize(8.5).text('State Code : ', { continued: true });
-      doc.font('Helvetica').fontSize(8.5).text(data.customer?.stateCode || '09');
+      doc.font('Helvetica').fontSize(8.5).text(data.customer?.stateCode || '10');
 
       y += billToHeight;
       // Line below Bill to
@@ -371,7 +371,7 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
       // Footer Left
       doc.font('Helvetica-Bold').fontSize(10).text('E.&O.E.', left + 6, footerY + 8);
       doc.font('Helvetica').fontSize(8.5).text('All disputes are subject to', left + 6, footerY + 24);
-      doc.font('Helvetica-Bold').fontSize(9).text('Rampur Jurisdiction only.', left + 6, footerY + 36);
+      doc.font('Helvetica-Bold').fontSize(9).text('Gopalganj Jurisdiction only.', left + 6, footerY + 36);
 
       // Footer Right
       const rightW = width - (footerMidX - left);
