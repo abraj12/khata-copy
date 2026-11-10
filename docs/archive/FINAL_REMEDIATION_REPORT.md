@@ -14,7 +14,7 @@
 - **Code & Test Status:** **100% COMPLETE & PASSING.** All frontend alignment defects, icon overlaps, mobile modal scrolling traps, strict decimal parsing, payment row locking, and accessibility scaling are implemented and verified with zero errors. All 47 automated tests pass cleanly.
 - **Live Cloud Verification:** **CONFIRMED & READY.** The live Render production endpoint (`https://khata-api-wkn9.onrender.com/api/v1/health/ready`) reports `"status": "ready"`, latency `56ms`, with all 3 migrations (`001`, `002`, `003`) and 9 core database tables verified in Neon Singapore.
 - **Why "Conditional":** In accordance with Section 15 of the master prompt, production release is conditioned on the remaining owner-only actions:
-  1. DNS CNAME mapping of `khata.algions.in` to `cname.vercel-dns.com` in the domain registrar.
+  1. DNS CNAME mapping of `erp.algions.in` to `cname.vercel-dns.com` in the domain registrar.
   2. Generation of the permanent private release keystore and signing credentials by the owner (must not be committed to Git).
   3. Physical device installation and end-to-end touch testing on an Android device.
 
@@ -102,7 +102,7 @@ Automated test suite runs via Vitest: **47 / 47 tests passing (100%)**.
 ## 7. Cloud Deployments & Infrastructure Settings
 
 ### 7.1 Vercel Frontend Configuration
-- **Domain:** `https://khata.algions.in`
+- **Domain:** `https://erp.algions.in`
 - **Root Directory:** `frontend` (or repository root `./` with `vercel.json`)
 - **Install Command:** `npm ci`
 - **Build Command:** `npm run build`

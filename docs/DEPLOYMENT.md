@@ -2,7 +2,7 @@
 
 **Document Status:** Canonical & Implemented  
 **Last Verified:** 2026-11-01  
-**Frontend URL:** `https://khata.algions.in` (Vercel)  
+**Frontend URL:** `https://erp.algions.in` (Vercel)  
 **Backend API URL:** `https://khata-api-wkn9.onrender.com` (Render)  
 **Database:** Neon Serverless PostgreSQL (Singapore Region `ap-southeast-1`)  
 
@@ -14,7 +14,7 @@ To route the Khata frontend to Vercel without altering the existing root domain 
 
 | Type | Subdomain / Name | Value / Destination | TTL | Purpose |
 |---|---|---|---|---|
-| **CNAME** | `khata` | `cname.vercel-dns.com` | Auto / 300s | Routes `khata.algions.in` to Vercel CDN |
+| **CNAME** | `khata` | `cname.vercel-dns.com` | Auto / 300s | Routes `erp.algions.in` to Vercel CDN |
 | **CNAME** | `api-khata` *(Optional)* | `khata-api-wkn9.onrender.com` | Auto / 300s | Custom backend domain on Render |
 
 > [!NOTE]
@@ -34,7 +34,7 @@ To route the Khata frontend to Vercel without altering the existing root domain 
    - **Install Command:** `npm ci`
 3. **Environment Variables:**
    - `VITE_API_URL`: `https://khata-api-wkn9.onrender.com`
-4. Add Domain: In Project Settings -> Domains, add `khata.algions.in`.
+4. Add Domain: In Project Settings -> Domains, add `erp.algions.in`.
 
 ### Option B: Monorepo Root Import
 - **Root Directory:** `./`
@@ -69,7 +69,7 @@ Render builds and runs the Node 22 Express backend service.
 | `PORT` | `5000` | Port listened to by Express (Render sets internal routing) |
 | `DATABASE_URL` | `postgresql://neondb_owner:***@ep-...-pooler.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require` | **Pooled** Neon endpoint for API runtime queries |
 | `DIRECT_URL` | `postgresql://neondb_owner:***@ep-....c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require` | **Direct** Neon endpoint for DDL migrations |
-| `FRONTEND_URL` | `https://khata.algions.in` | Bound origin for CORS and session cookies |
+| `FRONTEND_URL` | `https://erp.algions.in` | Bound origin for CORS and session cookies |
 | `OWNER_USERNAME` | `owner` | Single shopkeeper username |
 | `OWNER_PASSWORD_HASH` | `$argon2id$v=19$m=65536,t=3,p=4$...` | Argon2id hash of owner's password |
 | `SESSION_SECRET` | `a-minimum-64-character-cryptographically-random-string` | Secret for signing session cookies |

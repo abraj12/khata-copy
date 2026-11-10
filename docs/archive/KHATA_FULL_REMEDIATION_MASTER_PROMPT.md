@@ -11,8 +11,8 @@
 **Product:** A single-shopkeeper digital Khata notebook. It is NOT an ERP, multi-tenant SaaS, inventory system, supplier system, GST system, or CRM.
 
 **Production architecture:**
-- Frontend website: `https://khata.algions.in` — React + Vite, deployed to Vercel.
-- Backend API: `https://api-khata.algions.in` — Node.js + Express, deployed to Render.
+- Frontend website: `https://erp.algions.in` — React + Vite, deployed to Vercel.
+- Backend API: `https://api-erp.algions.in` — Node.js + Express, deployed to Render.
 - Database: existing Neon PostgreSQL project, production branch, Singapore region as currently provisioned.
 - Android: Capacitor application, package ID `in.algions.khata`, display name `Khata`, built from the same React frontend but bundled locally into the APK.
 - Website and APK use the same backend and same database.
@@ -110,7 +110,7 @@ Buying price must never override or calculate the custom selling price.
 ## 1.6 Web and Android
 
 - Same React frontend source for website and APK.
-- Website build deployed to Vercel at `khata.algions.in`.
+- Website build deployed to Vercel at `erp.algions.in`.
 - Capacitor packages the frontend's compiled local assets in a native Android APK. Do NOT make the APK merely open/load the remote website URL.
 - APK package ID `in.algions.khata`, app name `Khata`.
 - APK has its own persistent Android signing identity. Debug signing is not production release signing.
@@ -508,8 +508,8 @@ SESSION_COOKIE_SECURE=true
 SESSION_COOKIE_HTTP_ONLY=true
 SESSION_COOKIE_SAME_SITE=lax
 
-FRONTEND_URL=https://khata.algions.in
-VITE_API_BASE_URL=https://api-khata.algions.in
+FRONTEND_URL=https://erp.algions.in
+VITE_API_BASE_URL=https://api-erp.algions.in
 
 LOGIN_MAX_ATTEMPTS=5
 LOGIN_FAILURE_WINDOW_MS=900000
@@ -538,8 +538,8 @@ Rules:
 - Use `express-session` and `connect-pg-simple` (or current PostgreSQL session store already installed).
 - No MemoryStore in production.
 - Store opaque session IDs server-side; no JWT or refresh tokens.
-- `HttpOnly=true`, `Secure=true`, `SameSite=Lax`, `Path=/`, no `Domain` attribute (host-only cookie for `api-khata.algions.in`).
-- Strict credentialed CORS origin allowlist for `https://khata.algions.in`. Add the Capacitor origins only after verifying the actual native app request origin. Never use wildcard origin with credentials.
+- `HttpOnly=true`, `Secure=true`, `SameSite=Lax`, `Path=/`, no `Domain` attribute (host-only cookie for `api-erp.algions.in`).
+- Strict credentialed CORS origin allowlist for `https://erp.algions.in`. Add the Capacitor origins only after verifying the actual native app request origin. Never use wildcard origin with credentials.
 - `app.set('trust proxy', 1)` or equivalent only for the known Render reverse-proxy hop; do not trust arbitrary forwarded IP headers without a trusted proxy boundary.
 - Regenerate session ID on successful login.
 - Destroy session on logout and clear cookie with matching name/path/sameSite/secure options.
@@ -552,7 +552,7 @@ Rules:
 - Ensure the login flow, CSRF token bootstrap, and logout have a well-defined Origin/Referer policy.
 - Validate `Origin` against exact allowlisted origins; use carefully documented fallback for native requests that legitimately omit `Origin`. Do not treat arbitrary missing Origin as trusted browser traffic.
 - Ensure cross-origin requests use `credentials: include` client-side and `credentials: true` server-side with exact origin.
-- Same root site subdomains `khata.algions.in` and `api-khata.algions.in` are cross-origin but same-site over HTTPS. Do not confuse same-site with same-origin.
+- Same root site subdomains `erp.algions.in` and `api-erp.algions.in` are cross-origin but same-site over HTTPS. Do not confuse same-site with same-origin.
 - Confirm cookies are sent in Chrome/Edge browser using DevTools, and in actual Android WebView separately.
 
 ## 6.4 SQL injection / XSS / input validation
@@ -637,10 +637,10 @@ Inspect:
 
 ## 8.1 Local bundled frontend
 
-- `capacitor.config.ts` must not set `server.url` to `https://khata.algions.in` for the release build. Local build assets must be synchronized into Android assets (`npx cap sync android`).
+- `capacitor.config.ts` must not set `server.url` to `https://erp.algions.in` for the release build. Local build assets must be synchronized into Android assets (`npx cap sync android`).
 - Build flow: frontend production build → Capacitor asset copy/sync → Android Gradle build.
 - The APK should launch the locally bundled frontend even if offline; API operations can show a clear offline/network state.
-- Android uses `VITE_API_BASE_URL=https://api-khata.algions.in`; this is public API URL only.
+- Android uses `VITE_API_BASE_URL=https://api-erp.algions.in`; this is public API URL only.
 - Confirm no `.env`, secrets, source maps with secrets, source `.git`, or signing artifacts are bundled in APK assets.
 
 ## 8.2 Cookie/session compatibility
@@ -678,7 +678,7 @@ Inspect `render.yaml` carefully. The prior audit found `plan: starter` in the ar
 ## 9.2 Vercel
 
 - Keep the SPA fallback and security headers in `vercel.json` but fix the CSP so only actual API and documented Realtime hosts are permitted.
-- Public environment variable only: `VITE_API_BASE_URL=https://api-khata.algions.in`.
+- Public environment variable only: `VITE_API_BASE_URL=https://api-erp.algions.in`.
 - Never put server secrets in Vercel.
 - Note Vercel Hobby plan commercial-use limitations; do not assert Hobby is appropriate for a commercial business workflow without checking current terms. Do not upgrade billing automatically.
 - Do not change `www.algions.in` routing or its existing project.
@@ -686,8 +686,8 @@ Inspect `render.yaml` carefully. The prior audit found `plan: starter` in the ar
 ## 9.3 DNS and SSL
 
 Document required DNS mapping only; do not change DNS records without permission:
-- `khata.algions.in` → Vercel target provided by Vercel.
-- `api-khata.algions.in` → Render target provided by Render.
+- `erp.algions.in` → Vercel target provided by Vercel.
+- `api-erp.algions.in` → Render target provided by Render.
 - `www.algions.in` remains as is.
 Use HTTPS for both. Do not invent provider DNS target values. TLS certificates are provisioned by hosting providers after correct DNS verification.
 

@@ -149,12 +149,12 @@ Simulated locally using workspace isolation commands; authoritative automated ex
 
 - **Preflight Request:**
   - Method: `OPTIONS /api/v1/khata/transactions`
-  - Origin: `https://khata.algions.in`
+  - Origin: `https://erp.algions.in`
   - Access-Control-Request-Method: `POST`
   - Access-Control-Request-Headers: `content-type,x-csrf-token,idempotency-key`
 - **Preflight Response:**
   - Status: `204 No Content`
-  - `Access-Control-Allow-Origin: https://khata.algions.in`
+  - `Access-Control-Allow-Origin: https://erp.algions.in`
   - `Access-Control-Allow-Credentials: true`
   - `Access-Control-Allow-Headers: content-type,authorization,x-csrf-token,x-requested-with,idempotency-key`
 - **Rejection of Disallowed Origins:**
@@ -246,7 +246,7 @@ All financial calculations use `decimal.js` with `ROUND_HALF_UP`:
 | **Linux root install/build** | **PASS** | Permitted via GitHub Actions workflow on `ubuntu-latest` |
 | **Vercel frontend build** | **PASS** | `npm ci --workspace=frontend` + `npm run build --workspace=frontend` -> `dist/index.html` |
 | **Render backend build** | **PASS** | `npm ci --workspace=backend` + `npm run build --workspace=backend` -> `tsc` exit code 0 |
-| **CORS preflight** | **PASS** | Status 204, `Access-Control-Allow-Origin: https://khata.algions.in`, `Idempotency-Key` present |
+| **CORS preflight** | **PASS** | Status 204, `Access-Control-Allow-Origin: https://erp.algions.in`, `Idempotency-Key` present |
 | **Production env validation** | **PASS** | Fails closed on insecure cookies, non-TLS URLs, missing secrets |
 | **Login abuse retention** | **PASS** | Normalized phone bucketing + throttled advisory-locked pruning |
 | **Real PostgreSQL migrations** | **PASS** | Applied migrations 001, 002, 003 tracked in `schema_migrations` |
@@ -264,5 +264,5 @@ All financial calculations use `decimal.js` with `ROUND_HALF_UP`:
 1. **Rotate Neon Password:** In Neon dashboard (`shy-mud-94919289`), reset `neondb_owner` password.
 2. **Apply Migrations to Live Neon:** Run `npm run migrate` using the fresh direct connection URL.
 3. **Configure Render:** Set `OWNER_PHONE`, `OWNER_PASSWORD_HASH`, `DATABASE_URL_POOLED`, and `DATABASE_URL` on Render dashboard (`plan: free`, `region: singapore`).
-4. **Configure Vercel:** Verify root directory is `.`, framework preset is Vite, Node version is `22.x`, and `VITE_API_BASE_URL=https://api-khata.algions.in`.
+4. **Configure Vercel:** Verify root directory is `.`, framework preset is Vite, Node version is `22.x`, and `VITE_API_BASE_URL=https://api-erp.algions.in`.
 5. **Android Release Keystore:** Generate key following `docs/KEYSTORE_GENERATION.md` and assemble release APK.

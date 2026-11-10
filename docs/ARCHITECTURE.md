@@ -15,13 +15,13 @@ The Android app and the website are two interfaces for the **same shopkeeper and
 ```mermaid
 flowchart TD
     subgraph Clients["Client Layer"]
-        PWA["Web Browser (PWA)\nhttps://khata.algions.in\n(Vercel CDN Edge)"]
+        PWA["Web Browser (PWA)\nhttps://erp.algions.in\n(Vercel CDN Edge)"]
         TWA["Android TWA Shell\nin.algions.khata\n(androidbrowserhelper)"]
     end
 
     subgraph Hosting["Edge / Cloud Infrastructure"]
         Vercel["Vercel CDN / Edge\nStatic Assets, SPA Routing, sw.js, manifest.json"]
-        Render["Render Web Service\nNode 22 / Express Backend\nhttps://api-khata.algions.in"]
+        Render["Render Web Service\nNode 22 / Express Backend\nhttps://api-erp.algions.in"]
         R2["Cloudflare R2 Object Storage\nPrivate Bucket (khata-documents)\nPresigned PUT / GET URLs"]
     end
 
@@ -50,7 +50,7 @@ flowchart TD
 | Layer | Technologies & Rationale |
 |---|---|
 | **Frontend Web** | React 19, TypeScript 5, Vite 6, Tailwind CSS 3, Lucide React.<br>Progressive Web App (PWA) with Network-First Service Worker (`sw.js`).<br>Custom `SearchablePicker` with debounced search, monotonic request IDs, and focus trap.<br>Self-hosted `@fontsource/montserrat` for 100% offline typography.<br>Native HTML5 camera capture (`capture="environment"`) and lightbox document viewer. |
-| **Android Shell** | Trusted Web Activity (TWA) via `androidbrowserhelper:2.5.0` and `androidx.browser:1.8.0`.<br>Package ID: `in.algions.khata`. Renders live remote site `https://khata.algions.in` in full screen with no browser URL bar. |
+| **Android Shell** | Trusted Web Activity (TWA) via `androidbrowserhelper:2.5.0` and `androidx.browser:1.8.0`.<br>Package ID: `in.algions.khata`. Renders live remote site `https://erp.algions.in` in full screen with no browser URL bar. |
 | **Backend API** | Node.js 22 LTS, Express 4, TypeScript 5, `pg` (PostgreSQL client).<br>Monorepo structure managed with native npm workspaces. |
 | **Object Storage** | Cloudflare R2 (S3-compatible, private bucket, region `auto`, zero egress fees).<br>Direct presigned PUT/GET upload pattern and server-side magic byte inspection. |
 | **Financial Engine** | `decimal.js` for arbitrary-precision decimal arithmetic (financial rounding half-up, strict 2-decimal-place scale for money and fractional quantities up to 2 decimal places). |

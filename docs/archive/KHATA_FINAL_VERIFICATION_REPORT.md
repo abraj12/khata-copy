@@ -14,7 +14,7 @@
 - **Production Backend:** Live on Render Singapore region (`https://khata-api-wkn9.onrender.com`), health readiness returns HTTP 200 `status: "ready"`, latency ~100ms.
 - **Production Database:** Neon PostgreSQL Singapore region (`ep-aged-resonance-az771dby`), all 9 core tables verified and all 3 migrations (`001`, `002`, `003`) applied.
 - **Frontend Neumorphic System:** Exactly 9 tactile styles + persistent Appearance & Accessibility bar + 4-tier rem text scaling (100%–145%) + contrast override + motion and spacing controls + Montserrat offline bundle (weights 400, 500, 600, 700).
-- **Subdomain Routing:** `khata.algions.in` configured in Vercel manifests with strict CSP; step-by-step DNS CNAME instructions documented.
+- **Subdomain Routing:** `erp.algions.in` configured in Vercel manifests with strict CSP; step-by-step DNS CNAME instructions documented.
 
 ---
 
@@ -185,15 +185,15 @@ Live verification output from `/api/v1/health/ready`:
 
 ---
 
-## 7. Subdomain Setup Guide: `khata.algions.in`
+## 7. Subdomain Setup Guide: `erp.algions.in`
 
-To map `https://khata.algions.in` to your Vercel deployment:
+To map `https://erp.algions.in` to your Vercel deployment:
 
 ### Step 1: Vercel Project Domain Assignment
 1. Log in to [Vercel Dashboard](https://vercel.com).
 2. Select your `khata` frontend project.
 3. Navigate to **Settings** -> **Domains**.
-4. Type `khata.algions.in` and click **Add**.
+4. Type `erp.algions.in` and click **Add**.
 5. Vercel will display the recommended DNS record:
    - Record Type: `CNAME`
    - Name: `khata`
@@ -210,11 +210,11 @@ Log in to your DNS provider for domain `algions.in` (e.g. Cloudflare, GoDaddy, N
    - *(If Cloudflare: set Proxy status to DNS Only during initial SSL verification)*
 3. Save the record.
 
-### Step 3: Backend API Subdomain (`api-khata.algions.in`) on Render
+### Step 3: Backend API Subdomain (`api-erp.algions.in`) on Render
 1. Log in to [Render Dashboard](https://dashboard.render.com).
 2. Select your `khata-api` web service.
 3. Go to **Settings** -> **Custom Domains**.
-4. Add `api-khata.algions.in`.
+4. Add `api-erp.algions.in`.
 5. Render will provide the CNAME target (e.g. `khata-api-wkn9.onrender.com`).
 6. In your DNS provider for `algions.in`, add:
    - **Type:** `CNAME`

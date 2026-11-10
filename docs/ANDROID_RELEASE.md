@@ -5,7 +5,7 @@
 **Package Application ID:** `in.algions.khata`  
 **Application Name:** Khata  
 **Target Platform:** Android (Trusted Web Activity via `androidbrowserhelper:2.5.0` & AndroidX Browser `1.8.0`)  
-**Production URL:** `https://khata.algions.in`  
+**Production URL:** `https://erp.algions.in`  
 **Gradle Wrapper:** 8.11.1 | **JDK:** 17 | **Compile SDK:** 35 | **Min SDK:** 23
 
 ---
@@ -15,11 +15,11 @@
 The Android application uses Google's Trusted Web Activity (TWA) architecture. 
 
 Rather than bundling static web assets inside the APK (which would require generating and distributing a new APK every time the frontend is updated), the Android application points directly to the live remote website:
-`https://khata.algions.in`.
+`https://erp.algions.in`.
 
 ### Key Benefits:
-1. **Immediate Frontend Updates:** Any frontend change deployed to `https://khata.algions.in` is immediately reflected in the installed Android application on refresh or reopen via the Network-First Service Worker (`sw.js`). No new APK rebuild is required.
-2. **Single Shopkeeper Experience:** Both the browser website and the installed Android app communicate with the same backend API (`https://api-khata.algions.in`) and the same Neon PostgreSQL database.
+1. **Immediate Frontend Updates:** Any frontend change deployed to `https://erp.algions.in` is immediately reflected in the installed Android application on refresh or reopen via the Network-First Service Worker (`sw.js`). No new APK rebuild is required.
+2. **Single Shopkeeper Experience:** Both the browser website and the installed Android app communicate with the same backend API (`https://api-erp.algions.in`) and the same Neon PostgreSQL database.
 3. **Full Screen Chrome-Free Experience:** When Digital Asset Links verification succeeds, the browser URL address bar is hidden completely, presenting an app experience indistinguishable from a native application.
 4. **Lightweight APK:** Zero bundled HTML/JS assets inside the binary.
 
@@ -33,7 +33,7 @@ Rather than bundling static web assets inside the APK (which would require gener
 
 ### 2.1 Website-Side Asset Links
 Android verifies ownership of the remote website by fetching:
-`https://khata.algions.in/.well-known/assetlinks.json`
+`https://erp.algions.in/.well-known/assetlinks.json`
 
 The file is hosted from `frontend/public/.well-known/assetlinks.json` and served with `Content-Type: application/json`.
 
@@ -56,7 +56,7 @@ The file is hosted from `frontend/public/.well-known/assetlinks.json` and served
 In `android-twa/app/src/main/res/values/strings.xml`:
 ```xml
 <string name="asset_statements" translatable="false">
-    [{\\\"relation\\\": [\\\"delegate_permission/common.handle_all_urls\\\"], \\\"target\\\": {\\\"namespace\\\": \\\"web\\\", \\\"site\\\": \\\"https://khata.algions.in\\\"}}]
+    [{\\\"relation\\\": [\\\"delegate_permission/common.handle_all_urls\\\"], \\\"target\\\": {\\\"namespace\\\": \\\"web\\\", \\\"site\\\": \\\"https://erp.algions.in\\\"}}]
 </string>
 ```
 And inside `<application>` in `android-twa/app/src/main/AndroidManifest.xml`:
@@ -140,7 +140,7 @@ cd android-twa
    adb install -r android-twa/app/build/outputs/apk/debug/app-debug.apk
    ```
 2. **Open Khata:** Launch the app from the Android home screen.
-3. **Verify Full-Screen TWA:** The app opens `https://khata.algions.in` with full-screen experience and NO visible browser URL bar (confirming Digital Asset Links auto-verification).
+3. **Verify Full-Screen TWA:** The app opens `https://erp.algions.in` with full-screen experience and NO visible browser URL bar (confirming Digital Asset Links auto-verification).
 4. **Test Live Website Updates:**
    - Deploy a frontend styling or feature update to Vercel.
    - Reopen or refresh Khata on the Android device.

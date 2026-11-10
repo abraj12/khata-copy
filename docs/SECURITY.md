@@ -90,7 +90,7 @@ Configured in `vercel.json` and `frontend/vercel.json`:
 - `script-src 'self'`
 - `style-src 'self' 'unsafe-inline'` (required for runtime Tailwind dynamic styles)
 - `img-src 'self' data: https:`
-- `connect-src 'self' https://khata-api-wkn9.onrender.com https://api-khata.algions.in`
+- `connect-src 'self' https://khata-api-wkn9.onrender.com https://api-erp.algions.in`
 - `font-src 'self' data:` (all Montserrat fonts served locally from bundled assets)
 - `frame-ancestors 'none'` (clickjacking prevention)
 - `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload`

@@ -8,8 +8,8 @@
 
 **Document status:** Agreed implementation baseline  
 **Product:** Single-owner Khata application  
-**Frontend domain:** `https://khata.algions.in`  
-**Backend domain:** `https://api-khata.algions.in`  
+**Frontend domain:** `https://erp.algions.in`  
+**Backend domain:** `https://api-erp.algions.in`  
 **Database:** Neon PostgreSQL  
 **Backend hosting:** Render  
 **Web hosting:** Vercel or another compatible frontend host  
@@ -23,8 +23,8 @@ Implement one secure login system for a simple Khata book used by one shopkeeper
 
 The system must support:
 
-- Browser access through `khata.algions.in`.
-- Backend APIs through `api-khata.algions.in`.
+- Browser access through `erp.algions.in`.
+- Backend APIs through `api-erp.algions.in`.
 - An Android APK built with Capacitor.
 - One common owner identity and one server-side session system backed by PostgreSQL.
 - Secure logout, session expiration, login abuse controls, CSRF defence and authorization on every protected API.
@@ -54,8 +54,8 @@ Use the following intended production setup:
 
 | Purpose | URL |
 |---|---|
-| Web frontend | `https://khata.algions.in` |
-| API backend | `https://api-khata.algions.in` |
+| Web frontend | `https://erp.algions.in` |
+| API backend | `https://api-erp.algions.in` |
 | Main company website (unaffected) | `https://www.algions.in` |
 
 The frontend and backend have different **origins**, so the browser needs credentialed CORS. They are expected to be **same-site** because both use HTTPS and share the registrable domain `algions.in`.
@@ -67,7 +67,7 @@ The frontend and backend have different **origins**, so the browser needs creden
 - `Secure`: true.
 - `SameSite`: `Lax`.
 - `Path`: `/`.
-- `Domain`: omit the attribute. This creates a host-only cookie for `api-khata.algions.in` instead of sharing the cookie with every `algions.in` subdomain.
+- `Domain`: omit the attribute. This creates a host-only cookie for `api-erp.algions.in` instead of sharing the cookie with every `algions.in` subdomain.
 - Expiry: 7-day inactivity expiry, configurable through `SESSION_MAX_AGE_MS`.
 - No session identifier in JSON, localStorage, sessionStorage, logs, URLs or HTML.
 
@@ -79,7 +79,7 @@ Use a central API client. For `fetch`, use `credentials: 'include'`. For Axios, 
 
 ### Backend CORS
 
-- Allow only the exact configured production frontend origin: `https://khata.algions.in`.
+- Allow only the exact configured production frontend origin: `https://erp.algions.in`.
 - Allow explicitly configured local-development origins only in development.
 - Set `Access-Control-Allow-Credentials: true`.
 - Never combine credentialed CORS with `Access-Control-Allow-Origin: *`.
@@ -241,7 +241,7 @@ SESSION_COOKIE_HTTP_ONLY=true
 SESSION_COOKIE_SAME_SITE=lax
 
 # Browser frontend origin
-FRONTEND_URL=https://khata.algions.in
+FRONTEND_URL=https://erp.algions.in
 
 # Login-abuse protection
 LOGIN_MAX_ATTEMPTS=5
@@ -352,7 +352,7 @@ Realtime was explicitly requested as a provisioned Neon service. Wire it into th
 
 Database and Realtime credentials previously pasted into chat must be treated as exposed. Do not copy those old literal values into source files, documentation, test fixtures, logs, or hosting configuration. Before production use, have the owner rotate the `neondb_owner` role password and the Realtime secret in Neon, then use the newly generated values from the CLI/Console. The agent must not display secrets in its output.
 
-Keep real `.env`/`.env.local` files out of Git. Confirm `.gitignore` covers them. The frontend receives only a public API base URL (for example `VITE_API_BASE_URL=https://api-khata.algions.in`); never put `DATABASE_URL`, `DATABASE_URL_POOLED`, `NEON_REALTIME_SECRET`, `SESSION_SECRET`, or `OWNER_PASSWORD_HASH` behind any frontend-exposed prefix.
+Keep real `.env`/`.env.local` files out of Git. Confirm `.gitignore` covers them. The frontend receives only a public API base URL (for example `VITE_API_BASE_URL=https://api-erp.algions.in`); never put `DATABASE_URL`, `DATABASE_URL_POOLED`, `NEON_REALTIME_SECRET`, `SESSION_SECRET`, or `OWNER_PASSWORD_HASH` behind any frontend-exposed prefix.
 
 ## 8. Brute-force and login abuse protection
 
@@ -540,7 +540,7 @@ On app start or page refresh, call `/auth/me` using credentials. Render protecte
 
 ## 13. Capacitor Android APK considerations
 
-The Android WebView may use a local/custom origin rather than `https://khata.algions.in`. A request from a local Capacitor origin to `api-khata.algions.in` may be cross-site, which can change `SameSite=Lax` cookie behaviour.
+The Android WebView may use a local/custom origin rather than `https://erp.algions.in`. A request from a local Capacitor origin to `api-erp.algions.in` may be cross-site, which can change `SameSite=Lax` cookie behaviour.
 
 Before implementing the APK session mechanism:
 
@@ -772,8 +772,8 @@ Expected: rejected or rendered inertly as text. It must never execute. No unsafe
 
 Before production deployment:
 
-1. Configure `khata.algions.in` to the frontend host using its assigned DNS target.
-2. Configure `api-khata.algions.in` to the Render backend using its assigned DNS target.
+1. Configure `erp.algions.in` to the frontend host using its assigned DNS target.
+2. Configure `api-erp.algions.in` to the Render backend using its assigned DNS target.
 3. Wait until HTTPS certificates are active for both hostnames.
 4. Set production environment variables in Render; do not upload the local `.env` file.
 5. Generate the Argon2id password hash locally with the hidden-input script.

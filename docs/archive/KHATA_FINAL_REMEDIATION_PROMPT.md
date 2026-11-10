@@ -8,7 +8,7 @@
 **Priority:** Critical — financial correctness, authentication, Neon integration, Android release and deployment readiness.  
 **Target app:** Single-owner, single-shopkeeper Khata book.  
 **Existing stack:** React + Vite, Express + TypeScript, PostgreSQL on Neon, Render backend, Vercel frontend, Capacitor Android APK.  
-**Custom domains:** `https://khata.algions.in` and `https://api-khata.algions.in`.  
+**Custom domains:** `https://erp.algions.in` and `https://api-erp.algions.in`.  
 **Android application ID:** `in.algions.khata`.  
 **Production branch:** Neon `production`.  
 **Latest supplied remediation commit/report:** Commit `00e5258`, branch `fix/khata-production-remediation` (inspect the actual checked-out branch and Git status; do not assume the report is current).
@@ -212,7 +212,7 @@ SESSION_COOKIE_NAME=khata_session
 SESSION_COOKIE_SECURE=true
 SESSION_COOKIE_HTTP_ONLY=true
 SESSION_COOKIE_SAME_SITE=lax
-FRONTEND_URL=https://khata.algions.in
+FRONTEND_URL=https://erp.algions.in
 TRUST_PROXY=1
 ```
 
@@ -519,7 +519,7 @@ Review the whole authentication flow. Preserve the core model:
 
 Review `backend/src/middleware/csrf.ts` and CORS in `backend/src/app.ts`.
 
-- Production allowed origins must be limited to `https://khata.algions.in` and the explicitly validated Capacitor WebView origins required by the chosen native HTTP/cookie architecture.
+- Production allowed origins must be limited to `https://erp.algions.in` and the explicitly validated Capacitor WebView origins required by the chosen native HTTP/cookie architecture.
 - Do not allow `http://localhost`, `http://127.0.0.1`, or development origins in production. Keep those only in development/test configuration.
 - Never use wildcard CORS with credentials.
 - Require a valid session-bound CSRF token for every state-changing authenticated API call (POST/PATCH/PUT/DELETE), except the unauthenticated login endpoint which still requires a valid allowed Origin policy.
@@ -534,7 +534,7 @@ Add tests for forbidden production localhost origins, wildcard rejection, absent
 
 ## 7.3 Android-specific cookies
 
-The Android app uses Capacitor with bundled frontend assets and the API at `https://api-khata.algions.in`. A browser request and a Capacitor WebView request do not necessarily share cookie behaviour.
+The Android app uses Capacitor with bundled frontend assets and the API at `https://api-erp.algions.in`. A browser request and a Capacitor WebView request do not necessarily share cookie behaviour.
 
 Do not assume CORS allowlisting `capacitor://localhost` alone proves cookie persistence. Test the real app on an Android device or emulator:
 
@@ -760,8 +760,8 @@ Do not call a DB-dependent route `healthy` when the database is unavailable. Rea
 The intended architecture is:
 
 ```text
-khata.algions.in       -> Vercel frontend (React + Vite)
-api-khata.algions.in   -> Render backend (Express)
+erp.algions.in       -> Vercel frontend (React + Vite)
+api-erp.algions.in   -> Render backend (Express)
 Neon Singapore        -> PostgreSQL
 Android APK           -> Capacitor native wrapper with bundled frontend
 ```
@@ -785,7 +785,7 @@ Inspect `render.yaml`:
 ## 11.2 Vercel
 
 - Vercel hosts only the frontend bundle.
-- Configure `VITE_API_BASE_URL=https://api-khata.algions.in`.
+- Configure `VITE_API_BASE_URL=https://api-erp.algions.in`.
 - Never put database URLs, owner credentials, password hashes, session secrets or Realtime secrets in Vercel environment variables or `VITE_*` variables.
 - Keep Vercel SPA rewrites and security headers correct.
 - CSP `connect-src` should allow only the frontend itself and the exact backend origin, plus official Realtime endpoints only if Realtime is genuinely implemented.
@@ -794,11 +794,11 @@ Inspect `render.yaml`:
 
 ## 11.3 Cookies and domains
 
-- Website origin: `https://khata.algions.in`.
-- API origin: `https://api-khata.algions.in`.
+- Website origin: `https://erp.algions.in`.
+- API origin: `https://api-erp.algions.in`.
 - These are distinct origins but same-site HTTPS subdomains.
 - Use credentialed CORS with the exact frontend origin.
-- Use a host-only cookie for `api-khata.algions.in`; do not set `Domain=.algions.in`.
+- Use a host-only cookie for `api-erp.algions.in`; do not set `Domain=.algions.in`.
 - Browser Axios/fetch must include credentials.
 - Test cookie set, send, refresh, expiry and logout against deployed HTTPS endpoints.
 
@@ -968,7 +968,7 @@ SESSION_COOKIE_NAME=khata_session
 SESSION_COOKIE_SECURE=true
 SESSION_COOKIE_HTTP_ONLY=true
 SESSION_COOKIE_SAME_SITE=lax
-FRONTEND_URL=https://khata.algions.in
+FRONTEND_URL=https://erp.algions.in
 TRUST_PROXY=1
 LOGIN_MAX_ATTEMPTS=5
 LOGIN_FAILURE_WINDOW_MS=900000
@@ -984,7 +984,7 @@ Only add `LOGIN_HASH_SECRET` or Realtime variables if the implementation genuine
 Vercel frontend variable:
 
 ```env
-VITE_API_BASE_URL=https://api-khata.algions.in
+VITE_API_BASE_URL=https://api-erp.algions.in
 ```
 
 Never include the values of these variables in the completion report. Do not ask the owner to paste secrets into chat. Use local private files or the hosting dashboard.

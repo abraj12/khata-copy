@@ -16,8 +16,8 @@ MANDATORY FIRST ACTION — INSPECT THE REAL REPOSITORY
 3. Read existing authentication, database, API-client, routing, environment, and deployment code before changing anything.
 4. Identify whether any authentication implementation already exists. Reuse and safely improve it rather than creating duplicate middleware, duplicate session stores, competing login pages, or another database connection pool.
 5. Identify the actual production origins. The intended production URLs are:
-   - Web frontend: https://khata.algions.in
-   - API backend: https://api-khata.algions.in
+   - Web frontend: https://erp.algions.in
+   - API backend: https://api-erp.algions.in
    - Existing company website https://www.algions.in must remain unaffected.
 6. Inspect the Android Capacitor app's actual WebView origin and networking approach. Do not assume that cookie behaviour in a desktop browser automatically works in an APK.
 7. Before coding, write a short implementation plan in your work notes or final report that maps the requirements below to the actual files in this repository. Then proceed with implementation; do not stop after providing a plan.
@@ -73,7 +73,7 @@ D. Login abuse protection
 E. CSRF and CORS
 - CORS allowlist must contain only the production frontend origin and explicitly configured local-development origins. No wildcard origin with credentials.
 - For the browser frontend, send credentials on API calls (fetch credentials: 'include' or Axios withCredentials: true).
-- SameSite=Lax is appropriate for the intended HTTPS subdomains khata.algions.in and api-khata.algions.in because they are different origins but same-site under the same registrable domain and scheme. Keep the cookie host-only to api-khata.algions.in.
+- SameSite=Lax is appropriate for the intended HTTPS subdomains erp.algions.in and api-erp.algions.in because they are different origins but same-site under the same registrable domain and scheme. Keep the cookie host-only to api-erp.algions.in.
 - SameSite is not a replacement for CSRF protection. Protect state-changing requests (POST, PUT, PATCH, DELETE) with a maintained CSRF implementation or a correctly implemented session-bound synchronizer token, plus strict Origin/Referer validation as defence in depth. Do not use deprecated CSRF packages without checking their maintenance status.
 - If a CSRF token endpoint is used, document how the frontend obtains, holds, refreshes, and sends the token. Do not store the CSRF token persistently unless there is a compelling reason; in-memory state is preferred.
 - Handle CORS preflight correctly and include Vary: Origin where appropriate.
@@ -131,7 +131,7 @@ SESSION_COOKIE_NAME=khata_session
 SESSION_COOKIE_SECURE=true
 SESSION_COOKIE_HTTP_ONLY=true
 SESSION_COOKIE_SAME_SITE=lax
-FRONTEND_URL=https://khata.algions.in
+FRONTEND_URL=https://erp.algions.in
 LOGIN_MAX_ATTEMPTS=5
 LOGIN_FAILURE_WINDOW_MS=900000
 LOGIN_LOCK_DURATION_MS=900000
@@ -279,7 +279,7 @@ STAGE 5 — CORS, cookies and CSRF
 - Configure host-only cookie flags and 7-day inactivity expiry.
 - Configure trusted proxy behaviour for Render.
 - Implement CSRF protection and Origin/Referer checks.
-- Verify browser requests from https://khata.algions.in to https://api-khata.algions.in.
+- Verify browser requests from https://erp.algions.in to https://api-erp.algions.in.
 
 STAGE 6 — Login UI and frontend auth state
 - Implement the login screen and validation.
@@ -343,7 +343,7 @@ When finished, provide:
 2. A description of the final login flow and session lifecycle.
 3. The final environment variable list with which values are required, which are safe defaults, and which must be configured on Render.
 4. Instructions to generate the Argon2id hash and add it to Render without exposing the plaintext password.
-5. DNS/hosting/CORS/cookie configuration needed for khata.algions.in and api-khata.algions.in.
+5. DNS/hosting/CORS/cookie configuration needed for erp.algions.in and api-erp.algions.in.
 6. How to test login, logout, session expiry and rate limiting manually.
 7. Automated test, lint, typecheck, production build and APK build results. Include actual command results; never fabricate passing tests.
 8. Any unresolved limitations, especially Android cookie/session behaviour or tests that could not be run.

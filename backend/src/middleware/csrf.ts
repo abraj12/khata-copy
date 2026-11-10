@@ -5,7 +5,7 @@ import { env } from '../config/env.js';
 const PRODUCTION_ALLOWED_ORIGINS = new Set([
   env.FRONTEND_URL,
   'https://erp.algions.in',
-  'https://khata.algions.in',
+
   'android-app://in.algions.khata',
 ]);
 

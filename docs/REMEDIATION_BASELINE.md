@@ -7,8 +7,8 @@
 **npm Package Manager:** `v10.x` / `v11.x`  
 **Active Test Suites:** 5 suites / 77 passing tests  
 **Production Endpoints:**
-- Website: `https://khata.algions.in`
-- Backend API: `https://api-khata.algions.in`
+- Website: `https://erp.algions.in`
+- Backend API: `https://api-erp.algions.in`
 - Android Application ID: `in.algions.khata`
 
 ---

@@ -1,8 +1,8 @@
 # Cloudflare R2 Object Storage Setup Guide
 
 **Application:** Khata (ALGIONS)  
-**Production Website:** `https://khata.algions.in`  
-**Production API:** `https://api-khata.algions.in`  
+**Production Website:** `https://erp.algions.in`  
+**Production API:** `https://api-erp.algions.in`  
 **Features Enabled:**
 1. **Product Images:** Optional primary photograph for catalog items.
 2. **Offline Bills:** Photographic storage for physical customer bills (document storage only, zero financial/ledger impact).
@@ -47,7 +47,7 @@ Because the browser uploads files directly to R2 using presigned PUT URLs, CORS 
 [
   {
     "AllowedOrigins": [
-      "https://khata.algions.in",
+      "https://erp.algions.in",
       "http://localhost:5173",
       "http://localhost:3000"
     ],
@@ -91,7 +91,7 @@ Because the browser uploads files directly to R2 using presigned PUT URLs, CORS 
 
 ### Step 5: Configure Environment Variables on Render
 
-In your Render Dashboard for the backend service (`api-khata.algions.in`), add the following environment variables under **Environment**:
+In your Render Dashboard for the backend service (`api-erp.algions.in`), add the following environment variables under **Environment**:
 
 | Variable Name | Value | Description |
 |---|---|---|
@@ -121,7 +121,7 @@ Or execute `backend/migrations/009_product_images_and_offline_bills.sql` directl
 ### Step 7: Verify Functionality
 
 1. **Product Images:**
-   - Open `https://khata.algions.in` and log in.
+   - Open `https://erp.algions.in` and log in.
    - Go to **Products** master.
    - Click **Add Product** and snap a camera photo or choose a local image.
    - Click **Save Product**; verify the thumbnail appears in the product catalogue.

@@ -245,7 +245,7 @@ TypeScript compiler output: **0 errors**.
 1. **Apply Migration 005 to Neon Production:**
    - Execute: `npm run migrate --workspace=backend` using direct connection string (`DIRECT_URL`).
 2. **Confirm Readiness on Render:**
-   - Verify `GET https://api-khata.algions.in/api/v1/health/ready` returns `"status": "ready"` with migration `005_search_indexes_and_identity_constraints.sql` listed in `found`.
+   - Verify `GET https://api-erp.algions.in/api/v1/health/ready` returns `"status": "ready"` with migration `005_search_indexes_and_identity_constraints.sql` listed in `found`.
 3. **Android Release Signing:**
    - Execute `./gradlew assembleRelease` using the owner's private keystore.
 4. **Physical Device Validation:**

@@ -7,8 +7,8 @@
 **Target project:** Existing single-shopkeeper Khata application  
 **Source baseline:** Latest `khata(2).zip` / latest repository branch supplied by the owner  
 **Deployment target:** Vercel frontend + Render backend + Neon PostgreSQL  
-**Website:** `https://khata.algions.in`  
-**API:** `https://api-khata.algions.in`  
+**Website:** `https://erp.algions.in`  
+**API:** `https://api-erp.algions.in`  
 **Android package:** `in.algions.khata`  
 **Runtime target:** Node.js 22.x; Linux cloud builds must work (Vercel build environment and Render Linux runtime), as well as the owner's Windows development machine.
 
@@ -142,7 +142,7 @@ Record the required dashboard setting in `docs/DEPLOYMENT_CONFIGURATION.md`:
 - Root Directory: repository root (`.` / blank root setting).
 - Framework Preset: Vite or Other with the explicit commands below.
 - Node.js Version: `22.x`.
-- Production domain: `khata.algions.in`.
+- Production domain: `erp.algions.in`.
 - No backend database secrets in Vercel.
 
 Do not claim you changed the Vercel dashboard unless you actually have dashboard access. Provide the owner the exact required setting if you cannot change it.
@@ -172,7 +172,7 @@ Use this configuration as the baseline when Vercel Root Directory is the reposit
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; connect-src 'self' https://api-khata.algions.in; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+          "value": "default-src 'self'; connect-src 'self' https://api-erp.algions.in; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
         }
       ]
     }
@@ -185,7 +185,7 @@ Important:
 - Preserve any genuinely required existing headers, but remove `http://localhost:5000` and `ws://localhost:5000` from the production CSP.
 - Realtime is currently deferred. Do not allow an invented Realtime host. If later implementing the official SDK, add only its documented endpoint and test it.
 - Do not configure `VITE_DATABASE_URL`, `VITE_SESSION_SECRET`, `VITE_OWNER_PASSWORD_HASH`, `VITE_NEON_REALTIME_SECRET` or any server secret.
-- `VITE_API_BASE_URL` may be `https://api-khata.algions.in` and is not secret.
+- `VITE_API_BASE_URL` may be `https://api-erp.algions.in` and is not secret.
 - If the exact `npm ci --workspace=frontend --include-workspace-root=false` command fails under the current npm/workspace setup, diagnose it and select a proven root-lockfile-compatible command. Do not silently revert to `cd frontend && npm install`.
 
 ## 2.3 Verify Vercel build locally and on Linux
@@ -273,19 +273,19 @@ Ensure OPTIONS preflight is handled before routes and middleware that could reje
 
 Allowed production origins should be restricted to the actual website and only the Android origins genuinely required by the packaged Capacitor app:
 
-- `https://khata.algions.in`
+- `https://erp.algions.in`
 - `capacitor://localhost`
 - `https://localhost`
 
 Do not allow arbitrary `null` origins in production. Do not allow localhost HTTP development origins in production. Keep local development origins only in development/test configuration.
 
-`https://api-khata.algions.in` is the API origin; it should not be added as a browser frontend origin unless a real browser page is hosted there.
+`https://api-erp.algions.in` is the API origin; it should not be added as a browser frontend origin unless a real browser page is hosted there.
 
 ## 4.3 Add real preflight tests
 
 Add tests that send an actual OPTIONS request to the API using:
 
-- `Origin: https://khata.algions.in`
+- `Origin: https://erp.algions.in`
 - `Access-Control-Request-Method: POST`
 - `Access-Control-Request-Headers: content-type,x-csrf-token,idempotency-key`
 
@@ -298,7 +298,7 @@ Assert:
 
 Also assert that an unapproved origin is rejected and that `http://localhost:5173` is rejected in production.
 
-Then perform an end-to-end browser/API test that submits one Udhar and one payment with an idempotency key from `https://khata.algions.in`.
+Then perform an end-to-end browser/API test that submits one Udhar and one payment with an idempotency key from `https://erp.algions.in`.
 
 ---
 
@@ -329,7 +329,7 @@ Required production values:
 - `SESSION_COOKIE_SECURE=true`
 - `SESSION_COOKIE_HTTP_ONLY=true`
 - `SESSION_COOKIE_SAME_SITE=lax`
-- `FRONTEND_URL=https://khata.algions.in`
+- `FRONTEND_URL=https://erp.algions.in`
 - correct `TRUST_PROXY` configuration for Render
 
 Realtime variables must remain optional because Realtime is explicitly deferred. If the source still mounts a placeholder Realtime route, remove it or make its disabled state explicit; it must not force the owner to configure Realtime secrets.
@@ -595,9 +595,9 @@ Review all frontend pages and APIs to ensure they continue to meet the owner's s
 
 Check frontend API base URL uses `VITE_API_BASE_URL` and the actual API subdomain. Do not hardcode a localhost production URL.
 
-Check Vercel CSP allows `https://api-khata.algions.in` and does not allow localhost HTTP/WS in production. If REST-only mode is in use, no WebSocket or Realtime host is required.
+Check Vercel CSP allows `https://api-erp.algions.in` and does not allow localhost HTTP/WS in production. If REST-only mode is in use, no WebSocket or Realtime host is required.
 
-Confirm same-site cookie expectations: `khata.algions.in` and `api-khata.algions.in` are different origins but same-site over HTTPS. CORS must still allow the exact frontend origin and credentials. Use host-only `api-khata` cookie; do not set `Domain=.algions.in`.
+Confirm same-site cookie expectations: `erp.algions.in` and `api-erp.algions.in` are different origins but same-site over HTTPS. CORS must still allow the exact frontend origin and credentials. Use host-only `api-khata` cookie; do not set `Domain=.algions.in`.
 
 ---
 

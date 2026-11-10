@@ -4,8 +4,8 @@
 **Project:** ALGIONS — Khata  
 **Repository:** `abraj12/khata`  
 **Audited Baseline Commit:** `bc4a4703b507b9e8c8233b8d383eb6417dfcf749`  
-**Production Website:** `https://khata.algions.in`  
-**Production API:** `https://api-khata.algions.in`  
+**Production Website:** `https://erp.algions.in`  
+**Production API:** `https://api-erp.algions.in`  
 **Android Application ID:** `in.algions.khata`  
 **Target Android Architecture:** Trusted Web Activity (TWA) pointing directly to remote production website
 
@@ -55,7 +55,7 @@ The only remaining items are **external production owner credentials**:
 - **Finding:** Gradle defined `assetStatements` placeholder, but `AndroidManifest.xml` lacked `<meta-data android:name="asset_statements" ... />` application-side statement. Also, `assetlinks.json` used a debug fingerprint.
 - **Root Cause:** Missing metadata entry in Android manifest and string resource.
 - **Fix:** 
-  - Added `<string name="asset_statements">` in `android-twa/app/src/main/res/values/strings.xml` pointing to `https://khata.algions.in`.
+  - Added `<string name="asset_statements">` in `android-twa/app/src/main/res/values/strings.xml` pointing to `https://erp.algions.in`.
   - Added `<meta-data android:name="asset_statements" android:resource="@string/asset_statements" />` in `android-twa/app/src/main/AndroidManifest.xml`.
   - Linked launcher activity to `${defaultUrl}` and `${hostName}`.
   - Documented certificate distinction clearly in `docs/ANDROID_RELEASE.md`.
@@ -170,14 +170,14 @@ The only remaining items are **external production owner credentials**:
 ## E. Android TWA Verification
 
 - **Package ID:** `in.algions.khata` (Preserved)
-- **Launch URL:** `https://khata.algions.in`
+- **Launch URL:** `https://erp.algions.in`
 - **Gradle Version:** 8.11.1
 - **Java Version:** JDK 17 (Eclipse Adoptium 17.0.20.1)
 - **Android SDK:** Compile SDK 35, Min SDK 23
 - **Debug APK Build:** **SUCCESS** (`app-debug.apk`, 3,705,861 bytes)
 - **Release APK Build:** **SAFE FAIL-CLOSED VERIFIED** (Aborts with code 1 and security error when credentials are not configured)
 - **Digital Asset Links:** **VALIDATED** via `frontend/scripts/validate-assetlinks.js`
-- **TWA Remote Update Behavior:** The Android app launches `https://khata.algions.in` via `LauncherActivity`. When new web code is deployed, the Network-First Service Worker updates the client on reopen/refresh without rebuilding the APK.
+- **TWA Remote Update Behavior:** The Android app launches `https://erp.algions.in` via `LauncherActivity`. When new web code is deployed, the Network-First Service Worker updates the client on reopen/refresh without rebuilding the APK.
 
 ---
 

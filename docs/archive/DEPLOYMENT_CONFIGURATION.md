@@ -4,7 +4,7 @@
 
 # Khata Deployment Configuration Guide
 
-## 1. Vercel Frontend Deployment (`https://khata.algions.in`)
+## 1. Vercel Frontend Deployment (`https://erp.algions.in`)
 
 Vercel supports two configuration modes. Both use the committed root lockfile (`package-lock.json`) and enforce the exact same production security headers and CSP.
 
@@ -28,12 +28,12 @@ When importing the repo, Vercel detects Vite inside `frontend/` and defaults **R
 - **Node.js Version:** `22.x`
 
 ### Environment Variables on Vercel
-- `VITE_API_BASE_URL`: `https://api-khata.algions.in` (Public, non-secret API endpoint)
+- `VITE_API_BASE_URL`: `https://api-erp.algions.in` (Public, non-secret API endpoint)
 - **STRICT PROHIBITION:** Do **NOT** configure `DATABASE_URL`, `DATABASE_URL_POOLED`, `SESSION_SECRET`, `OWNER_PHONE`, or `OWNER_PASSWORD_HASH` on Vercel. Frontend bundles are completely public and static.
 
 ---
 
-## 2. Render Backend Deployment (`https://api-khata.algions.in`)
+## 2. Render Backend Deployment (`https://api-erp.algions.in`)
 
 ### Service Specification
 - **Type:** Web Service
@@ -60,7 +60,7 @@ When importing the repo, Vercel detects Vite inside `frontend/` and defaults **R
 - `SESSION_COOKIE_SECURE`: `true`
 - `SESSION_COOKIE_HTTP_ONLY`: `true`
 - `SESSION_COOKIE_SAME_SITE`: `lax`
-- `FRONTEND_URL`: `https://khata.algions.in`
+- `FRONTEND_URL`: `https://erp.algions.in`
 - `LOGIN_MAX_ATTEMPTS`: `5`
 - `LOGIN_FAILURE_WINDOW_MS`: `900000` (15 minutes)
 - `LOGIN_LOCK_DURATION_MS`: `900000` (15 minutes)
