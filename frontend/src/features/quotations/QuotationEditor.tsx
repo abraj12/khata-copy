@@ -447,18 +447,18 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
           <button
             type="button"
             onClick={onCancel}
-            className="neu-btn-secondary text-xs px-3.5 py-2"
+            className="neu-btn-secondary text-xs px-3.5 py-2 flex-1 sm:flex-initial text-center justify-center"
           >
             Cancel
           </button>
           <button
             type="button"
             onClick={() => setPreviewPayload(buildPayload())}
-            className="neu-btn-secondary text-xs px-3.5 py-2 font-bold inline-flex items-center gap-1.5"
+            className="neu-btn-secondary text-xs px-3.5 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1 sm:flex-initial"
           >
             <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
             <span>Preview PDF</span>
@@ -467,7 +467,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
             type="button"
             disabled={isSaving}
             onClick={() => handleSave(false)}
-            className="neu-btn-secondary text-xs px-4 py-2 font-bold inline-flex items-center gap-1.5"
+            className="neu-btn-secondary text-xs px-4 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1 sm:flex-initial"
           >
             <Save className="w-4 h-4" />
             <span>Save Draft</span>
@@ -476,7 +476,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
             type="button"
             disabled={isSaving}
             onClick={() => handleSave(true)}
-            className="neu-btn-primary text-xs px-5 py-2 font-bold inline-flex items-center gap-1.5"
+            className="neu-btn-primary text-xs px-5 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1 sm:flex-initial"
           >
             {isSaving ? (
               <Loader2 className="w-4 h-4 animate-spin text-[var(--khata-accent)]" />
@@ -538,14 +538,14 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
 
         {/* Customer Section */}
         <div className="pt-2 border-t border-[var(--khata-border)] space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs font-bold uppercase text-[var(--khata-text-muted)] flex items-center gap-1.5">
               <User className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
               <span>Customer / Client Details</span>
             </span>
 
             {/* Customer Search Autocomplete */}
-            <div className="relative w-64">
+            <div className="relative w-full sm:w-64">
               <input
                 type="text"
                 placeholder="Search registered customers..."
@@ -577,7 +577,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div>
               <label className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1">
                 Customer Name <span className="text-rose-500">*</span>
@@ -677,8 +677,8 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
       </div>
 
       {/* Item Builder Card */}
-      <div className="neu-card p-5 rounded-2xl space-y-4">
-        <div className="flex items-center justify-between">
+      <div className="neu-card p-4 sm:p-5 rounded-2xl space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-bold uppercase text-[var(--khata-text)]">
               Quotation Line Items
@@ -688,7 +688,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setIsScannerOpen(true)}
@@ -708,8 +708,149 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
           </div>
         </div>
 
-        {/* Items Table */}
-        <div className="overflow-x-auto border border-[var(--khata-border)] rounded-xl">
+        {/* 1. Mobile Phone Line Items Card Editor (sm:hidden) */}
+        <div className="sm:hidden space-y-3">
+          {items.map((item, idx) => (
+            <div
+              key={idx}
+              className="p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/30 space-y-2.5"
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-[var(--khata-accent)]">Item #{idx + 1}</span>
+                <button
+                  type="button"
+                  disabled={items.length <= 1}
+                  onClick={() => handleRemoveItem(idx)}
+                  className="p-1 rounded text-[var(--khata-text-muted)] hover:text-rose-500 disabled:opacity-30 transition"
+                  title="Remove item"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Description & Autocomplete */}
+              <div className="relative">
+                <label className="block text-[10px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
+                  Description & Product <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={item.description}
+                  onChange={(e) => handleSearchRowProduct(idx, e.target.value)}
+                  placeholder="Type item description..."
+                  className="neu-input w-full text-xs py-2"
+                />
+                {productSearchResults[idx]?.length > 0 && (
+                  <div
+                    className="absolute left-0 right-0 top-full mt-1 p-1 rounded-xl border border-[var(--khata-border)] shadow-xl z-20 space-y-1 max-h-40 overflow-y-auto"
+                    style={{ background: 'var(--khata-surface)' }}
+                  >
+                    {productSearchResults[idx].map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => handleSelectRowProduct(idx, p)}
+                        className="w-full text-left p-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] transition flex justify-between items-center"
+                      >
+                        <span className="font-bold">{p.name}</span>
+                        <span className="text-[10px] text-[var(--khata-text-muted)]">₹{p.buying_price}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Qty, Unit, Rate, Amount */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
+                    Qty
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={item.quantity}
+                    onChange={(e) => handleUpdateItem(idx, 'quantity', e.target.value)}
+                    className="neu-input w-full text-xs py-1.5 text-center font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
+                    Unit
+                  </label>
+                  <input
+                    type="text"
+                    value={item.unit || 'pcs'}
+                    onChange={(e) => handleUpdateItem(idx, 'unit', e.target.value)}
+                    className="neu-input w-full text-xs py-1.5 text-center"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
+                    Rate (₹)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={item.rate}
+                    onChange={(e) => handleUpdateItem(idx, 'rate', e.target.value)}
+                    className="neu-input w-full text-xs py-1.5 text-right font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
+                    Amount (₹)
+                  </label>
+                  <div className="neu-input w-full text-xs py-1.5 text-right font-bold text-[var(--khata-accent)] bg-[var(--khata-surface)]">
+                    ₹{formatCurrency(item.amount || 0)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Optional HSN & Barcode */}
+              <div className="grid grid-cols-2 gap-2 pt-1 border-t border-[var(--khata-border)]/50">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
+                    HSN
+                  </label>
+                  <input
+                    type="text"
+                    value={item.hsnCode || ''}
+                    onChange={(e) => handleUpdateItem(idx, 'hsnCode', e.target.value)}
+                    placeholder="e.g. 8471"
+                    className="neu-input w-full text-xs py-1 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
+                    Barcode
+                  </label>
+                  <input
+                    type="text"
+                    value={item.barcode || ''}
+                    onChange={(e) => handleUpdateItem(idx, 'barcode', e.target.value)}
+                    placeholder="Barcode"
+                    className="neu-input w-full text-xs py-1 font-mono"
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+
+          <button
+            type="button"
+            onClick={handleAddItem}
+            className="neu-btn-secondary text-xs px-3 py-2 font-bold w-full inline-flex items-center justify-center gap-1.5"
+          >
+            <Plus className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
+            <span>Add Another Item</span>
+          </button>
+        </div>
+
+        {/* 2. Desktop Items Table (hidden sm:block) */}
+        <div className="hidden sm:block overflow-x-auto border border-[var(--khata-border)] rounded-xl">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-[var(--khata-surface-inset)] border-b border-[var(--khata-border)] font-bold text-[var(--khata-text-muted)] uppercase">
@@ -848,7 +989,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
               <label className="block text-xs font-bold uppercase text-[var(--khata-text-muted)]">
                 Commercial Discount:
               </label>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -888,7 +1029,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
               </div>
 
               {discountType && (
-                <div className="pt-2 flex items-center gap-2">
+                <div className="pt-2 flex flex-wrap items-center gap-2">
                   <input
                     type="number"
                     step="0.01"
@@ -923,7 +1064,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
               </div>
 
               {gstEnabled && (
-                <div className="pt-1 flex items-center gap-3">
+                <div className="pt-1 flex flex-wrap items-center gap-3">
                   <div>
                     <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-1">
                       GST Rate (%)
@@ -941,7 +1082,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                     </select>
                   </div>
 
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-[180px]">
                     <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-1">
                       Supply Type
                     </label>
@@ -1043,6 +1184,47 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
               placeholder="Special instructions or notes for this proposal..."
             />
           </div>
+        </div>
+
+        {/* Mobile Phone Bottom Action Bar (sm:hidden) */}
+        <div className="sm:hidden flex flex-wrap items-center gap-2 pt-4 border-t border-[var(--khata-border)]">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="neu-btn-secondary text-xs px-3 py-2 flex-1 text-center justify-center"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => setPreviewPayload(buildPayload())}
+            className="neu-btn-secondary text-xs px-3 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1"
+          >
+            <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
+            <span>Preview</span>
+          </button>
+          <button
+            type="button"
+            disabled={isSaving}
+            onClick={() => handleSave(false)}
+            className="neu-btn-secondary text-xs px-3 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1"
+          >
+            <Save className="w-4 h-4" />
+            <span>Save Draft</span>
+          </button>
+          <button
+            type="button"
+            disabled={isSaving}
+            onClick={() => handleSave(true)}
+            className="neu-btn-primary text-xs px-4 py-2.5 font-bold inline-flex items-center justify-center gap-1.5 w-full mt-1"
+          >
+            {isSaving ? (
+              <Loader2 className="w-4 h-4 animate-spin text-[var(--khata-accent)]" />
+            ) : (
+              <Send className="w-4 h-4" />
+            )}
+            <span>Save & Send Quotation</span>
+          </button>
         </div>
       </div>
 

@@ -347,7 +347,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
         {/* Tab Selector */}
         {!unknownBarcode && (
-          <div className="flex border-b border-[var(--khata-border)] px-4 pt-2 gap-2">
+          <div className="flex flex-wrap border-b border-[var(--khata-border)] px-4 pt-2 gap-2">
             <button
               type="button"
               onClick={() => {
@@ -515,7 +515,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                       <p className="mt-1 leading-relaxed">{cameraError}</p>
                     </div>
                   </div>
-                  <div className="flex gap-2 pt-1">
+                  <div className="flex flex-wrap gap-2 pt-1">
                     <button
                       type="button"
                       onClick={() => {

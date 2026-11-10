@@ -96,9 +96,9 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             </div>
           </div>
 
-          {/* Navigation Tabs (Khata, Products, Bill -> GST Bill / Normal Bill) */}
+          {/* Navigation Tabs (Khata, Products, Quotations, Bill -> GST Bill / Normal Bill) */}
           <nav
-            className="flex items-center gap-1.5 sm:gap-2 order-3 sm:order-2 w-full sm:w-auto justify-center sm:justify-start pt-1 sm:pt-0"
+            className="flex flex-wrap items-center gap-1 sm:gap-2 order-3 sm:order-2 w-full sm:w-auto justify-center sm:justify-start pt-1 sm:pt-0"
             aria-label="Main Navigation"
           >
             {/* 1. Khata Tab */}
@@ -107,14 +107,14 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                 setIsBillMenuOpen(false);
                 onTabChange('khata');
               }}
-              className={`inline-flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[42px] sm:min-h-[44px] flex-1 sm:flex-initial ${
+              className={`inline-flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[44px] flex-1 sm:flex-initial ${
                 currentTab === 'khata'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
                   : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
               }`}
               aria-current={currentTab === 'khata' ? 'page' : undefined}
             >
-              <BookOpen className="w-4 h-4" />
+              <BookOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               <span>Khata</span>
             </button>
 
@@ -124,31 +124,31 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                 setIsBillMenuOpen(false);
                 onTabChange('products');
               }}
-              className={`inline-flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[42px] sm:min-h-[44px] flex-1 sm:flex-initial ${
+              className={`inline-flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[44px] flex-1 sm:flex-initial ${
                 currentTab === 'products'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
                   : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
               }`}
               aria-current={currentTab === 'products' ? 'page' : undefined}
             >
-              <Tag className="w-4 h-4" />
+              <Tag className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               <span>Products</span>
             </button>
 
-                        {/* 3. Quotations Tab */}
+            {/* 3. Quotations Tab */}
             <button
               onClick={() => {
                 setIsBillMenuOpen(false);
                 onTabChange('quotations');
               }}
-              className={`inline-flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[42px] sm:min-h-[44px] flex-1 sm:flex-initial ${
+              className={`inline-flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[44px] flex-1 sm:flex-initial ${
                 currentTab === 'quotations'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
                   : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
               }`}
               aria-current={currentTab === 'quotations' ? 'page' : undefined}
             >
-              <FileText className="w-4 h-4" />
+              <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               <span>Quotations</span>
             </button>
 
@@ -157,7 +157,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               <button
                 type="button"
                 onClick={() => setIsBillMenuOpen(!isBillMenuOpen)}
-                className={`w-full inline-flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[42px] sm:min-h-[44px] ${
+                className={`w-full inline-flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[44px] ${
                   isBillActive
                     ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
                     : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
@@ -166,7 +166,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                 aria-expanded={isBillMenuOpen}
                 aria-current={isBillActive ? 'page' : undefined}
               >
-                <FileText className="w-4 h-4" />
+                <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 <span>Bill</span>
                 <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isBillMenuOpen ? 'rotate-180' : ''}`} />
               </button>
@@ -225,7 +225,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
           </nav>
 
           {/* Controls: Appearance, Owner Phone, Logout */}
-          <div className="flex items-center gap-2 order-2 sm:order-3">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 order-2 sm:order-3">
             {/* Persistent Appearance & Accessibility Button */}
             <button
               onClick={onOpenAppearance}

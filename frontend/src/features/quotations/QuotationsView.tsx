@@ -361,7 +361,7 @@ export const QuotationsView: React.FC = () => {
         </button>
       </div>
 
-      {/* Quotations Table */}
+      {/* Quotations List: Mobile Card View (sm:hidden) and Desktop Table View (hidden sm:block) */}
       <div className="neu-card overflow-hidden rounded-2xl">
         {isLoading ? (
           <div className="p-12 text-center text-xs text-[var(--khata-text-muted)] flex items-center justify-center gap-2">
@@ -382,109 +382,87 @@ export const QuotationsView: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="bg-[var(--khata-surface-inset)] border-b border-[var(--khata-border)] font-bold text-[var(--khata-text-muted)] uppercase">
-                  <th className="py-3 px-4 sm:px-6">Quotation No</th>
-                  <th className="py-3 px-4">Date</th>
-                  <th className="py-3 px-4">Customer</th>
-                  <th className="py-3 px-4">Project</th>
-                  <th className="py-3 px-4 text-right">Grand Total</th>
-                  <th className="py-3 px-4 text-center">Status</th>
-                  <th className="py-3 px-4 sm:px-6 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--khata-border)]">
-                {quotations.map((q) => {
-                  const statusColors: Record<string, string> = {
-                    draft: 'bg-amber-500/10 text-amber-500 border-amber-500/30',
-                    sent: 'bg-blue-500/10 text-blue-500 border-blue-500/30',
-                    accepted: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30',
-                    converted: 'bg-purple-500/10 text-purple-500 border-purple-500/30',
-                    rejected: 'bg-rose-500/10 text-rose-500 border-rose-500/30',
-                    expired: 'bg-neutral-500/10 text-neutral-400 border-neutral-500/30',
-                  };
+          <>
+            {/* 1. Mobile Phone Card View (sm:hidden) */}
+            <div className="block sm:hidden divide-y divide-[var(--khata-border)]">
+              {quotations.map((q) => {
+                const statusColors: Record<string, string> = {
+                  draft: 'bg-amber-500/10 text-amber-500 border-amber-500/30',
+                  sent: 'bg-blue-500/10 text-blue-500 border-blue-500/30',
+                  accepted: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30',
+                  converted: 'bg-purple-500/10 text-purple-500 border-purple-500/30',
+                  rejected: 'bg-rose-500/10 text-rose-500 border-rose-500/30',
+                  expired: 'bg-neutral-500/10 text-neutral-400 border-neutral-500/30',
+                };
 
-                  return (
-                    <tr key={q.id} className="hover:bg-[var(--khata-surface-inset)]/40 transition">
-                      {/* Quotation No */}
-                      <td className="py-3.5 px-4 sm:px-6 font-mono font-bold text-[var(--khata-accent)]">
-                        {q.quotation_number}
-                      </td>
+                return (
+                  <div key={q.id} className="p-4 space-y-2.5 hover:bg-[var(--khata-surface-inset)]/30 transition">
+                    {/* Top Row: Quotation Number + Status + Date */}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-sm text-[var(--khata-accent)]">
+                          {q.quotation_number}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
+                            statusColors[q.status] || 'bg-neutral-500/10 text-neutral-400'
+                          }`}
+                        >
+                          {q.status}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-[var(--khata-text-muted)] font-medium">
+                        {q.quotation_date}
+                        {q.valid_until && <span className="opacity-75"> (Exp: {q.valid_until})</span>}
+                      </div>
+                    </div>
 
-                      {/* Date */}
-                      <td className="py-3.5 px-4">
-                        <div className="font-medium text-[var(--khata-text)]">{q.quotation_date}</div>
-                        {q.valid_until && (
-                          <div className="text-[10px] text-[var(--khata-text-muted)]">
-                            Valid: {q.valid_until}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Customer */}
-                      <td className="py-3.5 px-4">
-                        <div className="font-bold text-[var(--khata-text)]">{q.customer_name}</div>
-                        {q.customer_phone && (
-                          <div className="text-[10px] text-[var(--khata-text-muted)]">{q.customer_phone}</div>
-                        )}
-                      </td>
-
-                      {/* Project */}
-                      <td className="py-3.5 px-4">
-                        <div className="font-medium truncate max-w-[180px]">
-                          {q.project_title || q.subject || '—'}
+                    {/* Middle: Customer & Project Details */}
+                    <div className="text-xs space-y-0.5">
+                      <div className="font-bold text-[var(--khata-text)] text-sm">{q.customer_name}</div>
+                      {q.customer_phone && (
+                        <div className="text-[11px] text-[var(--khata-text-muted)] font-mono">{q.customer_phone}</div>
+                      )}
+                      {(q.project_title || q.subject) && (
+                        <div className="text-[11px] text-[var(--khata-text-muted)] truncate max-w-full">
+                          {q.project_title || q.subject}
                         </div>
-                      </td>
+                      )}
+                    </div>
 
-                      {/* Total */}
-                      <td className="py-3.5 px-4 text-right font-bold text-sm">
-                        ₹{formatCurrency(q.grand_total)}
-                      </td>
+                    {/* Bottom Row: Total & Action Buttons */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[var(--khata-border)]/60">
+                      <div>
+                        <div className="text-[10px] uppercase font-bold text-[var(--khata-text-muted)]">Grand Total</div>
+                        <div className="text-base font-black text-[var(--khata-text)]">₹{formatCurrency(q.grand_total)}</div>
+                      </div>
 
-                      {/* Status */}
-                      <td className="py-3.5 px-4 text-center">
-                        <div className="inline-flex items-center gap-1.5">
-                          <span
-                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
-                              statusColors[q.status] || 'bg-neutral-500/10 text-neutral-400'
-                            }`}
-                          >
-                            {q.status}
-                          </span>
-                        </div>
-                      </td>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setPreviewQuotation(q)}
+                          className="p-1.5 rounded-lg neu-btn-secondary text-xs inline-flex items-center gap-1"
+                          title="Preview PDF"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
+                          <span>PDF</span>
+                        </button>
 
-                      {/* Actions */}
-                      <td className="py-3.5 px-4 sm:px-6 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {/* View PDF */}
-                          <button
-                            type="button"
-                            onClick={() => setPreviewQuotation(q)}
-                            className="p-1.5 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-accent)] hover:bg-[var(--khata-surface-inset)] transition"
-                            title="Preview / Print PDF"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadPdf(q)}
+                          className="p-1.5 rounded-lg neu-btn-secondary text-xs inline-flex items-center"
+                          title="Download PDF"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                        </button>
 
-                          {/* Download PDF */}
-                          <button
-                            type="button"
-                            onClick={() => handleDownloadPdf(q)}
-                            className="p-1.5 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-accent)] hover:bg-[var(--khata-surface-inset)] transition"
-                            title="Download PDF Document"
-                          >
-                            <Download className="w-4 h-4" />
-                          </button>
-
-                          {/* Status Dropdown */}
-                          {q.status !== 'converted' && (
+                        {q.status !== 'converted' ? (
+                          <>
                             <select
                               value={q.status}
                               onChange={(e) => handleStatusChange(q.id, e.target.value as QuotationStatus)}
-                              className="text-[10px] font-bold rounded-lg border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-[var(--khata-text)] px-1.5 py-1 focus:outline-none"
+                              className="text-[11px] font-bold rounded-lg border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-[var(--khata-text)] px-1.5 py-1 focus:outline-none"
                             >
                               <option value="draft">Draft</option>
                               <option value="sent">Sent</option>
@@ -492,34 +470,170 @@ export const QuotationsView: React.FC = () => {
                               <option value="rejected">Rejected</option>
                               <option value="expired">Expired</option>
                             </select>
-                          )}
-
-                          {/* Convert to Bill button */}
-                          {q.status !== 'converted' ? (
                             <button
                               type="button"
                               onClick={() => setConvertQuotation(q)}
-                              className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-[var(--khata-accent)] text-white hover:opacity-90 transition flex items-center gap-1 shadow-sm"
-                              title="Convert quotation to an official bill"
+                              className="px-2.5 py-1 rounded-lg text-xs font-bold bg-[var(--khata-accent)] text-white hover:opacity-90 transition inline-flex items-center gap-1 shadow-sm"
+                              title="Convert quotation to bill"
                             >
                               <span>Convert</span>
                               <ArrowRight className="w-3 h-3" />
                             </button>
-                          ) : (
-                            <span className="text-[10px] font-bold text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded">
-                              {q.converted_normal_bill_id
-                                ? `Bill #${q.converted_normal_bill_id}`
-                                : `Invoice #${q.converted_gst_invoice_id}`}
-                            </span>
+                          </>
+                        ) : (
+                          <span className="text-[10px] font-bold text-purple-400 bg-purple-500/10 px-2 py-1 rounded">
+                            {q.converted_normal_bill_id
+                              ? `Bill #${q.converted_normal_bill_id}`
+                              : `Invoice #${q.converted_gst_invoice_id}`}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 2. Desktop Table View (hidden sm:block) */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-[var(--khata-surface-inset)] border-b border-[var(--khata-border)] font-bold text-[var(--khata-text-muted)] uppercase">
+                    <th className="py-3 px-4 sm:px-6">Quotation No</th>
+                    <th className="py-3 px-4">Date</th>
+                    <th className="py-3 px-4">Customer</th>
+                    <th className="py-3 px-4">Project</th>
+                    <th className="py-3 px-4 text-right">Grand Total</th>
+                    <th className="py-3 px-4 text-center">Status</th>
+                    <th className="py-3 px-4 sm:px-6 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--khata-border)]">
+                  {quotations.map((q) => {
+                    const statusColors: Record<string, string> = {
+                      draft: 'bg-amber-500/10 text-amber-500 border-amber-500/30',
+                      sent: 'bg-blue-500/10 text-blue-500 border-blue-500/30',
+                      accepted: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30',
+                      converted: 'bg-purple-500/10 text-purple-500 border-purple-500/30',
+                      rejected: 'bg-rose-500/10 text-rose-500 border-rose-500/30',
+                      expired: 'bg-neutral-500/10 text-neutral-400 border-neutral-500/30',
+                    };
+
+                    return (
+                      <tr key={q.id} className="hover:bg-[var(--khata-surface-inset)]/40 transition">
+                        {/* Quotation No */}
+                        <td className="py-3.5 px-4 sm:px-6 font-mono font-bold text-[var(--khata-accent)]">
+                          {q.quotation_number}
+                        </td>
+
+                        {/* Date */}
+                        <td className="py-3.5 px-4">
+                          <div className="font-medium text-[var(--khata-text)]">{q.quotation_date}</div>
+                          {q.valid_until && (
+                            <div className="text-[10px] text-[var(--khata-text-muted)]">
+                              Valid: {q.valid_until}
+                            </div>
                           )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        </td>
+
+                        {/* Customer */}
+                        <td className="py-3.5 px-4">
+                          <div className="font-bold text-[var(--khata-text)]">{q.customer_name}</div>
+                          {q.customer_phone && (
+                            <div className="text-[10px] text-[var(--khata-text-muted)] font-mono">{q.customer_phone}</div>
+                          )}
+                        </td>
+
+                        {/* Project */}
+                        <td className="py-3.5 px-4">
+                          <div className="font-medium truncate max-w-[180px]">
+                            {q.project_title || q.subject || '—'}
+                          </div>
+                        </td>
+
+                        {/* Total */}
+                        <td className="py-3.5 px-4 text-right font-bold text-sm">
+                          ₹{formatCurrency(q.grand_total)}
+                        </td>
+
+                        {/* Status */}
+                        <td className="py-3.5 px-4 text-center">
+                          <div className="inline-flex items-center gap-1.5">
+                            <span
+                              className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
+                                statusColors[q.status] || 'bg-neutral-500/10 text-neutral-400'
+                              }`}
+                            >
+                              {q.status}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* Actions */}
+                        <td className="py-3.5 px-4 sm:px-6 text-right">
+                          <div className="flex flex-wrap items-center justify-end gap-1.5">
+                            {/* View PDF */}
+                            <button
+                              type="button"
+                              onClick={() => setPreviewQuotation(q)}
+                              className="p-1.5 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-accent)] hover:bg-[var(--khata-surface-inset)] transition"
+                              title="Preview / Print PDF"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+
+                            {/* Download PDF */}
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadPdf(q)}
+                              className="p-1.5 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-accent)] hover:bg-[var(--khata-surface-inset)] transition"
+                              title="Download PDF Document"
+                            >
+                              <Download className="w-4 h-4" />
+                            </button>
+
+                            {/* Status Dropdown */}
+                            {q.status !== 'converted' && (
+                              <select
+                                value={q.status}
+                                onChange={(e) => handleStatusChange(q.id, e.target.value as QuotationStatus)}
+                                className="text-[10px] font-bold rounded-lg border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-[var(--khata-text)] px-1.5 py-1 focus:outline-none"
+                              >
+                                <option value="draft">Draft</option>
+                                <option value="sent">Sent</option>
+                                <option value="accepted">Accepted</option>
+                                <option value="rejected">Rejected</option>
+                                <option value="expired">Expired</option>
+                              </select>
+                            )}
+
+                            {/* Convert to Bill button */}
+                            {q.status !== 'converted' ? (
+                              <button
+                                type="button"
+                                onClick={() => setConvertQuotation(q)}
+                                className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-[var(--khata-accent)] text-white hover:opacity-90 transition flex items-center gap-1 shadow-sm"
+                                title="Convert quotation to an official bill"
+                              >
+                                <span>Convert</span>
+                                <ArrowRight className="w-3 h-3" />
+                              </button>
+                            ) : (
+                              <span className="text-[10px] font-bold text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded">
+                                {q.converted_normal_bill_id
+                                  ? `Bill #${q.converted_normal_bill_id}`
+                                  : `Invoice #${q.converted_gst_invoice_id}`}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 
@@ -718,18 +832,18 @@ export const QuotationsView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex justify-end gap-3 pt-3 border-t border-[var(--khata-border)]">
+              <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3 pt-3 border-t border-[var(--khata-border)]">
                 <button
                   type="button"
                   onClick={() => setIsSettingsOpen(false)}
-                  className="neu-btn-secondary text-xs px-4 py-2"
+                  className="neu-btn-secondary text-xs px-4 py-2 flex-1 sm:flex-initial text-center justify-center"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSavingSettings}
-                  className="neu-btn-primary text-xs px-5 py-2 font-bold inline-flex items-center gap-2"
+                  className="neu-btn-primary text-xs px-5 py-2 font-bold inline-flex items-center justify-center gap-2 flex-1 sm:flex-initial"
                 >
                   {isSavingSettings ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
                   <span>Save Settings</span>

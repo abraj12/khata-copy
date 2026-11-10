@@ -98,30 +98,30 @@ export const QuotationPreview: React.FC<QuotationPreviewProps> = ({
         style={{ background: 'var(--khata-surface)', color: 'var(--khata-text)' }}
       >
         {/* Header Bar */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-[var(--khata-border)]">
-          <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center justify-between px-3 sm:px-6 py-2.5 sm:py-3 border-b border-[var(--khata-border)] gap-2">
+          <div className="flex items-center gap-2 sm:gap-2.5">
             <div
-              className="w-8 h-8 rounded-lg flex items-center justify-center shadow-inner"
+              className="w-8 h-8 rounded-lg flex items-center justify-center shadow-inner flex-shrink-0"
               style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-accent)' }}
             >
               <FileText className="w-4 h-4" />
             </div>
             <div>
-              <h3 id="preview-modal-title" className="text-sm sm:text-base font-bold">
+              <h3 id="preview-modal-title" className="text-xs sm:text-base font-bold">
                 Quotation Document {quotation?.quotation_number ? `#${quotation.quotation_number}` : '(Preview)'}
               </h3>
-              <p className="text-[11px] text-[var(--khata-text-muted)]">
+              <p className="text-[10px] sm:text-[11px] text-[var(--khata-text-muted)]">
                 Corporate PDF presentation
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
             <button
               type="button"
               disabled={!pdfUrl}
               onClick={handleDownload}
-              className="neu-btn-secondary text-xs px-3 py-1.5 font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
+              className="neu-btn-secondary text-xs px-2.5 sm:px-3 py-1.5 font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
               title="Download PDF"
             >
               <Download className="w-3.5 h-3.5" />
@@ -131,7 +131,7 @@ export const QuotationPreview: React.FC<QuotationPreviewProps> = ({
               type="button"
               disabled={!pdfUrl}
               onClick={handlePrint}
-              className="neu-btn-secondary text-xs px-3 py-1.5 font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
+              className="neu-btn-secondary text-xs px-2.5 sm:px-3 py-1.5 font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
               title="Print PDF"
             >
               <Printer className="w-3.5 h-3.5" />

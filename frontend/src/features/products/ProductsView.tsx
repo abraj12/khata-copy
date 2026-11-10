@@ -513,9 +513,9 @@ export const ProductsView: React.FC = () => {
       )}
 
       {/* Header and Add Button */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl sm:text-2xl font-bold text-[var(--khata-text)] flex items-center gap-2">
+          <h2 className="text-lg sm:text-2xl font-bold text-[var(--khata-text)] flex items-center gap-2">
             <Tag className="w-5 h-5 text-[var(--khata-accent)]" />
             <span>Product Master Catalogue</span>
           </h2>
@@ -529,7 +529,7 @@ export const ProductsView: React.FC = () => {
             setCreateError(null);
             handleClearCreateImage();
           }}
-          className="neu-btn-primary text-xs sm:text-sm font-bold px-4 py-2.5 self-start sm:self-auto inline-flex items-center gap-2"
+          className="neu-btn-primary text-xs sm:text-sm font-bold px-4 py-2.5 inline-flex items-center justify-center gap-2 w-full sm:w-auto"
         >
           {isAdding ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
           <span>{isAdding ? 'Cancel' : 'Add Product'}</span>
@@ -750,7 +750,107 @@ export const ProductsView: React.FC = () => {
           </div>
         ) : (
           <div>
-            <div className="overflow-x-auto">
+            {/* 1. Mobile Phone Card View (sm:hidden) */}
+            <div className="block sm:hidden divide-y divide-[var(--khata-border)]">
+              {products.map((item) => (
+                <div
+                  key={item.id}
+                  className="p-4 space-y-3 hover:bg-[var(--khata-surface-inset)]/30 transition"
+                >
+                  <div className="flex items-start gap-3">
+                    {/* Thumbnail */}
+                    {item.image_url ? (
+                      <div
+                        onClick={() =>
+                          setLightboxProduct({
+                            id: item.id,
+                            url: resolveImageUrl(item.image_url),
+                            name: item.name,
+                            price: item.buying_price,
+                          })
+                        }
+                        className="w-12 h-12 rounded-xl overflow-hidden border border-[var(--khata-border)] cursor-pointer group relative flex-shrink-0 bg-black/5"
+                        title="Click to view full image"
+                      >
+                        <img
+                          src={resolveImageUrl(item.image_url)}
+                          alt={item.name}
+                          crossOrigin="use-credentials"
+                          className="w-full h-full object-cover group-hover:scale-110 transition-transform"
+                          onError={(e) => {
+                            const fallback = `${API_BASE_URL}/api/v1/products/${item.id}/image`;
+                            if (e.currentTarget.src !== fallback) {
+                              e.currentTarget.src = fallback;
+                            }
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-12 h-12 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] flex items-center justify-center text-[var(--khata-text-muted)] flex-shrink-0">
+                        <Tag className="w-5 h-5 opacity-40" />
+                      </div>
+                    )}
+
+                    {/* Details */}
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-bold text-sm text-[var(--khata-text)] truncate">
+                        {item.name}
+                      </h4>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                        {item.barcode && (
+                          <span className="px-2 py-0.5 rounded bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] text-[10px] font-mono text-[var(--khata-text-muted)] inline-flex items-center gap-1">
+                            <Scan className="w-2.5 h-2.5 text-[var(--khata-accent)]" />
+                            <span>{item.barcode}</span>
+                          </span>
+                        )}
+                        {item.hsn_code && (
+                          <span className="px-2 py-0.5 rounded bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] text-[10px] font-mono text-[var(--khata-text-muted)]">
+                            HSN: {item.hsn_code}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Price & Action Row */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[var(--khata-border)]/60">
+                    <div>
+                      <div className="text-[10px] uppercase font-bold text-[var(--khata-text-muted)]">
+                        Buying Price
+                      </div>
+                      <div className="text-base font-black text-[var(--khata-accent)]">
+                        {formatCurrency(item.buying_price)}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        onClick={() => handleStartEdit(item)}
+                        className="neu-btn-secondary text-xs px-3 py-1.5 font-bold inline-flex items-center gap-1"
+                        aria-label={`Edit ${item.name}`}
+                      >
+                        <Edit2 className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
+                        <span>Edit</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setArchivingProduct(item);
+                          setArchiveError(null);
+                        }}
+                        className="neu-btn-secondary text-xs px-3 py-1.5 font-bold text-[var(--khata-danger)] inline-flex items-center gap-1"
+                        aria-label={`Archive ${item.name}`}
+                      >
+                        <Archive className="w-3.5 h-3.5" />
+                        <span>Archive</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* 2. Desktop Table View (hidden sm:block) */}
+            <div className="hidden sm:block overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="border-b border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
@@ -814,6 +914,17 @@ export const ProductsView: React.FC = () => {
                         {item.hsn_code ? (
                           <span className="px-2 py-0.5 rounded-md bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] inline-block">
                             {item.hsn_code}
+                          </span>
+                        ) : (
+                          <span className="text-neutral-400 dark:text-neutral-600">—</span>
+                        )}
+                      </td>
+
+                      {/* Barcode cell */}
+                      <td className="py-3.5 px-4 sm:px-6 text-xs font-mono text-[var(--khata-text-muted)]">
+                        {item.barcode ? (
+                          <span className="px-2 py-0.5 rounded-md bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] inline-block">
+                            {item.barcode}
                           </span>
                         ) : (
                           <span className="text-neutral-400 dark:text-neutral-600">—</span>

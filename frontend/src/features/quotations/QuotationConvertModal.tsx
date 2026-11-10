@@ -176,11 +176,11 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
         )}
 
         {/* Action Buttons */}
-        <div className="flex items-center justify-end gap-3 pt-2">
+        <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3 pt-2">
           <button
             type="button"
             onClick={onClose}
-            className="neu-btn-secondary text-xs px-4 py-2"
+            className="neu-btn-secondary text-xs px-4 py-2 flex-1 sm:flex-initial text-center justify-center"
           >
             Cancel
           </button>
@@ -188,7 +188,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
             type="button"
             disabled={isSubmitting || (!isAccepted && !force)}
             onClick={handleConvert}
-            className="neu-btn-primary text-xs px-5 py-2 font-bold inline-flex items-center gap-2 disabled:opacity-50"
+            className="neu-btn-primary text-xs px-5 py-2 font-bold inline-flex items-center justify-center gap-2 disabled:opacity-50 flex-1 sm:flex-initial"
           >
             {isSubmitting ? (
               <>
