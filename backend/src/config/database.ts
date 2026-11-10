@@ -46,6 +46,8 @@ export const EXPECTED_MIGRATIONS = [
   '012_normal_bills.sql',
   '013_customer_address.sql',
   '014_billing_quantity_and_sequences.sql',
+  '015_product_barcode.sql',
+  '016_quotations.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [
@@ -63,6 +65,9 @@ export const EXPECTED_CORE_TABLES = [
   'gst_invoice_items',
   'normal_bills',
   'normal_bill_items',
+  'quotations',
+  'quotation_items',
+  'quotation_settings',
 ];
 
 export interface ReadinessReport {

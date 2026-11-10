@@ -14,6 +14,7 @@ import {
   Upload,
   Trash2,
   Eye,
+  Scan,
 } from 'lucide-react';
 import { formatCurrency, safeDecimal, parseStrictDecimal } from '../../lib/formatters.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
@@ -24,12 +25,15 @@ import {
   API_BASE_URL,
 } from './productsApi.js';
 import { compressImageFile } from '../../utils/imageCompressor.js';
+import { BarcodeScannerModal } from '../barcode/BarcodeScannerModal.js';
+import { useHardwareBarcodeScanner } from '../barcode/useHardwareBarcodeScanner.js';
 
 interface Product {
   id: number;
   name: string;
   buying_price: string;
   hsn_code?: string | null;
+  barcode?: string | null;
   image_url?: string | null;
   image_object_key?: string | null;
   created_at: string;
@@ -64,6 +68,29 @@ export const ProductsView: React.FC = () => {
   const [createImagePreview, setCreateImagePreview] = useState<string | null>(null);
   const [isSubmittingCreate, setIsSubmittingCreate] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  // Barcode states
+  const [newBarcode, setNewBarcode] = useState('');
+  const [editBarcode, setEditBarcode] = useState('');
+  const [isScanningGlobal, setIsScanningGlobal] = useState(false);
+  const [isScanningForCreate, setIsScanningForCreate] = useState(false);
+  const [isScanningForEdit, setIsScanningForEdit] = useState(false);
+
+  // Hardware HID barcode scanner integration
+  useHardwareBarcodeScanner({
+    onScan: (scanned) => {
+      if (isAdding) {
+        setNewBarcode(scanned);
+        showNotification('success', `Barcode "${scanned}" captured from scanner!`);
+      } else if (editingProduct) {
+        setEditBarcode(scanned);
+        showNotification('success', `Barcode "${scanned}" captured from scanner!`);
+      } else {
+        setSearch(scanned);
+        showNotification('success', `Searching for scanned barcode: ${scanned}`);
+      }
+    },
+  });
+
 
   const createCameraRef = useRef<HTMLInputElement>(null);
   const createFileRef = useRef<HTMLInputElement>(null);
@@ -91,9 +118,9 @@ export const ProductsView: React.FC = () => {
   const [lightboxProduct, setLightboxProduct] = useState<{ id?: number; url: string; name: string; price: string } | null>(null);
 
   // Global notification banner
-  const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
-  const showNotification = (type: 'success' | 'error', message: string) => {
+  const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
     setNotification({ type, message });
     setTimeout(() => setNotification(null), 4000);
   };
@@ -263,6 +290,7 @@ export const ProductsView: React.FC = () => {
             name: newName.trim(),
             buying_price: safeDecimal(newPrice).toFixed(2),
             hsn_code: newHsn.trim() || null,
+            barcode: newBarcode.trim() || null,
           }),
         }
       );
@@ -285,6 +313,7 @@ export const ProductsView: React.FC = () => {
       setNewName('');
       setNewHsn('');
       setNewPrice('');
+      setNewBarcode('');
       handleClearCreateImage();
       setIsAdding(false);
       if (imageUploadFailed) {
@@ -307,6 +336,7 @@ export const ProductsView: React.FC = () => {
     setEditingProduct(product);
     setEditName(product.name);
     setEditHsn(product.hsn_code || '');
+    setEditBarcode(product.barcode || '');
     setEditPrice(safeDecimal(product.buying_price).toFixed(2));
     setEditImageFile(null);
     setEditImagePreview(null);
@@ -392,6 +422,7 @@ export const ProductsView: React.FC = () => {
           name: editName.trim(),
           buying_price: safeDecimal(editPrice).toFixed(2),
           hsn_code: editHsn.trim() || null,
+          barcode: editBarcode.trim() || null,
         }),
       });
 
@@ -455,12 +486,16 @@ export const ProductsView: React.FC = () => {
           className={`flex items-center justify-between p-4 rounded-xl text-xs sm:text-sm font-semibold border ${
             notification.type === 'success'
               ? 'bg-emerald-500/10 border-emerald-500/30 text-[var(--khata-success)]'
+              : notification.type === 'info'
+              ? 'bg-blue-500/10 border-blue-500/30 text-blue-500'
               : 'bg-red-500/10 border-red-500/30 text-[var(--khata-danger)]'
           }`}
         >
           <div className="flex items-center gap-2">
             {notification.type === 'success' ? (
               <CheckCircle className="w-4 h-4 text-[var(--khata-success)] flex-shrink-0" />
+            ) : notification.type === 'info' ? (
+              <Scan className="w-4 h-4 text-blue-500 flex-shrink-0" />
             ) : (
               <AlertTriangle className="w-4 h-4 text-[var(--khata-danger)] flex-shrink-0" />
             )}
@@ -562,6 +597,31 @@ export const ProductsView: React.FC = () => {
               />
             </div>
           </div>
+
+                      <div>
+              <label className="block text-xs font-bold text-[var(--khata-text-muted)] uppercase mb-1">
+                Barcode <span className="text-neutral-400 font-normal">(Optional)</span>
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newBarcode}
+                  onChange={(e) => setNewBarcode(e.target.value)}
+                  placeholder="e.g. 8901234567890"
+                  maxLength={64}
+                  className="neu-input flex-1 text-sm font-medium font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => setIsScanningForCreate(true)}
+                  className="neu-btn-secondary text-xs px-3 py-2 inline-flex items-center gap-1.5"
+                  title="Scan with Camera"
+                >
+                  <Scan className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
+                  <span>Scan</span>
+                </button>
+              </div>
+            </div>
 
           {/* Optional Product Image Section */}
           <div className="pt-1">
@@ -672,7 +732,7 @@ export const ProductsView: React.FC = () => {
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search products by name..."
+          placeholder="Search products by name, HSN, or barcode..."
           className="neu-input neu-input-with-leading-icon w-full text-sm font-medium"
         />
       </div>
@@ -697,6 +757,7 @@ export const ProductsView: React.FC = () => {
                     <th className="py-3.5 px-4 sm:px-6 w-14 text-center">Photo</th>
                     <th className="py-3.5 px-4 sm:px-6">Product Name</th>
                     <th className="py-3.5 px-4 sm:px-6">HSN</th>
+                    <th className="py-3.5 px-4 sm:px-6">Barcode</th>
                     <th className="py-3.5 px-4 sm:px-6 text-right">Owner Buying Price</th>
                     <th className="py-3.5 px-4 sm:px-6 text-center w-28">Actions</th>
                   </tr>
@@ -891,6 +952,31 @@ export const ProductsView: React.FC = () => {
                   onChange={(e) => setEditPrice(e.target.value)}
                   className="neu-input w-full text-sm font-medium tabular-numbers"
                 />
+              </div>
+
+                            <div>
+                <label className="block text-xs font-bold text-[var(--khata-text-muted)] uppercase mb-1">
+                  Barcode <span className="text-neutral-400 font-normal">(Optional)</span>
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={editBarcode}
+                    onChange={(e) => setEditBarcode(e.target.value)}
+                    placeholder="e.g. 8901234567890"
+                    maxLength={64}
+                    className="neu-input flex-1 text-sm font-medium font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setIsScanningForEdit(true)}
+                    className="neu-btn-secondary text-xs px-3 py-2 inline-flex items-center gap-1.5"
+                    title="Scan with Camera"
+                  >
+                    <Scan className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
+                    <span>Scan</span>
+                  </button>
+                </div>
               </div>
 
               {/* Product Photograph Management in Edit */}
@@ -1159,6 +1245,48 @@ export const ProductsView: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Barcode Scanner Modal for Global Scan */}
+      <BarcodeScannerModal
+        isOpen={isScanningGlobal}
+        onClose={() => setIsScanningGlobal(false)}
+        onProductFound={(product) => {
+          setSearch(product.name);
+          showNotification('success', `Scanned: ${product.name}`);
+        }}
+        onCreateWithBarcode={(barcode) => {
+          setNewBarcode(barcode);
+          setIsAdding(true);
+          showNotification('info', `Barcode ${barcode} ready for new product.`);
+        }}
+      />
+
+      {/* Barcode Scanner Modal for Add Product */}
+      <BarcodeScannerModal
+        isOpen={isScanningForCreate}
+        onClose={() => setIsScanningForCreate(false)}
+        onProductFound={(product) => {
+          showNotification('info', `Barcode already belongs to: ${product.name}`);
+        }}
+        onCreateWithBarcode={(barcode) => {
+          setNewBarcode(barcode);
+        }}
+      />
+
+      {/* Barcode Scanner Modal for Edit Product */}
+      <BarcodeScannerModal
+        isOpen={isScanningForEdit}
+        onClose={() => setIsScanningForEdit(false)}
+        onProductFound={(product) => {
+          if (editingProduct && product.id !== editingProduct.id) {
+            showNotification('error', `Barcode already belongs to: ${product.name}`);
+          } else {
+            setEditBarcode(product.barcode || '');
+          }
+        }}
+        onCreateWithBarcode={(barcode) => {
+          setEditBarcode(barcode);
+        }}
+      />
     </div>
   );
 };

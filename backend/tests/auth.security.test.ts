@@ -44,6 +44,9 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { table_name: 'gst_invoice_items' },
             { table_name: 'normal_bills' },
             { table_name: 'normal_bill_items' },
+            { table_name: 'quotations' },
+            { table_name: 'quotation_items' },
+            { table_name: 'quotation_settings' },
           ],
           rowCount: 9,
         } as any;
@@ -63,6 +66,8 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '010_product_hsn_code.sql' },
             { version: '013_customer_address.sql' },
             { version: '014_billing_quantity_and_sequences.sql' },
+            { version: '015_product_barcode.sql' },
+            { version: '016_quotations.sql' },
             {
             version: '011_gst_invoices.sql',
           },

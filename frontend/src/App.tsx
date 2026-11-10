@@ -6,6 +6,7 @@ import { KhataLedgerView } from './features/khata/KhataLedgerView.js';
 import { ProductsView } from './features/products/ProductsView.js';
 import { GstBillingView } from './features/bills/GstBillingView.js';
 import { NormalBillingView } from './features/bills/NormalBillingView.js';
+import { QuotationsView } from './features/quotations/QuotationsView.js';
 import { ThemeAccessibilityProvider } from './context/ThemeAccessibilityContext.js';
 import { AppearanceAccessibilityModal } from './components/AppearanceAccessibilityModal.js';
 
@@ -21,6 +22,9 @@ function getInitialTab(): NavTab {
     }
     if (path.startsWith('/products') || hash.includes('products')) {
       return 'products';
+    }
+    if (path.startsWith('/quotations') || hash.includes('quotations')) {
+      return 'quotations';
     }
   }
   return 'khata';
@@ -38,6 +42,7 @@ export function KhataDashboard() {
       if (tab === 'gst-bill') targetPath = '/bills/gst';
       else if (tab === 'normal-bill') targetPath = '/bills/normal';
       else if (tab === 'products') targetPath = '/products';
+      else if (tab === 'quotations') targetPath = '/quotations';
 
       if (window.location.pathname !== targetPath) {
         window.history.pushState(null, '', targetPath);
@@ -72,6 +77,7 @@ export function KhataDashboard() {
         {currentTab === 'products' && <ProductsView />}
         {currentTab === 'gst-bill' && <GstBillingView />}
         {currentTab === 'normal-bill' && <NormalBillingView />}
+        {currentTab === 'quotations' && <QuotationsView />}
       </main>
 
       <footer

@@ -75,12 +75,14 @@ const createProductSchema = z.object({
   name: z.string().trim().min(1, 'Product name is required').max(255),
   buying_price: z.union([z.number(), z.string()]),
   hsn_code: z.string().trim().max(20, 'HSN code cannot exceed 20 characters').nullable().optional(),
+  barcode: z.string().trim().max(64, 'Barcode cannot exceed 64 characters').nullable().optional(),
 });
 
 const updateProductSchema = z.object({
   name: z.string().trim().min(1).max(255).optional(),
   buying_price: z.union([z.number(), z.string()]).optional(),
   hsn_code: z.string().trim().max(20, 'HSN code cannot exceed 20 characters').nullable().optional(),
+  barcode: z.string().trim().max(64, 'Barcode cannot exceed 64 characters').nullable().optional(),
 });
 
 const uploadIntentSchema = z.object({
@@ -91,6 +93,71 @@ const uploadIntentSchema = z.object({
 
 const completeImageSchema = z.object({
   objectKey: z.string().trim().min(1, 'Object key is required'),
+});
+
+
+/**
+ * GET /api/v1/products/barcode/:barcode - Retrieve active product by barcode
+ */
+router.get('/barcode/:barcode', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rawBarcode = req.params.barcode;
+    if (!rawBarcode || !rawBarcode.trim()) {
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Barcode parameter is required.' });
+      return;
+    }
+    if (rawBarcode.trim().length > 64) {
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Barcode cannot exceed 64 characters.' });
+      return;
+    }
+
+    const product = await productsService.findByBarcode(rawBarcode);
+    if (!product) {
+      res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product not found with this barcode.' });
+      return;
+    }
+
+    res.json({ success: true, data: product });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const patchBarcodeSchema = z.object({
+  barcode: z.string().trim().max(64, 'Barcode cannot exceed 64 characters').nullable().optional(),
+});
+
+/**
+ * PATCH /api/v1/products/:id/barcode - Update or remove barcode association
+ */
+router.patch('/:id/barcode', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Invalid product ID.' });
+      return;
+    }
+
+    const parsed = patchBarcodeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        message: parsed.error.errors[0]?.message || 'Invalid barcode payload.',
+      });
+      return;
+    }
+
+    const updated = await productsService.updateBarcode(id, parsed.data.barcode ?? null);
+    if (!updated) {
+      res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product not found or archived.' });
+      return;
+    }
+
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    next(err);
+  }
 });
 
 /**
@@ -130,10 +197,10 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       return;
     }
 
-    const { name, buying_price, hsn_code } = parsed.data;
+    const { name, buying_price, hsn_code, barcode } = parsed.data;
     // Strict money validation (rejects >2 decimals, NaN, Infinity, negative)
     const priceDec = validateMoneyInput(buying_price, 'Buying price');
-    const newProduct = await productsService.createProduct(name, priceDec.toFixed(2), hsn_code);
+    const newProduct = await productsService.createProduct(name, priceDec.toFixed(2), hsn_code, barcode);
     res.status(201).json({ success: true, data: newProduct });
   } catch (err) {
     next(err);
@@ -171,6 +238,7 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
       name: parsed.data.name,
       buyingPrice: validatedPrice,
       hsnCode: parsed.data.hsn_code,
+      barcode: parsed.data.barcode,
     });
 
     if (!updated) {

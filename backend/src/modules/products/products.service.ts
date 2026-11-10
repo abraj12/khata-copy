@@ -8,6 +8,7 @@ export interface ProductRecord {
   name: string;
   buying_price: string;
   hsn_code?: string | null;
+  barcode?: string | null;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -35,6 +36,20 @@ export interface PaginatedProductsResult {
 }
 
 export class ProductsService {
+  /**
+   * Normalizes barcode input without mutating meaningful leading zeroes.
+   * Returns trimmed string, or null if empty/whitespace.
+   */
+  public normalizeBarcode(barcode: string | null | undefined): string | null {
+    if (barcode === undefined || barcode === null) return null;
+    const trimmed = String(barcode).trim();
+    if (!trimmed) return null;
+    if (trimmed.length > 64) {
+      throw new AppError('Barcode cannot exceed 64 characters.', 400, 'VALIDATION_ERROR');
+    }
+    return trimmed;
+  }
+
   /**
    * Helper to attach image URLs to product records.
    * Uses direct proxy URLs to eliminate browser CORS and 5-minute presigned expiration timeouts.
@@ -66,7 +81,7 @@ export class ProductsService {
     const offset = Math.max(0, opts.offset || 0);
 
     let sql = `
-      SELECT id, name, buying_price, hsn_code, created_at, updated_at, archived_at,
+      SELECT id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
              image_object_key, image_content_type, image_size_bytes, image_updated_at
       FROM products
       WHERE archived_at IS NULL
@@ -76,7 +91,7 @@ export class ProductsService {
     if (opts.search && opts.search.trim()) {
       const cleanSearch = escapeLike(opts.search.trim());
       params.push(`%${cleanSearch}%`);
-      sql += ` AND (name ILIKE $${params.length} OR (hsn_code IS NOT NULL AND hsn_code ILIKE $${params.length}))`;
+      sql += ` AND (name ILIKE $${params.length} OR (hsn_code IS NOT NULL AND hsn_code ILIKE $${params.length}) OR (barcode IS NOT NULL AND barcode ILIKE $${params.length}))`;
     }
 
     sql += ` ORDER BY LOWER(name) ASC, name ASC, id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
@@ -104,7 +119,7 @@ export class ProductsService {
    */
   public async getProductById(id: number): Promise<ProductRecord | null> {
     const result = await appPool.query(
-      `SELECT id, name, buying_price, hsn_code, created_at, updated_at, archived_at,
+      `SELECT id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
               image_object_key, image_content_type, image_size_bytes, image_updated_at
        FROM products
        WHERE id = $1`,
@@ -117,12 +132,41 @@ export class ProductsService {
   }
 
   /**
-   * Creates a new reference product with strict money validation
+   * Retrieves an active product by barcode.
+   * Only matches non-archived products.
+   * Preserves leading zeroes in barcode lookup.
+   */
+  public async findByBarcode(rawBarcode: string): Promise<ProductRecord | null> {
+    const normalized = this.normalizeBarcode(rawBarcode);
+    if (!normalized) {
+      throw new AppError('Barcode parameter is required.', 400, 'VALIDATION_ERROR');
+    }
+
+    const result = await appPool.query(
+      `SELECT id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
+              image_object_key, image_content_type, image_size_bytes, image_updated_at
+       FROM products
+       WHERE barcode = $1 AND archived_at IS NULL`,
+      [normalized]
+    );
+
+    if (result.rows.length === 0) return null;
+    if (result.rows.length > 1) {
+      throw new AppError('Multiple active products match this barcode.', 409, 'CONFLICT');
+    }
+
+    const [productWithUrl] = await this.attachPresignedUrls(result.rows);
+    return productWithUrl || null;
+  }
+
+  /**
+   * Creates a new reference product with strict money validation and optional barcode
    */
   public async createProduct(
     name: string,
     buyingPrice: string | number,
-    hsnCode?: string | null
+    hsnCode?: string | null,
+    barcode?: string | null
   ): Promise<ProductRecord> {
     const trimmed = name.trim();
     if (!trimmed) throw new AppError('Product name cannot be empty.', 400, 'VALIDATION_ERROR');
@@ -130,23 +174,31 @@ export class ProductsService {
     const priceDec = validateMoneyInput(buyingPrice, 'Buying price');
     const formattedPrice = priceDec.toFixed(2);
     const cleanHsn = hsnCode && hsnCode.trim() ? hsnCode.trim() : null;
+    const cleanBarcode = this.normalizeBarcode(barcode);
 
-    const result = await appPool.query(
-      `INSERT INTO products (name, buying_price, hsn_code, created_at, updated_at)
-       VALUES ($1, $2, $3, NOW(), NOW())
-       RETURNING id, name, buying_price, hsn_code, created_at, updated_at, archived_at,
-                 image_object_key, image_content_type, image_size_bytes, image_updated_at`,
-      [trimmed, formattedPrice, cleanHsn]
-    );
-    return { ...result.rows[0], image_url: null };
+    try {
+      const result = await appPool.query(
+        `INSERT INTO products (name, buying_price, hsn_code, barcode, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, NOW(), NOW())
+         RETURNING id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
+                   image_object_key, image_content_type, image_size_bytes, image_updated_at`,
+        [trimmed, formattedPrice, cleanHsn, cleanBarcode]
+      );
+      return { ...result.rows[0], image_url: null };
+    } catch (err: any) {
+      if (err.code === '23505' && (err.constraint === 'idx_products_barcode_active' || String(err.message).includes('barcode'))) {
+        throw new AppError(`A product with barcode "${cleanBarcode}" already exists.`, 409, 'DUPLICATE_BARCODE');
+      }
+      throw err;
+    }
   }
 
   /**
-   * Updates an existing product's name and/or buying price with strict money validation
+   * Updates an existing product's name, buying price, HSN, and/or barcode
    */
   public async updateProduct(
     id: number,
-    data: { name?: string; buyingPrice?: string | number; hsnCode?: string | null }
+    data: { name?: string; buyingPrice?: string | number; hsnCode?: string | null; barcode?: string | null }
   ): Promise<ProductRecord | null> {
     const existing = await this.getProductById(id);
     if (!existing || existing.archived_at) return null;
@@ -163,21 +215,59 @@ export class ProductsService {
       ? (data.hsnCode && data.hsnCode.trim() ? data.hsnCode.trim() : null)
       : (existing.hsn_code || null);
 
-    const result = await appPool.query(
-      `UPDATE products
-       SET name = $1, buying_price = $2, hsn_code = $3, updated_at = NOW()
-       WHERE id = $4 AND archived_at IS NULL
-       RETURNING id, name, buying_price, hsn_code, created_at, updated_at, archived_at,
-                 image_object_key, image_content_type, image_size_bytes, image_updated_at`,
-      [newName, newPrice, newHsn, id]
-    );
-    if (result.rows.length === 0) return null;
-    const [updatedWithUrl] = await this.attachPresignedUrls(result.rows);
-    return updatedWithUrl || null;
+    const newBarcode = data.barcode !== undefined
+      ? this.normalizeBarcode(data.barcode)
+      : (existing.barcode || null);
+
+    try {
+      const result = await appPool.query(
+        `UPDATE products
+         SET name = $1, buying_price = $2, hsn_code = $3, barcode = $4, updated_at = NOW()
+         WHERE id = $5 AND archived_at IS NULL
+         RETURNING id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
+                   image_object_key, image_content_type, image_size_bytes, image_updated_at`,
+        [newName, newPrice, newHsn, newBarcode, id]
+      );
+      if (result.rows.length === 0) return null;
+      const [updatedWithUrl] = await this.attachPresignedUrls(result.rows);
+      return updatedWithUrl || null;
+    } catch (err: any) {
+      if (err.code === '23505' && (err.constraint === 'idx_products_barcode_active' || String(err.message).includes('barcode'))) {
+        throw new AppError(`A product with barcode "${newBarcode}" already exists.`, 409, 'DUPLICATE_BARCODE');
+      }
+      throw err;
+    }
   }
 
   /**
-   * Safely archives a product without deleting historical references
+   * Specifically associates or removes a barcode from an existing active product
+   */
+  public async updateBarcode(id: number, barcode: string | null): Promise<ProductRecord | null> {
+    const normalized = this.normalizeBarcode(barcode);
+
+    try {
+      const result = await appPool.query(
+        `UPDATE products
+         SET barcode = $1, updated_at = NOW()
+         WHERE id = $2 AND archived_at IS NULL
+         RETURNING id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
+                   image_object_key, image_content_type, image_size_bytes, image_updated_at`,
+        [normalized, id]
+      );
+      if (result.rows.length === 0) return null;
+      const [updatedWithUrl] = await this.attachPresignedUrls(result.rows);
+      return updatedWithUrl || null;
+    } catch (err: any) {
+      if (err.code === '23505' && (err.constraint === 'idx_products_barcode_active' || String(err.message).includes('barcode'))) {
+        throw new AppError(`A product with barcode "${normalized}" already exists.`, 409, 'DUPLICATE_BARCODE');
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Safely archives a product without deleting historical references.
+   * Frees up the product's barcode for reuse.
    */
   public async archiveProduct(id: number): Promise<boolean> {
     const result = await appPool.query(
@@ -212,7 +302,7 @@ export class ProductsService {
            image_updated_at = NOW(),
            updated_at = NOW()
        WHERE id = $4 AND archived_at IS NULL
-       RETURNING id, name, buying_price, hsn_code, created_at, updated_at, archived_at,
+       RETURNING id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
                  image_object_key, image_content_type, image_size_bytes, image_updated_at`,
       [imageObjectKey, verified.contentType, verified.contentLength, productId]
     );
@@ -249,7 +339,7 @@ export class ProductsService {
            image_updated_at = NULL,
            updated_at = NOW()
        WHERE id = $1 AND archived_at IS NULL
-       RETURNING id, name, buying_price, hsn_code, created_at, updated_at, archived_at,
+       RETURNING id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
                  image_object_key, image_content_type, image_size_bytes, image_updated_at`,
       [productId]
     );

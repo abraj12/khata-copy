@@ -12,7 +12,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 
-export type NavTab = 'khata' | 'products' | 'gst-bill' | 'normal-bill';
+export type NavTab = 'khata' | 'products' | 'quotations' | 'gst-bill' | 'normal-bill';
 
 interface NavbarProps {
   currentTab: NavTab;
@@ -135,7 +135,24 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               <span>Products</span>
             </button>
 
-            {/* 3. Bill Dropdown Menu (Contains GST Bill & Normal Bill) */}
+                        {/* 3. Quotations Tab */}
+            <button
+              onClick={() => {
+                setIsBillMenuOpen(false);
+                onTabChange('quotations');
+              }}
+              className={`inline-flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[42px] sm:min-h-[44px] flex-1 sm:flex-initial ${
+                currentTab === 'quotations'
+                  ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
+                  : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
+              }`}
+              aria-current={currentTab === 'quotations' ? 'page' : undefined}
+            >
+              <FileText className="w-4 h-4" />
+              <span>Quotations</span>
+            </button>
+
+            {/* 4. Bill Dropdown Menu (Contains GST Bill & Normal Bill) */}
             <div className="relative flex-1 sm:flex-initial" ref={billMenuRef}>
               <button
                 type="button"
