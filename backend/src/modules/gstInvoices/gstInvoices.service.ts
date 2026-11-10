@@ -1,11 +1,11 @@
 import Decimal from 'decimal.js';
+import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
 import { StorageService } from '../../services/storage.service.js';
 import { AppError } from '../../utils/errors.js';
 import { validateMoneyInput, validateDecimalQuantityInput } from '../../utils/validation.js';
 import {
   generateTaxInvoicePdf,
-
   numberToIndianWords,
   GstInvoicePdfData,
 } from './gstInvoices.pdf.js';
@@ -33,9 +33,14 @@ export interface CreateGstInvoiceInput {
   customerName: string;
   customerAddress?: string | null;
   customerGstin?: string | null;
+  customerPhone?: string | null;
   customerState?: string;
   customerStateCode?: string;
   gstRate: number | string; // e.g. 18 for 18% GST, 5, 12, 28, or 0
+  subtotalAmount?: number | string;
+  discountType?: 'percentage' | 'fixed' | null;
+  discountValue?: number | string;
+  discountAmount?: number | string;
   items: CreateGstInvoiceItemInput[];
   notes?: string | null;
 }
@@ -56,6 +61,10 @@ export interface GstInvoiceRecord {
   customer_gstin: string | null;
   customer_state: string;
   customer_state_code: string;
+  subtotal_amount?: string | null;
+  discount_type?: 'percentage' | 'fixed' | null;
+  discount_value?: string;
+  discount_amount?: string;
   taxable_amount: string;
   cgst_rate: string;
   cgst_amount: string;
@@ -117,17 +126,21 @@ export class GstInvoicesService {
             ) FROM gst_invoices
           ), 0) + 1
         ) AS next_num,
-        COALESCE(MAX(
-          CASE
-            WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
-            WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
-            ELSE 0
-          END
-        ), 0) AS max_num FROM gst_invoices
+        COALESCE((
+          SELECT MAX(
+            CASE
+              WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
+              WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
+              ELSE 0
+            END
+          ) FROM gst_invoices
+        ), 0) AS max_num;
       `);
+
       const row = res.rows[0];
       const maxNum = Number(row?.max_num || 0);
       let nextNum = Number(row?.next_num ?? (maxNum + 1));
+
       if (maxNum === 0) {
         nextNum = 1;
         try {
@@ -136,7 +149,6 @@ export class GstInvoicesService {
           // Non-fatal in mock/test environments
         }
       } else if (nextNum > maxNum + 1) {
-        // If sequence drifted ahead because rows were deleted from database, resync to maxNum
         nextNum = maxNum + 1;
         try {
           await appPool.query("SELECT setval('gst_invoice_number_seq', $1::BIGINT, true)", [maxNum]);
@@ -144,6 +156,7 @@ export class GstInvoicesService {
           // Non-fatal in mock/test environments
         }
       }
+
       return String(nextNum).padStart(3, '0');
     } catch {
       const maxRes = await appPool.query(`
@@ -153,7 +166,7 @@ export class GstInvoicesService {
             WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
             ELSE 0
           END
-        ), 0) AS max_num FROM gst_invoices
+        ), 0) AS max_num FROM gst_invoices;
       `);
       const maxNum = Number(maxRes.rows[0]?.max_num || 0);
       return String(maxNum + 1).padStart(3, '0');
@@ -161,365 +174,404 @@ export class GstInvoicesService {
   }
 
   /**
-   * Creates a GST Invoice with financial safety, tax calculation, and PDF storage
+   * Creates a GST Tax Invoice within an existing database transaction client.
+   * Atomically allocates invoice number, calculates Decimal finances, and inserts line items.
+   * Does NOT commit the transaction and does NOT upload to R2, enabling transactional composition.
    */
-  public async createInvoice(input: CreateGstInvoiceInput): Promise<GstInvoiceRecord> {
+  public async createInvoiceInTransaction(client: PoolClient, input: CreateGstInvoiceInput): Promise<GstInvoiceRecord> {
     if (!input.items || input.items.length === 0) {
       throw new AppError('At least one line item is required.', 400, 'ITEMS_REQUIRED');
     }
 
-    const client = await appPool.connect();
-
-    try {
-      await client.query('BEGIN');
-
-      // 1. Resolve invoice number atomically using database sequence
-      let invoiceNumber = input.invoiceNumber?.trim();
-      if (!invoiceNumber) {
+    // 1. Resolve invoice number atomically using database sequence
+    let invoiceNumber = input.invoiceNumber?.trim();
+    if (!invoiceNumber) {
+      try {
+        const maxCheck = await client.query(`
+          SELECT COALESCE(MAX(
+            CASE
+              WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
+              WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
+              ELSE 0
+            END
+          ), 0) AS max_num FROM gst_invoices
+        `);
+        const currentMax = Number(maxCheck.rows[0]?.max_num || 0);
+        if (currentMax === 0) {
+          await client.query("SELECT setval('gst_invoice_number_seq', 1, false)");
+        } else {
+          const seqRes = await client.query("SELECT last_value FROM gst_invoice_number_seq");
+          const seqLast = Number(seqRes.rows[0]?.last_value || 0);
+          if (seqLast > currentMax) {
+            await client.query("SELECT setval('gst_invoice_number_seq', $1::BIGINT, true)", [currentMax]);
+          }
+        }
+      } catch {
+        // Non-fatal in mock environments
+      }
+      let attempts = 0;
+      while (attempts < 10) {
         try {
-          const maxCheck = await client.query(`
-            SELECT COALESCE(MAX(
-              CASE
-                WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
-                WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
-                ELSE 0
-              END
-            ), 0) AS max_num FROM gst_invoices
-          `);
-          const currentMax = Number(maxCheck.rows[0]?.max_num || 0);
-          if (currentMax === 0) {
-            await client.query("SELECT setval('gst_invoice_number_seq', 1, false)");
-          } else {
-            const seqRes = await client.query("SELECT last_value FROM gst_invoice_number_seq");
-            const seqLast = Number(seqRes.rows[0]?.last_value || 0);
-            if (seqLast > currentMax) {
-              await client.query("SELECT setval('gst_invoice_number_seq', $1::BIGINT, true)", [currentMax]);
+          const seqRes = await client.query(`SELECT nextval('gst_invoice_number_seq') AS seq_num`);
+          const seqVal = seqRes.rows[0]?.seq_num;
+          if (seqVal) {
+            const candidate = String(seqVal).padStart(3, '0');
+            const exists = await client.query('SELECT 1 FROM gst_invoices WHERE invoice_number = $1', [candidate]);
+            if ((exists.rowCount ?? 0) === 0) {
+              invoiceNumber = candidate;
+              break;
             }
           }
         } catch {
-          // Non-fatal in mock environments
+          break;
         }
-        let attempts = 0;
-        while (attempts < 10) {
-          try {
-            const seqRes = await client.query(`SELECT nextval('gst_invoice_number_seq') AS seq_num`);
-            const seqVal = seqRes.rows[0]?.seq_num;
-            if (seqVal) {
-              const candidate = String(seqVal).padStart(3, '0');
-              const exists = await client.query('SELECT 1 FROM gst_invoices WHERE invoice_number = $1', [candidate]);
-              if ((exists.rowCount ?? 0) === 0) {
-                invoiceNumber = candidate;
-                break;
-              }
-            }
-          } catch {
-            // Sequence call failed (e.g. In mocks), fall back to max calculation
-            break;
-          }
-          attempts++;
-        }
+        attempts++;
+      }
 
-        if (!invoiceNumber) {
-          const maxRes = await client.query(`
-            SELECT COALESCE(MAX(
-              CASE
-                WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
-                WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
-                ELSE 0
-              END
-            ), 0) AS max_num FROM gst_invoices
-          `);
-          const maxNum = Number(maxRes.rows[0]?.max_num || 0);
-          invoiceNumber = String(maxNum + 1).padStart(3, '0');
-        }
-      } else {
-        // Alphanumeric manual number support (e.g., 'INV-101' -> 101, '005' -> 5)
-        const digits = invoiceNumber.replace(/[^0-9]/g, '');
-        const numVal = digits ? parseInt(digits, 10) : NaN;
-        if (!isNaN(numVal) && numVal > 0) {
-          try {
-            await client.query(
-              `SELECT setval('gst_invoice_number_seq', GREATEST((SELECT last_value FROM gst_invoice_number_seq), $1::BIGINT), true)`,
-              [numVal]
-            );
-          } catch {
-            // Non-fatal if sequence absent in mock
-          }
+      if (!invoiceNumber) {
+        const maxRes = await client.query(`
+          SELECT COALESCE(MAX(
+            CASE
+              WHEN invoice_number ~ '^\\d+$' THEN invoice_number::BIGINT
+              WHEN regexp_replace(invoice_number, '\\D', '', 'g') <> '' THEN regexp_replace(invoice_number, '\\D', '', 'g')::BIGINT
+              ELSE 0
+            END
+          ), 0) AS max_num FROM gst_invoices
+        `);
+        const maxNum = Number(maxRes.rows[0]?.max_num || 0);
+        invoiceNumber = String(maxNum + 1).padStart(3, '0');
+      }
+    } else {
+      const digits = invoiceNumber.replace(/[^0-9]/g, '');
+      const numVal = digits ? parseInt(digits, 10) : NaN;
+      if (!isNaN(numVal) && numVal > 0) {
+        try {
+          await client.query(
+            `SELECT setval('gst_invoice_number_seq', GREATEST((SELECT last_value FROM gst_invoice_number_seq), $1::BIGINT), true)`,
+            [numVal]
+          );
+        } catch {
+          // Non-fatal if sequence absent in mock
         }
       }
+    }
 
-      // Check collision
-      const existsRes = await client.query('SELECT 1 FROM gst_invoices WHERE invoice_number = $1', [invoiceNumber]);
-      if ((existsRes.rowCount ?? 0) > 0) {
-        throw new AppError(`Invoice number "${invoiceNumber}" already exists.`, 409, 'DUPLICATE_INVOICE_NUMBER');
+    // Check collision
+    const existsRes = await client.query('SELECT 1 FROM gst_invoices WHERE invoice_number = $1', [invoiceNumber]);
+    if ((existsRes.rowCount ?? 0) > 0) {
+      throw new AppError(`Invoice number "${invoiceNumber}" already exists.`, 409, 'DUPLICATE_INVOICE_NUMBER');
+    }
+
+    // Auto-update customer address if linked customer lacks one
+    if (input.customerId && input.customerAddress?.trim()) {
+      await client.query(
+        `UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2 AND (address IS NULL OR address = '')`,
+        [input.customerAddress.trim(), input.customerId]
+      );
+    }
+
+    // 2. Calculate item amounts and subtotal using Decimal.js with 2-decimal scale
+    let subtotalDec = new Decimal(0);
+    const computedItems: Array<CreateGstInvoiceItemInput & { amount: string }> = [];
+
+    for (const item of input.items) {
+      const qtyDec = validateDecimalQuantityInput(item.quantity, `Item "${item.description}" quantity`);
+      const rateDec = validateMoneyInput(item.rate, `Item "${item.description}" rate`);
+
+      const lineAmountDec = qtyDec.times(rateDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      subtotalDec = subtotalDec.plus(lineAmountDec);
+
+      computedItems.push({
+        ...item,
+        quantity: qtyDec.toFixed(2),
+        rate: rateDec.toFixed(2),
+        amount: lineAmountDec.toFixed(2),
+      });
+    }
+
+    // 3. Discount calculations
+    const discountType = input.discountType || null;
+    let discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    let discountAmountDec = new Decimal(0);
+
+    if (discountType === 'percentage') {
+      if (discountValDec.isNegative() || discountValDec.greaterThan(100)) {
+        throw new AppError('Discount percentage must be between 0 and 100.', 400, 'INVALID_DISCOUNT');
       }
-
-      // Auto-update customer address in database if linked customer currently lacks an address
-      if (input.customerId && input.customerAddress?.trim()) {
-        await client.query(
-          `UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2 AND (address IS NULL OR address = '')`,
-          [input.customerAddress.trim(), input.customerId]
-        );
+      discountAmountDec = subtotalDec.times(discountValDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    } else if (discountType === 'fixed') {
+      if (discountValDec.isNegative()) {
+        throw new AppError('Discount fixed amount cannot be negative.', 400, 'INVALID_DISCOUNT');
       }
+      discountAmountDec = Decimal.min(discountValDec, subtotalDec);
+    } else if (input.discountAmount) {
+      discountAmountDec = validateMoneyInput(input.discountAmount, 'Discount amount');
+      discountAmountDec = Decimal.min(discountAmountDec, subtotalDec);
+    }
 
-      // 2. Calculate item amounts and total taxable value using Decimal.js with 2-decimal scale
-      let taxableAmountDec = new Decimal(0);
-      const computedItems: Array<CreateGstInvoiceItemInput & { amount: string }> = [];
+    // Taxable amount is subtotal minus discount
+    const taxableAmountDec = subtotalDec.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 
-      for (const item of input.items) {
-        const qtyDec = validateDecimalQuantityInput(item.quantity, `Item "${item.description}" quantity`);
-        const rateDec = validateMoneyInput(item.rate, `Item "${item.description}" rate`);
+    // 4. Tax calculations (Intra-state vs Inter-state)
+    const shopStateCode = (input.stateCode || '10').trim();
+    const customerStateCode = (input.customerStateCode || '10').trim();
+    const isIntraState = shopStateCode === customerStateCode;
 
-        const lineAmountDec = qtyDec.times(rateDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-        taxableAmountDec = taxableAmountDec.plus(lineAmountDec);
+    const gstRateDec = new Decimal(input.gstRate || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    if (gstRateDec.isNegative() || !gstRateDec.isFinite() || gstRateDec.greaterThan(100)) {
+      throw new AppError('GST rate must be between 0 and 100 with at most 2 decimal places.', 400, 'INVALID_GST_RATE');
+    }
 
-        computedItems.push({
-          ...item,
-          quantity: qtyDec.toFixed(2),
-          rate: rateDec.toFixed(2),
-          amount: lineAmountDec.toFixed(2),
-        });
-      }
+    let cgstRateDec = new Decimal(0);
+    let cgstAmountDec = new Decimal(0);
+    let sgstRateDec = new Decimal(0);
+    let sgstAmountDec = new Decimal(0);
+    let igstRateDec = new Decimal(0);
+    let igstAmountDec = new Decimal(0);
 
-      // 3. Tax calculations (Intra-state vs Inter-state)
-      const shopStateCode = (input.stateCode || '10').trim();
-      const customerStateCode = (input.customerStateCode || '10').trim();
-      const isIntraState = shopStateCode === customerStateCode;
+    if (isIntraState) {
+      // Intra-state: CGST (half) + SGST (half)
+      cgstRateDec = gstRateDec.dividedBy(2).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      sgstRateDec = gstRateDec.minus(cgstRateDec);
+      cgstAmountDec = taxableAmountDec.times(cgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      sgstAmountDec = taxableAmountDec.times(sgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    } else {
+      // Inter-state: IGST (full)
+      igstRateDec = gstRateDec;
+      igstAmountDec = taxableAmountDec.times(igstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    }
 
-      const gstRateDec = new Decimal(input.gstRate || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-      if (gstRateDec.isNegative() || !gstRateDec.isFinite() || gstRateDec.greaterThan(100)) {
-        throw new AppError('GST rate must be between 0 and 100 with at most 2 decimal places.', 400, 'INVALID_GST_RATE');
-      }
+    const totalTaxDec = cgstAmountDec.plus(sgstAmountDec).plus(igstAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const grandTotalDec = taxableAmountDec.plus(totalTaxDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const amountInWords = numberToIndianWords(grandTotalDec.toFixed(2));
 
-      let cgstRateDec = new Decimal(0);
-      let cgstAmountDec = new Decimal(0);
-      let sgstRateDec = new Decimal(0);
-      let sgstAmountDec = new Decimal(0);
-      let igstRateDec = new Decimal(0);
-      let igstAmountDec = new Decimal(0);
+    // 5. Insert into gst_invoices
+    const invoiceDate = input.invoiceDate || new Date().toISOString().slice(0, 10);
+    const insertInvoiceSql = `
+      INSERT INTO gst_invoices (
+        invoice_number, invoice_date, state, state_code,
+        transportation_mode, vehicle_number, date_of_supply, place_of_supply,
+        customer_id, customer_name, customer_address, customer_gstin,
+        customer_state, customer_state_code,
+        subtotal_amount, discount_type, discount_value, discount_amount,
+        taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
+        igst_rate, igst_amount, tax_amount, grand_total, amount_in_words,
+        pdf_status, notes
+      ) VALUES (
+        $1, $2, $3, $4,
+        $5, $6, $7, $8,
+        $9, $10, $11, $12,
+        $13, $14,
+        $15, $16, $17, $18,
+        $19, $20, $21, $22, $23,
+        $24, $25, $26, $27, $28,
+        'pending', $29
+      ) RETURNING *
+    `;
 
-      if (isIntraState) {
-        // Intra-state: CGST (half) + SGST (half) strictly rounded so displayed rates sum to applied rate
-        cgstRateDec = gstRateDec.dividedBy(2).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-        sgstRateDec = gstRateDec.minus(cgstRateDec);
-        cgstAmountDec = taxableAmountDec.times(cgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-        sgstAmountDec = taxableAmountDec.times(sgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-      } else {
-        // Inter-state: IGST (full)
-        igstRateDec = gstRateDec;
-        igstAmountDec = taxableAmountDec.times(igstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-      }
+    const invoiceRes = await client.query(insertInvoiceSql, [
+      invoiceNumber,
+      invoiceDate,
+      input.state || 'Bihar',
+      shopStateCode,
+      input.transportationMode || null,
+      input.vehicleNumber || null,
+      input.dateOfSupply || invoiceDate,
+      input.placeOfSupply || 'Bihar',
+      input.customerId || null,
+      input.customerName.trim(),
+      input.customerAddress?.trim() || null,
+      input.customerGstin?.trim() || null,
+      input.customerState || 'Bihar',
+      customerStateCode,
+      subtotalDec.toFixed(2),
+      discountType,
+      discountValDec.toFixed(2),
+      discountAmountDec.toFixed(2),
+      taxableAmountDec.toFixed(2),
+      cgstRateDec.toFixed(2),
+      cgstAmountDec.toFixed(2),
+      sgstRateDec.toFixed(2),
+      sgstAmountDec.toFixed(2),
+      igstRateDec.toFixed(2),
+      igstAmountDec.toFixed(2),
+      totalTaxDec.toFixed(2),
+      grandTotalDec.toFixed(2),
+      amountInWords,
+      input.notes || null,
+    ]);
 
-      const totalTaxDec = cgstAmountDec.plus(sgstAmountDec).plus(igstAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-      const grandTotalDec = taxableAmountDec.plus(totalTaxDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-      const amountInWords = numberToIndianWords(grandTotalDec.toFixed(2));
+    const createdInvoice: GstInvoiceRecord = invoiceRes.rows[0];
 
-      // 4. Insert into gst_invoices
-      const invoiceDate = input.invoiceDate || new Date().toISOString().slice(0, 10);
-      const insertInvoiceSql = `
-        INSERT INTO gst_invoices (
-          invoice_number, invoice_date, state, state_code,
-          transportation_mode, vehicle_number, date_of_supply, place_of_supply,
-          customer_id, customer_name, customer_address, customer_gstin,
-          customer_state, customer_state_code,
-          taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
-          igst_rate, igst_amount, tax_amount, grand_total, amount_in_words,
-          pdf_status, notes
-        ) VALUES (
-          $1, $2, $3, $4,
-          $5, $6, $7, $8,
-          $9, $10, $11, $12,
-          $13, $14,
-          $15, $16, $17, $18, $19,
-          $20, $21, $22, $23, $24,
-          'pending', $25
-        ) RETURNING *
-      `;
+    // 6. Insert Line Items
+    const insertedItems: GstInvoiceItemRecord[] = [];
+    for (let i = 0; i < computedItems.length; i++) {
+      const itm = computedItems[i];
+      const itemRes = await client.query(
+        `INSERT INTO gst_invoice_items (
+          invoice_id, product_id, item_index, description, hsn_code,
+          quantity, unit, rate, rate_unit, amount
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING *`,
+        [
+          createdInvoice.id,
+          itm.productId || null,
+          i + 1,
+          itm.description.trim(),
+          itm.hsnCode || null,
+          itm.quantity,
+          itm.unit || null,
+          itm.rate,
+          itm.rateUnit || null,
+          itm.amount,
+        ]
+      );
+      insertedItems.push(itemRes.rows[0]);
+    }
 
-      const invoiceRes = await client.query(insertInvoiceSql, [
-        invoiceNumber,
-        invoiceDate,
-        input.state || 'Bihar',
-        shopStateCode,
-        input.transportationMode || null,
-        input.vehicleNumber || null,
-        input.dateOfSupply || invoiceDate,
-        input.placeOfSupply || 'Bihar',
-        input.customerId || null,
-        input.customerName.trim(),
-        input.customerAddress?.trim() || null,
-        input.customerGstin?.trim() || null,
-        input.customerState || 'Bihar',
-        customerStateCode,
-        taxableAmountDec.toFixed(2),
-        cgstRateDec.toFixed(2),
-        cgstAmountDec.toFixed(2),
-        sgstRateDec.toFixed(2),
-        sgstAmountDec.toFixed(2),
-        igstRateDec.toFixed(2),
-        igstAmountDec.toFixed(2),
-        totalTaxDec.toFixed(2),
-        grandTotalDec.toFixed(2),
-        amountInWords,
-        input.notes || null,
-      ]);
+    createdInvoice.items = insertedItems;
+    return createdInvoice;
+  }
 
-      const createdInvoice: GstInvoiceRecord = invoiceRes.rows[0];
+  /**
+   * Creates a GST Tax Invoice, manages transaction boundaries, and generates PDF.
+   */
+  public async createInvoice(input: CreateGstInvoiceInput): Promise<GstInvoiceRecord> {
+    const client = await appPool.connect();
+    let createdInvoice: GstInvoiceRecord;
 
-      // 5. Insert Line Items
-      const insertedItems: GstInvoiceItemRecord[] = [];
-      for (let i = 0; i < computedItems.length; i++) {
-        const itm = computedItems[i];
-        const itemRes = await client.query(
-          `INSERT INTO gst_invoice_items (
-            invoice_id, product_id, item_index, description, hsn_code,
-            quantity, unit, rate, rate_unit, amount
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-          RETURNING *`,
-          [
-            createdInvoice.id,
-            itm.productId || null,
-            i + 1,
-            itm.description.trim(),
-            itm.hsnCode?.trim() || null,
-            itm.quantity,
-            itm.unit || null,
-            itm.rate,
-            itm.rateUnit || null,
-            itm.amount,
-          ]
-        );
-        insertedItems.push(itemRes.rows[0]);
-      }
-
+    try {
+      await client.query('BEGIN');
+      createdInvoice = await this.createInvoiceInTransaction(client, input);
       await client.query('COMMIT');
-
-      // 6. Generate PDF Buffer and store in Cloudflare R2 (Post-commit safe resilience)
-      let r2Key: string | null = null;
-      let pdfStatus: GstInvoiceRecord['pdf_status'] = 'local_only';
-
-      try {
-        const pdfData: GstInvoicePdfData = {
-          invoiceNumber: createdInvoice.invoice_number,
-          invoiceDate: createdInvoice.invoice_date,
-          state: createdInvoice.state,
-          stateCode: createdInvoice.state_code,
-          transportationMode: createdInvoice.transportation_mode,
-          vehicleNumber: createdInvoice.vehicle_number,
-          dateOfSupply: createdInvoice.date_of_supply,
-          placeOfSupply: createdInvoice.place_of_supply,
-          customer: {
-            name: createdInvoice.customer_name,
-            address: createdInvoice.customer_address,
-            gstin: createdInvoice.customer_gstin,
-            state: createdInvoice.customer_state,
-            stateCode: createdInvoice.customer_state_code,
-          },
-          items: insertedItems.map((itm) => ({
-            name: itm.description,
-            hsn: itm.hsn_code,
-            quantity: itm.quantity,
-            unit: itm.unit,
-            rate: itm.rate,
-            rateUnit: itm.rate_unit,
-            amount: itm.amount,
-          })),
-          totals: {
-            taxableAmount: createdInvoice.taxable_amount,
-            cgstRate: Number(createdInvoice.cgst_rate) > 0 ? createdInvoice.cgst_rate : undefined,
-            cgstAmount: createdInvoice.cgst_amount,
-            sgstRate: Number(createdInvoice.sgst_rate) > 0 ? createdInvoice.sgst_rate : undefined,
-            sgstAmount: createdInvoice.sgst_amount,
-            igstRate: Number(createdInvoice.igst_rate) > 0 ? createdInvoice.igst_rate : undefined,
-            igstAmount: createdInvoice.igst_amount,
-            taxAmount: createdInvoice.tax_amount,
-            grandTotal: createdInvoice.grand_total,
-          },
-          amountInWords: createdInvoice.amount_in_words,
-        };
-
-        const pdfBuffer = await generateTaxInvoicePdf(pdfData);
-
-        if (this.storageService.isConfigured()) {
-          const year = new Date().getFullYear();
-          const month = String(new Date().getMonth() + 1).padStart(2, '0');
-          r2Key = `invoices/${year}/${month}/${createdInvoice.id}.pdf`;
-
-          try {
-            await this.storageService.uploadBufferToR2({
-              buffer: pdfBuffer,
-              objectKey: r2Key,
-              contentType: 'application/pdf',
-            });
-            pdfStatus = 'uploaded';
-          } catch (uploadErr) {
-            console.error('[GST INVOICE] R2 PDF Upload failed:', uploadErr);
-            pdfStatus = 'failed';
-          }
-        }
-      } catch (pdfErr) {
-        console.error('[GST INVOICE] PDF generation error:', pdfErr);
-        pdfStatus = 'failed';
-      }
-
-      try {
-        await appPool.query(
-          'UPDATE gst_invoices SET r2_object_key = $1, pdf_status = $2, updated_at = NOW() WHERE id = $3',
-          [r2Key, pdfStatus, createdInvoice.id]
-        );
-      } catch {
-        // Non-fatal if update fails in mock
-      }
-
-      createdInvoice.r2_object_key = r2Key;
-      createdInvoice.pdf_status = pdfStatus;
-      createdInvoice.invoice_date = input.invoiceDate || invoiceDate;
-      createdInvoice.date_of_supply = input.dateOfSupply || invoiceDate;
-      createdInvoice.items = insertedItems;
-
-      return createdInvoice;
     } catch (err) {
       try {
         await client.query('ROLLBACK');
       } catch {
-        // Ignore rollback failure if already committed
+        // Ignore rollback failure if already rolled back
       }
       throw err;
     } finally {
       client.release();
     }
+
+    // 7. Generate PDF and upload to Cloudflare R2 outside database transaction
+    let pdfStatus: 'uploaded' | 'local_only' | 'failed' = 'local_only';
+    let r2ObjectKey: string | null = null;
+
+    try {
+      const pdfBuffer = await generateTaxInvoicePdf({
+        invoiceNumber: createdInvoice.invoice_number,
+        invoiceDate: createdInvoice.invoice_date,
+        state: createdInvoice.state,
+        stateCode: createdInvoice.state_code,
+        transportationMode: createdInvoice.transportation_mode,
+        vehicleNumber: createdInvoice.vehicle_number,
+        dateOfSupply: createdInvoice.date_of_supply,
+        placeOfSupply: createdInvoice.place_of_supply,
+        customer: {
+          name: createdInvoice.customer_name,
+          address: createdInvoice.customer_address,
+          gstin: createdInvoice.customer_gstin,
+          state: createdInvoice.customer_state,
+          stateCode: createdInvoice.customer_state_code,
+        },
+        items: (createdInvoice.items || []).map((itm) => ({
+          name: itm.description,
+          hsn: itm.hsn_code,
+          quantity: itm.quantity,
+          unit: itm.unit,
+          rate: itm.rate,
+          rateUnit: itm.rate_unit,
+          amount: itm.amount,
+        })),
+        totals: {
+          subtotal: createdInvoice.subtotal_amount || createdInvoice.taxable_amount,
+          discountType: createdInvoice.discount_type,
+          discountValue: createdInvoice.discount_value,
+          discountAmount: createdInvoice.discount_amount,
+          taxableAmount: createdInvoice.taxable_amount,
+          cgstRate: createdInvoice.cgst_rate,
+          cgstAmount: createdInvoice.cgst_amount,
+          sgstRate: createdInvoice.sgst_rate,
+          sgstAmount: createdInvoice.sgst_amount,
+          igstRate: createdInvoice.igst_rate,
+          igstAmount: createdInvoice.igst_amount,
+          taxAmount: createdInvoice.tax_amount,
+          grandTotal: createdInvoice.grand_total,
+        },
+        amountInWords: createdInvoice.amount_in_words,
+        isNormalBill: false,
+      });
+
+      if (this.storageService.isConfigured()) {
+        const year = new Date().getFullYear();
+        const month = String(new Date().getMonth() + 1).padStart(2, '0');
+        r2ObjectKey = `gst-invoices/${year}/${month}/${createdInvoice.id}.pdf`;
+
+        try {
+          await this.storageService.uploadBufferToR2({
+            buffer: pdfBuffer,
+            objectKey: r2ObjectKey,
+            contentType: 'application/pdf',
+          });
+          pdfStatus = 'uploaded';
+        } catch (uploadErr) {
+          console.error('[GST INVOICE R2 UPLOAD] Upload failed:', uploadErr);
+          pdfStatus = 'failed';
+        }
+      }
+    } catch (pdfErr) {
+      console.error('[GST INVOICE PDF GENERATION] PDF generation failed:', pdfErr);
+      pdfStatus = 'failed';
+    }
+
+    try {
+      await appPool.query(
+        'UPDATE gst_invoices SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3',
+        [pdfStatus, r2ObjectKey, createdInvoice.id]
+      );
+      createdInvoice.pdf_status = pdfStatus;
+      createdInvoice.r2_object_key = r2ObjectKey;
+    } catch (updateErr) {
+      console.error('[GST INVOICE DB UPDATE] Failed to update pdf_status:', updateErr);
+    }
+
+    return createdInvoice;
   }
 
   /**
-   * List invoices with pagination, date filtering, and customer search
+   * List GST invoices with pagination and search
    */
-  public async listInvoices(opts: {
+  public async listInvoices(paramsIn: {
     search?: string;
     dateFrom?: string;
     dateTo?: string;
     limit?: number;
     offset?: number;
   }): Promise<{ invoices: GstInvoiceRecord[]; pagination: { total: number; limit: number; offset: number } }> {
-    const limit = Math.max(1, Math.min(100, opts.limit || 25));
-    const offset = Math.max(0, opts.offset || 0);
+    const limit = Math.min(Math.max(paramsIn.limit || 20, 1), 100);
+    const offset = Math.max(paramsIn.offset || 0, 0);
 
-    let whereSql = 'WHERE 1=1';
+    const conditions: string[] = [];
     const params: any[] = [];
 
-    if (opts.search && opts.search.trim()) {
-      params.push(`%${opts.search.trim()}%`);
-      whereSql += ` AND (i.invoice_number ILIKE $${params.length} OR i.customer_name ILIKE $${params.length})`;
+    if (paramsIn.search && paramsIn.search.trim()) {
+      params.push(`%${paramsIn.search.trim()}%`);
+      conditions.push(`(i.invoice_number ILIKE $${params.length} OR i.customer_name ILIKE $${params.length})`);
     }
 
-    if (opts.dateFrom) {
-      params.push(opts.dateFrom);
-      whereSql += ` AND i.invoice_date >= $${params.length}`;
+    if (paramsIn.dateFrom) {
+      params.push(paramsIn.dateFrom);
+      conditions.push(`i.invoice_date >= $${params.length}::DATE`);
     }
 
-    if (opts.dateTo) {
-      params.push(opts.dateTo);
-      whereSql += ` AND i.invoice_date <= $${params.length}`;
+    if (paramsIn.dateTo) {
+      params.push(paramsIn.dateTo);
+      conditions.push(`i.invoice_date <= $${params.length}::DATE`);
     }
+
+    const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const countRes = await appPool.query(
       `SELECT COUNT(*)::INT AS total FROM gst_invoices i ${whereSql}`,
@@ -530,15 +582,14 @@ export class GstInvoicesService {
     const listSql = `
       SELECT i.id, i.invoice_number,
              TO_CHAR(i.invoice_date, 'YYYY-MM-DD') AS invoice_date,
-             i.state, i.state_code,
-             i.transportation_mode, i.vehicle_number,
+             i.state, i.state_code, i.transportation_mode, i.vehicle_number,
              TO_CHAR(i.date_of_supply, 'YYYY-MM-DD') AS date_of_supply,
-             i.place_of_supply,
-             i.customer_id, i.customer_name, i.customer_address, i.customer_gstin,
+             i.place_of_supply, i.customer_id, i.customer_name, i.customer_address, i.customer_gstin,
              i.customer_state, i.customer_state_code,
-             i.taxable_amount, i.cgst_rate, i.cgst_amount, i.sgst_rate, i.sgst_amount,
-             i.igst_rate, i.igst_amount, i.tax_amount, i.grand_total, i.amount_in_words,
-             i.r2_object_key, i.pdf_status, i.notes, i.created_at, i.updated_at,
+             i.subtotal_amount, i.discount_type, i.discount_value, i.discount_amount,
+             i.taxable_amount, i.cgst_rate, i.cgst_amount,
+             i.sgst_rate, i.sgst_amount, i.igst_rate, i.igst_amount, i.tax_amount, i.grand_total,
+             i.amount_in_words, i.r2_object_key, i.pdf_status, i.notes, i.created_at, i.updated_at,
              COALESCE(
                (
                  SELECT json_agg(
@@ -585,7 +636,9 @@ export class GstInvoicesService {
               state, state_code, transportation_mode, vehicle_number,
               TO_CHAR(date_of_supply, 'YYYY-MM-DD') AS date_of_supply,
               place_of_supply, customer_id, customer_name, customer_address, customer_gstin,
-              customer_state, customer_state_code, taxable_amount, cgst_rate, cgst_amount,
+              customer_state, customer_state_code,
+              subtotal_amount, discount_type, discount_value, discount_amount,
+              taxable_amount, cgst_rate, cgst_amount,
               sgst_rate, sgst_amount, igst_rate, igst_amount, tax_amount, grand_total,
               amount_in_words, r2_object_key, pdf_status, notes, created_at, updated_at
        FROM gst_invoices WHERE id = $1`,
@@ -656,17 +709,22 @@ export class GstInvoicesService {
         amount: itm.amount,
       })),
       totals: {
+        subtotal: invoice.subtotal_amount || invoice.taxable_amount,
+        discountType: invoice.discount_type,
+        discountValue: invoice.discount_value,
+        discountAmount: invoice.discount_amount,
         taxableAmount: invoice.taxable_amount,
-        cgstRate: Number(invoice.cgst_rate) > 0 ? invoice.cgst_rate : undefined,
+        cgstRate: invoice.cgst_rate,
         cgstAmount: invoice.cgst_amount,
-        sgstRate: Number(invoice.sgst_rate) > 0 ? invoice.sgst_rate : undefined,
+        sgstRate: invoice.sgst_rate,
         sgstAmount: invoice.sgst_amount,
-        igstRate: Number(invoice.igst_rate) > 0 ? invoice.igst_rate : undefined,
+        igstRate: invoice.igst_rate,
         igstAmount: invoice.igst_amount,
         taxAmount: invoice.tax_amount,
         grandTotal: invoice.grand_total,
       },
       amountInWords: invoice.amount_in_words,
+      isNormalBill: false,
     };
 
     const buffer = await generateTaxInvoicePdf(pdfData);
@@ -681,14 +739,14 @@ export class GstInvoicesService {
       throw new AppError('At least one line item is required.', 400, 'ITEMS_REQUIRED');
     }
 
-    let taxableAmountDec = new Decimal(0);
+    let subtotalDec = new Decimal(0);
     const pdfItems: GstInvoicePdfData['items'] = [];
 
     for (const item of input.items) {
       const qtyDec = validateDecimalQuantityInput(item.quantity || 1, 'Quantity');
       const rateDec = validateMoneyInput(item.rate || 0, 'Rate');
       const lineAmountDec = qtyDec.times(rateDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-      taxableAmountDec = taxableAmountDec.plus(lineAmountDec);
+      subtotalDec = subtotalDec.plus(lineAmountDec);
 
       pdfItems.push({
         name: item.description,
@@ -700,6 +758,20 @@ export class GstInvoicesService {
         amount: lineAmountDec.toFixed(2),
       });
     }
+
+    const discountType = input.discountType || null;
+    let discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    let discountAmountDec = new Decimal(0);
+
+    if (discountType === 'percentage') {
+      discountAmountDec = subtotalDec.times(discountValDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    } else if (discountType === 'fixed') {
+      discountAmountDec = Decimal.min(discountValDec, subtotalDec);
+    } else if (input.discountAmount) {
+      discountAmountDec = Decimal.min(new Decimal(input.discountAmount || 0), subtotalDec);
+    }
+
+    const taxableAmountDec = subtotalDec.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 
     const shopStateCode = (input.stateCode || '10').trim();
     const customerStateCode = (input.customerStateCode || '10').trim();
@@ -729,21 +801,19 @@ export class GstInvoicesService {
     const totalTaxDec = cgstAmountDec.plus(sgstAmountDec).plus(igstAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     const grandTotalDec = taxableAmountDec.plus(totalTaxDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     const amountInWords = numberToIndianWords(grandTotalDec.toFixed(2));
-
-    const invoiceNumber = input.invoiceNumber?.trim() || 'DRAFT';
-    const invoiceDate = input.invoiceDate || new Date().toISOString().slice(0, 10);
+    const invoiceNumber = input.invoiceNumber || 'Draft';
 
     const pdfData: GstInvoicePdfData = {
       invoiceNumber,
-      invoiceDate,
+      invoiceDate: input.invoiceDate || new Date().toISOString().slice(0, 10),
       state: input.state || 'Bihar',
       stateCode: shopStateCode,
       transportationMode: input.transportationMode || null,
       vehicleNumber: input.vehicleNumber || null,
-      dateOfSupply: input.dateOfSupply || invoiceDate,
+      dateOfSupply: input.dateOfSupply || null,
       placeOfSupply: input.placeOfSupply || 'Bihar',
       customer: {
-        name: input.customerName || 'Customer / Receiver',
+        name: input.customerName || 'Valued Customer',
         address: input.customerAddress || null,
         gstin: input.customerGstin || null,
         state: input.customerState || 'Bihar',
@@ -751,23 +821,28 @@ export class GstInvoicesService {
       },
       items: pdfItems,
       totals: {
+        subtotal: subtotalDec.toFixed(2),
+        discountType,
+        discountValue: discountValDec.toFixed(2),
+        discountAmount: discountAmountDec.toFixed(2),
         taxableAmount: taxableAmountDec.toFixed(2),
-        cgstRate: cgstRateDec.isPositive() ? cgstRateDec.toString() : '',
+        cgstRate: cgstRateDec.toFixed(2),
         cgstAmount: cgstAmountDec.toFixed(2),
-        sgstRate: sgstRateDec.isPositive() ? sgstRateDec.toString() : '',
+        sgstRate: sgstRateDec.toFixed(2),
         sgstAmount: sgstAmountDec.toFixed(2),
-        igstRate: igstRateDec.isPositive() ? igstRateDec.toString() : '',
+        igstRate: igstRateDec.toFixed(2),
         igstAmount: igstAmountDec.toFixed(2),
         taxAmount: totalTaxDec.toFixed(2),
         grandTotal: grandTotalDec.toFixed(2),
       },
       amountInWords,
+      isNormalBill: false,
     };
 
     const buffer = await generateTaxInvoicePdf(pdfData);
     return {
       buffer,
-      filename: `Invoice_${invoiceNumber}.pdf`,
+      filename: `Draft_Invoice_${invoiceNumber}.pdf`,
     };
   }
 }

@@ -21,15 +21,17 @@ export const QuotationPreview: React.FC<QuotationPreviewProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let currentBlobUrl: string | null = null;
+    let isMounted = true;
+
     if (!isOpen) {
-      if (pdfUrl) {
-        URL.revokeObjectURL(pdfUrl);
-        setPdfUrl(null);
-      }
+      setPdfUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
       return;
     }
 
-    let isMounted = true;
     setIsLoading(true);
     setError(null);
 
@@ -45,8 +47,11 @@ export const QuotationPreview: React.FC<QuotationPreviewProps> = ({
         }
 
         if (isMounted) {
-          const url = URL.createObjectURL(blob);
-          setPdfUrl(url);
+          currentBlobUrl = URL.createObjectURL(blob);
+          setPdfUrl((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return currentBlobUrl;
+          });
           setIsLoading(false);
         }
       } catch (err: any) {
@@ -61,6 +66,9 @@ export const QuotationPreview: React.FC<QuotationPreviewProps> = ({
 
     return () => {
       isMounted = false;
+      if (currentBlobUrl) {
+        URL.revokeObjectURL(currentBlobUrl);
+      }
     };
   }, [isOpen, quotation, previewPayload]);
 

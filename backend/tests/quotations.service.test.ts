@@ -5,6 +5,8 @@ import { env } from '../src/config/env.js';
 import { appPool } from '../src/config/database.js';
 import { quotationsService } from '../src/modules/quotations/quotations.service.js';
 import { generateQuotationPdf } from '../src/modules/quotations/quotations.pdf.js';
+import { normalBillsService } from '../src/modules/normalBills/normalBills.service.js';
+import { gstInvoicesService } from '../src/modules/gstInvoices/gstInvoices.service.js';
 
 const TEST_PHONE = '9876543210';
 const TEST_PASSWORD = 'KhataOwner@2026!';
@@ -55,8 +57,9 @@ describe('Professional Quotations Module Test Suite', () => {
             { version: '001_auth_tables.sql' },
             { version: '015_product_barcode.sql' },
             { version: '016_quotations.sql' },
+            { version: '017_quotation_conversion_financial_fields.sql' },
           ],
-          rowCount: 3,
+          rowCount: 4,
         } as any;
       }
       if (sqlText.includes('FROM quotation_settings')) {
@@ -69,7 +72,7 @@ describe('Professional Quotations Module Test Suite', () => {
               gstin: '10ABGCA8624E1Z3',
               address: 'House No. 145A, Haziyapur, Ward 26, Gopalganj, Bihar – 841428',
               email: 'contact@algions.in',
-              phone: '+91 9999999999',
+              phone: '94938 40000',
               website: 'algions.in',
               state: 'Bihar',
               state_code: '10',
@@ -105,8 +108,8 @@ describe('Professional Quotations Module Test Suite', () => {
   it('1. Suggests next sequential quotation number via /api/v1/quotations/next-number', async () => {
     vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
       const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
-      if (sqlText.includes('max_num FROM quotations')) {
-        return { rows: [{ max_num: '4' }], rowCount: 1 } as any;
+      if (sqlText.includes('nextval')) {
+        return { rows: [{ seq_num: '5' }], rowCount: 1 } as any;
       }
       return { rows: [], rowCount: 0 } as any;
     });
@@ -188,7 +191,7 @@ describe('Professional Quotations Module Test Suite', () => {
     expect(calc.grandTotal).toBe('15000.00');
   });
 
-  it('5. Generates a valid multi-page professional PDF buffer with corporate styling', async () => {
+  it('5. Generates a valid multi-page professional PDF buffer with dynamic branding', async () => {
     const pdfBuffer = await generateQuotationPdf({
       quotationNumber: 'QT-001',
       quotationDate: '2026-11-10',
@@ -198,17 +201,18 @@ describe('Professional Quotations Module Test Suite', () => {
         cin: 'U62011BR2026PTC088473',
         gstin: '10ABGCA8624E1Z3',
         address: 'House No. 145A, Haziyapur, Ward 26, Gopalganj, Bihar – 841428',
-        phone: '+91 9999999999',
+        phone: '94938 40000',
         email: 'contact@algions.in',
         website: 'algions.in',
         bankName: 'State Bank of India',
         bankAccountNumber: '123456789012',
         bankIfsc: 'SBIN0001234',
+        signatoryTitle: 'Managing Director',
       },
       customer: {
         name: 'Tech Enterprises Pvt Ltd',
         address: 'Sector 62, Noida, Uttar Pradesh',
-        phone: '+91 9876543210',
+        phone: '9876543210',
         gstin: '09AAACT1234A1Z5',
       },
       projectTitle: 'AI Infrastructure Implementation',
@@ -288,6 +292,7 @@ describe('Professional Quotations Module Test Suite', () => {
       quotation_number: 'QT-501',
       status: 'draft',
       customer_name: 'Pending Customer',
+      valid_until: '2099-12-31',
       converted_normal_bill_id: null,
       converted_gst_invoice_id: null,
     };
@@ -348,5 +353,174 @@ describe('Professional Quotations Module Test Suite', () => {
   it('10. Rejects unauthenticated request to /api/v1/quotations with 401', async () => {
     const res = await request(app).get('/api/v1/quotations');
     expect(res.status).toBe(401);
+  });
+
+  it('11. Rejects conversion of expired quotation without force=true', async () => {
+    const mockQuotation = {
+      id: 503,
+      quotation_number: 'QT-503',
+      status: 'accepted',
+      valid_until: '2020-01-01', // Expired
+      customer_name: 'Expired Quote Customer',
+      converted_normal_bill_id: null,
+      converted_gst_invoice_id: null,
+    };
+
+    const mockClient = {
+      query: vi.fn().mockImplementation(async (sql: string) => {
+        if (sql.includes('SELECT * FROM quotations WHERE id = $1 FOR UPDATE')) {
+          return { rows: [mockQuotation], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+
+    vi.spyOn(appPool, 'connect').mockResolvedValue(mockClient as any);
+
+    const res = await request(app)
+      .post('/api/v1/quotations/503/convert-to-bill')
+      .set('Cookie', authCookie)
+      .set('x-csrf-token', csrfToken)
+      .send({ billType: 'normal', force: false });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('EXPIRED_QUOTATION');
+  });
+
+  it('12. Rejects conversion of non-GST quotation to GST invoice without explicit gstRateOverride', async () => {
+    const mockQuotation = {
+      id: 504,
+      quotation_number: 'QT-504',
+      status: 'accepted',
+      valid_until: '2099-12-31',
+      gst_enabled: false,
+      customer_name: 'Non GST Customer',
+      converted_normal_bill_id: null,
+      converted_gst_invoice_id: null,
+    };
+
+    const mockClient = {
+      query: vi.fn().mockImplementation(async (sql: string) => {
+        if (sql.includes('SELECT * FROM quotations WHERE id = $1 FOR UPDATE')) {
+          return { rows: [mockQuotation], rowCount: 1 };
+        }
+        if (sql.includes('SELECT * FROM quotation_items')) {
+          return { rows: [{ id: 1, quotation_id: 504, description: 'Service', quantity: '1', rate: '100.00', amount: '100.00' }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+
+    vi.spyOn(appPool, 'connect').mockResolvedValue(mockClient as any);
+
+    const res = await request(app)
+      .post('/api/v1/quotations/504/convert-to-bill')
+      .set('Cookie', authCookie)
+      .set('x-csrf-token', csrfToken)
+      .send({ billType: 'gst' }); // No gstRateOverride
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('GST_RATE_REQUIRED');
+  });
+
+  it('13. Atomic updateQuotationStatus prevents altering status of an already converted quotation', async () => {
+    vi.spyOn(appPool, 'query').mockImplementation(async (sql: any, params?: any[]) => {
+      const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
+      if (sqlText.includes('UPDATE quotations') && sqlText.includes("status <> 'converted'")) {
+        return { rows: [], rowCount: 0 } as any; // No rows updated because already converted
+      }
+      if (sqlText.includes('SELECT * FROM quotations WHERE id = $1')) {
+        return {
+          rows: [{ id: 505, status: 'converted', quotation_number: 'QT-505' }],
+          rowCount: 1,
+        } as any;
+      }
+      return { rows: [], rowCount: 0 } as any;
+    });
+
+    await expect(quotationsService.updateQuotationStatus(505, 'accepted')).rejects.toThrow(
+      'Cannot alter the status of an already converted quotation.'
+    );
+  });
+
+  it('14. Converted normal bill preserves exact discounts and passes single transaction client', async () => {
+    const mockQuotation = {
+      id: 506,
+      quotation_number: 'QT-506',
+      status: 'accepted',
+      valid_until: '2099-12-31',
+      customer_name: 'Discount Client',
+      customer_address: 'Patna, Bihar',
+      customer_phone: '9876543210',
+      customer_state: 'Bihar',
+      customer_state_code: '10',
+      subtotal: '1000.00',
+      discount_type: 'percentage',
+      discount_value: '10.00',
+      discount_amount: '100.00',
+      grand_total: '900.00',
+      converted_normal_bill_id: null,
+      converted_gst_invoice_id: null,
+    };
+
+    const mockItems = [
+      {
+        id: 1,
+        quotation_id: 506,
+        description: 'Design Package',
+        quantity: '1.00',
+        unit: 'set',
+        rate: '1000.00',
+        rate_unit: 'set',
+        amount: '1000.00',
+      },
+    ];
+
+    let queryCalls: string[] = [];
+    const mockClient = {
+      query: vi.fn().mockImplementation(async (sql: string, params?: any[]) => {
+        queryCalls.push(sql);
+        if (sql.includes('SELECT * FROM quotations WHERE id = $1 FOR UPDATE')) {
+          return { rows: [mockQuotation], rowCount: 1 };
+        }
+        if (sql.includes('SELECT * FROM quotation_items')) {
+          return { rows: mockItems, rowCount: 1 };
+        }
+        if (sql.includes('UPDATE quotations') && sql.includes('converted_normal_bill_id')) {
+          return { rows: [{ ...mockQuotation, status: 'converted', converted_normal_bill_id: 888 }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+
+    vi.spyOn(appPool, 'connect').mockResolvedValue(mockClient as any);
+    const createBillSpy = vi.spyOn(normalBillsService, 'createBillInTransaction').mockResolvedValue({
+      id: 888,
+      bill_number: '088',
+      total_amount: '900.00',
+      subtotal_amount: '1000.00',
+      discount_type: 'percentage',
+      discount_value: '10.00',
+      discount_amount: '100.00',
+    } as any);
+
+    const result = await quotationsService.convertToBill(506, { billType: 'normal' });
+
+    expect(result.billId).toBe(888);
+    expect(result.billNumber).toBe('088');
+    expect(createBillSpy).toHaveBeenCalledWith(
+      mockClient,
+      expect.objectContaining({
+        subtotalAmount: '1000.00',
+        discountType: 'percentage',
+        discountValue: '10.00',
+        discountAmount: '100.00',
+      })
+    );
+    expect(queryCalls).toContain('BEGIN');
+    expect(queryCalls).toContain('COMMIT');
   });
 });

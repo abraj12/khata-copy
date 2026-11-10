@@ -1,4 +1,4 @@
-import { apiClient, API_BASE_URL } from '../../lib/apiClient.js';
+import { apiClient, apiClientBlob } from '../../lib/apiClient.js';
 import {
   Quotation,
   QuotationSettings,
@@ -6,6 +6,36 @@ import {
   QuotationStatus,
   QuotationSummaryCounts,
 } from './quotation.types.js';
+
+export function toQuotationSettingsPayload(
+  settings: Partial<QuotationSettings> | Record<string, any>
+): Record<string, any> {
+  const payload: Record<string, any> = {};
+  const map: Record<string, string> = {
+    company_name: 'companyName',
+    logo_url: 'logoUrl',
+    state_code: 'stateCode',
+    bank_name: 'bankName',
+    bank_account_number: 'bankAccountNumber',
+    bank_ifsc: 'bankIfsc',
+    bank_branch: 'bankBranch',
+    standard_validity_days: 'standardValidityDays',
+    standard_payment_terms: 'standardPaymentTerms',
+    standard_delivery_terms: 'standardDeliveryTerms',
+    standard_warranty_terms: 'standardWarrantyTerms',
+    standard_declaration: 'standardDeclaration',
+    signatory_title: 'signatoryTitle',
+  };
+
+  Object.entries(settings).forEach(([key, val]) => {
+    const targetKey = map[key] || key;
+    if (val !== undefined) {
+      payload[targetKey] = val;
+    }
+  });
+
+  return payload;
+}
 
 export async function fetchNextQuotationNumber(): Promise<string> {
   const res = await apiClient<{ success: boolean; data: { nextNumber: string } }>(
@@ -26,11 +56,12 @@ export async function fetchQuotationSettings(): Promise<QuotationSettings> {
 export async function updateQuotationSettings(
   settings: Partial<QuotationSettings>
 ): Promise<QuotationSettings> {
+  const payload = toQuotationSettingsPayload(settings);
   const res = await apiClient<{ success: boolean; data: QuotationSettings }>(
     '/api/v1/quotations/settings',
     {
       method: 'PUT',
-      body: JSON.stringify(settings),
+      body: JSON.stringify(payload),
     }
   );
   return res.data?.data;
@@ -114,51 +145,34 @@ export async function updateQuotationStatus(
 export async function convertQuotationToBill(
   id: number,
   billType: 'normal' | 'gst',
-  force: boolean = false
+  force: boolean = false,
+  gstRateOverride?: number | string
 ): Promise<{ quotation: Quotation; billType: 'normal' | 'gst'; billId: number; billNumber: string }> {
   const res = await apiClient<{
     success: boolean;
     data: { quotation: Quotation; billType: 'normal' | 'gst'; billId: number; billNumber: string };
   }>(`/api/v1/quotations/${id}/convert-to-bill`, {
     method: 'POST',
-    body: JSON.stringify({ billType, force }),
+    body: JSON.stringify({ billType, force, gstRateOverride }),
   });
   return res.data?.data;
 }
 
 /**
- * Preview PDF on the fly: fetches PDF blob without saving quotation.
+ * Preview PDF on the fly: fetches PDF blob using CSRF-protected apiClientBlob.
  */
 export async function previewQuotationPdf(payload: CreateQuotationPayload): Promise<Blob> {
-  const url = `${API_BASE_URL}/api/v1/quotations/preview-pdf`;
-  const response = await fetch(url, {
+  return apiClientBlob('/api/v1/quotations/preview-pdf', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
     body: JSON.stringify(payload),
   });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(errText || 'Failed to generate PDF preview.');
-  }
-
-  return response.blob();
 }
 
 /**
  * Fetch saved quotation PDF as Blob for printing / downloading
  */
 export async function fetchSavedQuotationPdfBlob(id: number): Promise<Blob> {
-  const url = `${API_BASE_URL}/api/v1/quotations/${id}/pdf`;
-  const response = await fetch(url, {
+  return apiClientBlob(`/api/v1/quotations/${id}/pdf`, {
     method: 'GET',
-    credentials: 'include',
   });
-
-  if (!response.ok) {
-    throw new Error('Failed to load quotation PDF.');
-  }
-
-  return response.blob();
 }

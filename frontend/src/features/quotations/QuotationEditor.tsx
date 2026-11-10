@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Decimal from 'decimal.js';
 import {
   FileText,
@@ -22,7 +22,6 @@ import {
   fetchNextQuotationNumber,
   fetchQuotationSettings,
   createQuotation,
-  updateQuotationStatus,
 } from './quotationApi.js';
 import { BarcodeScannerModal } from '../barcode/BarcodeScannerModal.js';
 import { useHardwareBarcodeScanner } from '../barcode/useHardwareBarcodeScanner.js';
@@ -36,21 +35,33 @@ export interface QuotationEditorProps {
   onSaved: (quotation: Quotation) => void;
 }
 
+const getLocalISODate = () => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSaved }) => {
   const [settings, setSettings] = useState<QuotationSettings | null>(null);
   const [quotationNumber, setQuotationNumber] = useState('QT-001');
-  const [quotationDate, setQuotationDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [quotationDate, setQuotationDate] = useState(() => getLocalISODate());
   const [validUntil, setValidUntil] = useState('');
 
   // Customer
+  const [customerId, setCustomerId] = useState<number | null>(null);
   const [customerName, setCustomerName] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerGstin, setCustomerGstin] = useState('');
+  const [customerState, setCustomerState] = useState('Bihar');
   const [customerStateCode, setCustomerStateCode] = useState('10');
   const [customerSearch, setCustomerSearch] = useState('');
   const [matchedCustomers, setMatchedCustomers] = useState<any[]>([]);
   const [isSearchingCustomer, setIsSearchingCustomer] = useState(false);
+  const customerReqIdRef = useRef(0);
+  const productReqIdRef = useRef<{ [rowIdx: number]: number }>({});
 
   // Project
   const [projectTitle, setProjectTitle] = useState('');
@@ -137,24 +148,31 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     setIsIntraState(supplierState === customerStateCode);
   }, [customerStateCode, settings]);
 
-  // Customer search helper
+  // Customer search helper (using authoritative /api/v1/khata/customers and request ID guard)
   useEffect(() => {
     if (!customerSearch.trim() || customerSearch.length < 2) {
       setMatchedCustomers([]);
       return;
     }
+    const currentReqId = ++customerReqIdRef.current;
     const t = setTimeout(async () => {
       setIsSearchingCustomer(true);
       try {
         const res = await apiClient<{ success: boolean; data: any[] }>(
-          `/api/v1/customers?search=${encodeURIComponent(customerSearch.trim())}&limit=5`,
+          `/api/v1/khata/customers?search=${encodeURIComponent(customerSearch.trim())}&limit=5`,
           { method: 'GET' }
         );
-        setMatchedCustomers(res.data?.data || []);
+        if (currentReqId === customerReqIdRef.current) {
+          setMatchedCustomers(res.data?.data || []);
+        }
       } catch {
-        setMatchedCustomers([]);
+        if (currentReqId === customerReqIdRef.current) {
+          setMatchedCustomers([]);
+        }
       } finally {
-        setIsSearchingCustomer(false);
+        if (currentReqId === customerReqIdRef.current) {
+          setIsSearchingCustomer(false);
+        }
       }
     }, 250);
 
@@ -162,10 +180,14 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
   }, [customerSearch]);
 
   const selectCustomer = (c: any) => {
+    setCustomerId(c.id || null);
     setCustomerName(c.name || '');
     setCustomerPhone(c.phone || '');
     setCustomerAddress(c.address || '');
     setCustomerGstin(c.gstin || '');
+    if (c.state) {
+      setCustomerState(c.state);
+    }
     if (c.state_code) {
       setCustomerStateCode(c.state_code);
     }
@@ -217,7 +239,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     });
   };
 
-  // Search product catalogue for autocomplete on a row
+  // Search product catalogue for autocomplete on a row with request ID guard
   const handleSearchRowProduct = async (rowIdx: number, text: string) => {
     handleUpdateItem(rowIdx, 'description', text);
     if (!text.trim() || text.length < 2) {
@@ -225,14 +247,21 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
       return;
     }
 
+    const currentReqId = (productReqIdRef.current[rowIdx] || 0) + 1;
+    productReqIdRef.current[rowIdx] = currentReqId;
+
     try {
       const res = await apiClient<{ success: boolean; data: any[] }>(
         `/api/v1/products?search=${encodeURIComponent(text.trim())}&limit=5`,
         { method: 'GET' }
       );
-      setProductSearchResults((prev) => ({ ...prev, [rowIdx]: res.data?.data || [] }));
+      if (productReqIdRef.current[rowIdx] === currentReqId) {
+        setProductSearchResults((prev) => ({ ...prev, [rowIdx]: res.data?.data || [] }));
+      }
     } catch {
-      setProductSearchResults((prev) => ({ ...prev, [rowIdx]: [] }));
+      if (productReqIdRef.current[rowIdx] === currentReqId) {
+        setProductSearchResults((prev) => ({ ...prev, [rowIdx]: [] }));
+      }
     }
   };
 
@@ -374,10 +403,12 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
       quotationNumber: quotationNumber.trim() || undefined,
       quotationDate,
       validUntil: validUntil || null,
+      customerId: customerId || undefined,
       customerName: customerName.trim(),
       customerAddress: customerAddress.trim() || null,
       customerPhone: customerPhone.trim() || null,
       customerGstin: customerGstin.trim() || null,
+      customerState,
       customerStateCode,
       projectTitle: projectTitle.trim() || null,
       subject: subject.trim() || null,
@@ -415,11 +446,11 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     setError(null);
 
     try {
-      const payload = buildPayload();
-      let created = await createQuotation(payload);
-      if (markSent && created.id) {
-        created = await updateQuotationStatus(created.id, 'sent');
-      }
+      const payload: CreateQuotationPayload = {
+        ...buildPayload(),
+        initialStatus: markSent ? 'sent' : 'draft',
+      };
+      const created = await createQuotation(payload);
       onSaved(created);
     } catch (err: any) {
       setError(err?.message || 'Failed to save quotation.');

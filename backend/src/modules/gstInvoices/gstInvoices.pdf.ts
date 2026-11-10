@@ -32,6 +32,10 @@ export interface GstInvoicePdfData {
   };
   items: GstInvoicePdfItem[];
   totals?: {
+    subtotal?: string | number;
+    discountType?: string | null;
+    discountValue?: string | number;
+    discountAmount?: string | number;
     taxableAmount?: string | number;
     cgstRate?: string | number;
     cgstAmount?: string | number;
@@ -261,21 +265,43 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
       const sgstDisplay = totals.sgstRate ? `SGST @ ${totals.sgstRate}%` : 'SGST @';
       const igstDisplay = totals.igstRate ? `IGST @ ${totals.igstRate}%` : 'IGST @';
 
-      const taxRows: Array<[string, string]> = isNormalBill
-        ? [
-            ['Total Amount', Number(totals.taxableAmount || totals.grandTotal || 0).toFixed(2)],
-            ['Grand Total', Number(totals.grandTotal || 0).toFixed(2)],
-          ]
-        : [
-            ['T. Amt. Before Tax', Number(totals.taxableAmount || 0).toFixed(2)],
-            [cgstDisplay, Number(totals.cgstAmount || 0).toFixed(2)],
-            [sgstDisplay, Number(totals.sgstAmount || 0).toFixed(2)],
-            [igstDisplay, Number(totals.igstAmount || 0).toFixed(2)],
-            ['Tax Amount GST', Number(totals.taxAmount || 0).toFixed(2)],
-            ['T. Amount After Tax', Number(totals.grandTotal || 0).toFixed(2)],
-          ];
+      const hasDiscount = Boolean(totals.discountAmount && Number(totals.discountAmount) > 0);
+      const discountLabel = totals.discountType === 'percentage'
+        ? `Discount (${totals.discountValue}%)`
+        : 'Discount';
 
-      const taxBoxRowHeight = isNormalBill ? 22 : 16.5;
+      const taxRows: Array<[string, string]> = isNormalBill
+        ? (hasDiscount
+            ? [
+                ['Subtotal', Number(totals.subtotal || totals.taxableAmount || totals.grandTotal || 0).toFixed(2)],
+                [discountLabel, `-${Number(totals.discountAmount).toFixed(2)}`],
+                ['Grand Total', Number(totals.grandTotal || 0).toFixed(2)],
+              ]
+            : [
+                ['Total Amount', Number(totals.taxableAmount || totals.grandTotal || 0).toFixed(2)],
+                ['Grand Total', Number(totals.grandTotal || 0).toFixed(2)],
+              ])
+        : (hasDiscount
+            ? [
+                ['Subtotal', Number(totals.subtotal || 0).toFixed(2)],
+                [discountLabel, `-${Number(totals.discountAmount).toFixed(2)}`],
+                ['T. Amt. Before Tax', Number(totals.taxableAmount || 0).toFixed(2)],
+                [cgstDisplay, Number(totals.cgstAmount || 0).toFixed(2)],
+                [sgstDisplay, Number(totals.sgstAmount || 0).toFixed(2)],
+                [igstDisplay, Number(totals.igstAmount || 0).toFixed(2)],
+                ['Tax Amount GST', Number(totals.taxAmount || 0).toFixed(2)],
+                ['T. Amount After Tax', Number(totals.grandTotal || 0).toFixed(2)],
+              ]
+            : [
+                ['T. Amt. Before Tax', Number(totals.taxableAmount || 0).toFixed(2)],
+                [cgstDisplay, Number(totals.cgstAmount || 0).toFixed(2)],
+                [sgstDisplay, Number(totals.sgstAmount || 0).toFixed(2)],
+                [igstDisplay, Number(totals.igstAmount || 0).toFixed(2)],
+                ['Tax Amount GST', Number(totals.taxAmount || 0).toFixed(2)],
+                ['T. Amount After Tax', Number(totals.grandTotal || 0).toFixed(2)],
+              ]);
+
+      const taxBoxRowHeight = isNormalBill ? (hasDiscount ? 16 : 22) : (hasDiscount ? 13.5 : 16.5);
       const taxBoxRows = taxRows.length;
       const taxBoxHeight = taxBoxRowHeight * taxBoxRows;
       const taxBoxTop = tableBottom - taxBoxHeight;

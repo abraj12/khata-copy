@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import fs from 'fs';
 import { numberToIndianWords, formatDateToIndian } from '../gstInvoices/gstInvoices.pdf.js';
 
 export interface QuotationPdfItem {
@@ -441,7 +442,7 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
         align: 'center',
       });
 
-      doc.fillColor(secondarySlate).font('Helvetica').fontSize(7.5).text('Authorized Signatory', signX + 6, termsTop + termsBlockHeight - 18, {
+      doc.fillColor(secondarySlate).font('Helvetica').fontSize(7.5).text(data.company.signatoryTitle || 'Authorized Signatory', signX + 6, termsTop + termsBlockHeight - 18, {
         width: signWidth - 12,
         align: 'center',
       });
@@ -459,7 +460,8 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
           .stroke();
 
         doc.font('Helvetica').fontSize(7.5).fillColor(secondarySlate);
-        doc.text('Thank you for your business. This quotation is a commercial offer issued by Algions AI Labs Private Limited.', margin, pageHeight - 24, {
+        const companyLegalName = data.company.companyName || 'Algions AI Labs Private Limited';
+        doc.text('Thank you for your business. This quotation is a commercial offer issued by ' + companyLegalName + '.', margin, pageHeight - 24, {
           align: 'left',
           width: contentWidth - 80,
         });

@@ -48,6 +48,7 @@ export const EXPECTED_MIGRATIONS = [
   '014_billing_quantity_and_sequences.sql',
   '015_product_barcode.sql',
   '016_quotations.sql',
+  '017_quotation_conversion_financial_fields.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [

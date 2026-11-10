@@ -50,6 +50,18 @@ export const QuotationsView: React.FC = () => {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 300);
   const [statusFilter, setStatusFilter] = useState<string>('');
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 25;
+  const [pagination, setPagination] = useState<{ limit: number; offset: number; hasMore: boolean; nextOffset: number | null }>({
+    limit: PAGE_SIZE,
+    offset: 0,
+    hasMore: false,
+    nextOffset: null,
+  });
+
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch, statusFilter]);
 
   // Modals
   const [previewQuotation, setPreviewQuotation] = useState<Quotation | null>(null);
@@ -72,15 +84,18 @@ export const QuotationsView: React.FC = () => {
       const res = await fetchQuotations({
         search: debouncedSearch || undefined,
         status: statusFilter || undefined,
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
       });
       setQuotations(res.quotations);
+      setPagination(res.pagination);
       setSummaryCounts(res.summaryCounts);
     } catch (err: any) {
       showNotification('error', err?.message || 'Failed to load quotations.');
     } finally {
       setIsLoading(false);
     }
-  }, [debouncedSearch, statusFilter]);
+  }, [debouncedSearch, statusFilter, page]);
 
   useEffect(() => {
     loadQuotations();
@@ -320,16 +335,16 @@ export const QuotationsView: React.FC = () => {
         {/* Rejected / Expired */}
         <button
           type="button"
-          onClick={() => setStatusFilter('rejected')}
+          onClick={() => setStatusFilter('rejected_or_expired')}
           className={`neu-card p-3 rounded-xl text-left transition border ${
-            statusFilter === 'rejected'
+            statusFilter === 'rejected_or_expired'
               ? 'border-rose-500 bg-rose-500/10 shadow-md'
               : 'border-transparent'
           }`}
         >
           <div className="text-[10px] font-bold uppercase text-rose-500 flex items-center gap-1">
             <XCircle className="w-3 h-3" />
-            <span>Rejected</span>
+            <span>Rejected / Expired</span>
           </div>
           <div className="text-lg font-black text-[var(--khata-text)] mt-0.5">
             {summaryCounts.rejectedOrExpired}
@@ -632,6 +647,34 @@ export const QuotationsView: React.FC = () => {
                   })}
                 </tbody>
               </table>
+            </div>
+
+            {/* Pagination Controls */}
+            <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-t border-[var(--khata-border)] text-xs bg-[var(--khata-surface-inset)]/50">
+              <span className="text-[var(--khata-text-muted)] font-medium">
+                Showing {quotations.length > 0 ? page * PAGE_SIZE + 1 : 0}–{page * PAGE_SIZE + quotations.length} of {summaryCounts.total}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={page === 0 || isLoading}
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  className="px-3 py-1.5 rounded-lg border border-[var(--khata-border)] bg-[var(--khata-surface)] font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:border-[var(--khata-accent)] transition"
+                >
+                  Previous
+                </button>
+                <span className="font-bold px-2 text-[var(--khata-text)]">
+                  Page {page + 1}
+                </span>
+                <button
+                  type="button"
+                  disabled={!pagination.hasMore || isLoading}
+                  onClick={() => setPage((p) => p + 1)}
+                  className="px-3 py-1.5 rounded-lg border border-[var(--khata-border)] bg-[var(--khata-surface)] font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:border-[var(--khata-accent)] transition"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           </>
         )}

@@ -1,11 +1,11 @@
 import Decimal from 'decimal.js';
+import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
 import { StorageService } from '../../services/storage.service.js';
 import { AppError } from '../../utils/errors.js';
 import { validateMoneyInput, validateDecimalQuantityInput } from '../../utils/validation.js';
 import {
   generateTaxInvoicePdf,
-
   numberToIndianWords,
 } from '../gstInvoices/gstInvoices.pdf.js';
 
@@ -34,6 +34,10 @@ export interface CreateNormalBillInput {
   customerPhone?: string | null;
   customerState?: string;
   customerStateCode?: string;
+  subtotalAmount?: number | string;
+  discountType?: 'percentage' | 'fixed' | null;
+  discountValue?: number | string;
+  discountAmount?: number | string;
   items: CreateNormalBillItemInput[];
   notes?: string | null;
 }
@@ -54,6 +58,10 @@ export interface NormalBillRecord {
   customer_phone: string | null;
   customer_state: string;
   customer_state_code: string;
+  subtotal_amount?: string | null;
+  discount_type?: 'percentage' | 'fixed' | null;
+  discount_value?: string;
+  discount_amount?: string;
   total_amount: string;
   amount_in_words: string;
   r2_object_key: string | null;
@@ -107,17 +115,21 @@ export class NormalBillsService {
             ) FROM normal_bills
           ), 0) + 1
         ) AS next_num,
-        COALESCE(MAX(
-          CASE
-            WHEN bill_number ~ '^\\d+$' THEN bill_number::BIGINT
-            WHEN regexp_replace(bill_number, '\\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\\D', '', 'g')::BIGINT
-            ELSE 0
-          END
-        ), 0) AS max_num FROM normal_bills
+        COALESCE((
+          SELECT MAX(
+            CASE
+              WHEN bill_number ~ '^\\d+$' THEN bill_number::BIGINT
+              WHEN regexp_replace(bill_number, '\\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\\D', '', 'g')::BIGINT
+              ELSE 0
+            END
+          ) FROM normal_bills
+        ), 0) AS max_num;
       `);
+
       const row = res.rows[0];
       const maxNum = Number(row?.max_num || 0);
       let nextNum = Number(row?.next_num ?? (maxNum + 1));
+
       if (maxNum === 0) {
         nextNum = 1;
         try {
@@ -126,7 +138,6 @@ export class NormalBillsService {
           // Non-fatal in mock/test environments
         }
       } else if (nextNum > maxNum + 1) {
-        // If sequence drifted ahead because rows were deleted from database, resync to maxNum
         nextNum = maxNum + 1;
         try {
           await appPool.query("SELECT setval('normal_bill_number_seq', $1::BIGINT, true)", [maxNum]);
@@ -134,6 +145,7 @@ export class NormalBillsService {
           // Non-fatal in mock/test environments
         }
       }
+
       return String(nextNum).padStart(3, '0');
     } catch {
       const maxRes = await appPool.query(`
@@ -143,7 +155,7 @@ export class NormalBillsService {
             WHEN regexp_replace(bill_number, '\\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\\D', '', 'g')::BIGINT
             ELSE 0
           END
-        ), 0) AS max_num FROM normal_bills
+        ), 0) AS max_num FROM normal_bills;
       `);
       const maxNum = Number(maxRes.rows[0]?.max_num || 0);
       return String(maxNum + 1).padStart(3, '0');
@@ -151,355 +163,112 @@ export class NormalBillsService {
   }
 
   /**
-   * Creates a Normal Bill without GST calculations, ensures financial decimal safety, and generates PDF.
+   * Creates a Normal Bill within an existing database transaction client.
+   * Atomically allocates bill number, calculates Decimal finances, and inserts line items.
+   * Does NOT commit the transaction and does NOT upload to R2, enabling transactional composition.
    */
-  public async createBill(input: CreateNormalBillInput): Promise<NormalBillRecord> {
+  public async createBillInTransaction(client: PoolClient, input: CreateNormalBillInput): Promise<NormalBillRecord> {
     if (!input.items || input.items.length === 0) {
       throw new AppError('At least one line item is required.', 400, 'ITEMS_REQUIRED');
     }
 
-    const client = await appPool.connect();
-
-    try {
-      await client.query('BEGIN');
-
-      // 1. Resolve bill number atomically using database sequence
-      let billNumber = input.billNumber?.trim();
-      if (!billNumber) {
+    // 1. Resolve bill number atomically using database sequence
+    let billNumber = input.billNumber?.trim();
+    if (!billNumber) {
+      try {
+        const maxCheck = await client.query(`
+          SELECT COALESCE(MAX(
+            CASE
+              WHEN bill_number ~ '^\\d+$' THEN bill_number::BIGINT
+              WHEN regexp_replace(bill_number, '\\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\\D', '', 'g')::BIGINT
+              ELSE 0
+            END
+          ), 0) AS max_num FROM normal_bills
+        `);
+        const currentMax = Number(maxCheck.rows[0]?.max_num || 0);
+        if (currentMax === 0) {
+          await client.query("SELECT setval('normal_bill_number_seq', 1, false)");
+        } else {
+          const seqRes = await client.query("SELECT last_value FROM normal_bill_number_seq");
+          const seqLast = Number(seqRes.rows[0]?.last_value || 0);
+          if (seqLast > currentMax) {
+            await client.query("SELECT setval('normal_bill_number_seq', $1::BIGINT, true)", [currentMax]);
+          }
+        }
+      } catch {
+        // Non-fatal in mock environments
+      }
+      let attempts = 0;
+      while (attempts < 10) {
         try {
-          const maxCheck = await client.query(`
-            SELECT COALESCE(MAX(
-              CASE
-                WHEN bill_number ~ '^\\d+$' THEN bill_number::BIGINT
-                WHEN regexp_replace(bill_number, '\\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\\D', '', 'g')::BIGINT
-                ELSE 0
-              END
-            ), 0) AS max_num FROM normal_bills
-          `);
-          const currentMax = Number(maxCheck.rows[0]?.max_num || 0);
-          if (currentMax === 0) {
-            await client.query("SELECT setval('normal_bill_number_seq', 1, false)");
-          } else {
-            const seqRes = await client.query("SELECT last_value FROM normal_bill_number_seq");
-            const seqLast = Number(seqRes.rows[0]?.last_value || 0);
-            if (seqLast > currentMax) {
-              await client.query("SELECT setval('normal_bill_number_seq', $1::BIGINT, true)", [currentMax]);
+          const seqRes = await client.query(`SELECT nextval('normal_bill_number_seq') AS seq_num`);
+          const seqVal = seqRes.rows[0]?.seq_num;
+          if (seqVal) {
+            const candidate = String(seqVal).padStart(3, '0');
+            const exists = await client.query('SELECT 1 FROM normal_bills WHERE bill_number = $1', [candidate]);
+            if ((exists.rowCount ?? 0) === 0) {
+              billNumber = candidate;
+              break;
             }
           }
         } catch {
-          // Non-fatal in mock environments
+          break;
         }
-        let attempts = 0;
-        while (attempts < 10) {
-          try {
-            const seqRes = await client.query(`SELECT nextval('normal_bill_number_seq') AS seq_num`);
-            const seqVal = seqRes.rows[0]?.seq_num;
-            if (seqVal) {
-              const candidate = String(seqVal).padStart(3, '0');
-              const exists = await client.query('SELECT 1 FROM normal_bills WHERE bill_number = $1', [candidate]);
-              if ((exists.rowCount ?? 0) === 0) {
-                billNumber = candidate;
-                break;
-              }
-            }
-          } catch {
-            // Sequence call failed (e.g. in unit mocks), fall back to max calculation
-            break;
-          }
-          attempts++;
-        }
+        attempts++;
+      }
 
-        if (!billNumber) {
-          const maxRes = await client.query(`
-            SELECT COALESCE(MAX(
-              CASE
-                WHEN bill_number ~ '^\\d+$' THEN bill_number::BIGINT
-                WHEN regexp_replace(bill_number, '\\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\\D', '', 'g')::BIGINT
-                ELSE 0
-              END
-            ), 0) AS max_num FROM normal_bills
-          `);
-          const maxNum = Number(maxRes.rows[0]?.max_num || 0);
-          billNumber = String(maxNum + 1).padStart(3, '0');
-        }
-      } else {
-        // Alphanumeric manual number support (e.g., 'NB-101' -> 101, '005' -> 5)
-        const digits = billNumber.replace(/[^0-9]/g, '');
-        const numVal = digits ? parseInt(digits, 10) : NaN;
-        if (!isNaN(numVal) && numVal > 0) {
-          try {
-            await client.query(
-              `SELECT setval('normal_bill_number_seq', GREATEST((SELECT last_value FROM normal_bill_number_seq), $1::BIGINT), true)`,
-              [numVal]
-            );
-          } catch {
-            // Non-fatal if sequence absent in mock
-          }
+      if (!billNumber) {
+        const maxRes = await client.query(`
+          SELECT COALESCE(MAX(
+            CASE
+              WHEN bill_number ~ '^\\d+$' THEN bill_number::BIGINT
+              WHEN regexp_replace(bill_number, '\\D', '', 'g') <> '' THEN regexp_replace(bill_number, '\\D', '', 'g')::BIGINT
+              ELSE 0
+            END
+          ), 0) AS max_num FROM normal_bills
+        `);
+        const maxNum = Number(maxRes.rows[0]?.max_num || 0);
+        billNumber = String(maxNum + 1).padStart(3, '0');
+      }
+    } else {
+      const digits = billNumber.replace(/[^0-9]/g, '');
+      const numVal = digits ? parseInt(digits, 10) : NaN;
+      if (!isNaN(numVal) && numVal > 0) {
+        try {
+          await client.query(
+            `SELECT setval('normal_bill_number_seq', GREATEST((SELECT last_value FROM normal_bill_number_seq), $1::BIGINT), true)`,
+            [numVal]
+          );
+        } catch {
+          // Non-fatal if sequence absent in mock
         }
       }
-
-      // Check collision
-      const existsRes = await client.query('SELECT 1 FROM normal_bills WHERE bill_number = $1', [billNumber]);
-      if ((existsRes.rowCount ?? 0) > 0) {
-        throw new AppError(`Bill number "${billNumber}" already exists.`, 409, 'DUPLICATE_BILL_NUMBER');
-      }
-
-      // Auto-update customer address in database if linked customer currently lacks an address
-      if (input.customerId && input.customerAddress?.trim()) {
-        await client.query(
-          `UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2 AND (address IS NULL OR address = '')`,
-          [input.customerAddress.trim(), input.customerId]
-        );
-      }
-
-      // 2. Calculate item amounts and total value using Decimal.js with 2-decimal scale (No GST)
-      let totalAmountDec = new Decimal(0);
-      const computedItems: Array<CreateNormalBillItemInput & { amount: string }> = [];
-
-      for (const item of input.items) {
-        const qtyDec = validateDecimalQuantityInput(item.quantity, `Item "${item.description}" quantity`);
-        const rateDec = validateMoneyInput(item.rate, `Item "${item.description}" rate`);
-
-        const lineAmountDec = qtyDec.times(rateDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-        totalAmountDec = totalAmountDec.plus(lineAmountDec);
-
-        computedItems.push({
-          ...item,
-          quantity: qtyDec.toFixed(2),
-          rate: rateDec.toFixed(2),
-          amount: lineAmountDec.toFixed(2),
-        });
-      }
-
-      // 3. Indian words representation of final amount
-      const amountInWords = numberToIndianWords(totalAmountDec.toNumber());
-
-      // 4. Insert Normal Bill Header
-      const insertBillSql = `
-        INSERT INTO normal_bills (
-          bill_number,
-          bill_date,
-          state,
-          state_code,
-          transportation_mode,
-          vehicle_number,
-          date_of_supply,
-          place_of_supply,
-          customer_id,
-          customer_name,
-          customer_address,
-          customer_phone,
-          customer_state,
-          customer_state_code,
-          total_amount,
-          amount_in_words,
-          pdf_status,
-          notes
-        ) VALUES (
-          $1,
-          COALESCE($2::DATE, CURRENT_DATE),
-          COALESCE($3, 'Bihar'),
-          COALESCE($4, '10'),
-          $5,
-          $6,
-          $7::DATE,
-          $8,
-          $9,
-          $10,
-          $11,
-          $12,
-          COALESCE($13, 'Bihar'),
-          COALESCE($14, '10'),
-          $15,
-          $16,
-          'pending',
-          $17
-        ) RETURNING
-          id,
-          bill_number,
-          TO_CHAR(bill_date, 'YYYY-MM-DD') AS bill_date,
-          state,
-          state_code,
-          transportation_mode,
-          vehicle_number,
-          TO_CHAR(date_of_supply, 'YYYY-MM-DD') AS date_of_supply,
-          place_of_supply,
-          customer_id,
-          customer_name,
-          customer_address,
-          customer_phone,
-          customer_state,
-          customer_state_code,
-          total_amount,
-          amount_in_words,
-          r2_object_key,
-          pdf_status,
-          notes,
-          created_at,
-          updated_at;
-      `;
-
-      const billRes = await client.query(insertBillSql, [
-        billNumber,
-        input.billDate || null,
-        input.state || 'Bihar',
-        input.stateCode || '10',
-        input.transportationMode || null,
-        input.vehicleNumber || null,
-        input.dateOfSupply || null,
-        input.placeOfSupply || null,
-        input.customerId || null,
-        input.customerName.trim(),
-        input.customerAddress || null,
-        input.customerPhone || null,
-        input.customerState || 'Bihar',
-        input.customerStateCode || '10',
-        totalAmountDec.toFixed(2),
-        amountInWords,
-        input.notes || null,
-      ]);
-
-      const billRecord: NormalBillRecord = billRes.rows[0];
-
-      // 5. Insert line items
-      const insertedItems: NormalBillItemRecord[] = [];
-      for (let i = 0; i < computedItems.length; i++) {
-        const item = computedItems[i];
-        const itemRes = await client.query(
-          `
-          INSERT INTO normal_bill_items (
-            bill_id,
-            product_id,
-            item_index,
-            description,
-            hsn_code,
-            quantity,
-            unit,
-            rate,
-            rate_unit,
-            amount
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-          RETURNING *;
-        `,
-          [
-            billRecord.id,
-            item.productId || null,
-            i + 1,
-            item.description.trim(),
-            item.hsnCode || null,
-            item.quantity,
-            item.unit || null,
-            item.rate,
-            item.rateUnit || null,
-            item.amount,
-          ]
-        );
-        insertedItems.push(itemRes.rows[0]);
-      }
-
-      await client.query('COMMIT');
-
-      // 6. Generate Normal Bill PDF (No GST calculations)
-      let pdfStatus: 'uploaded' | 'local_only' | 'failed' = 'local_only';
-      let r2Key: string | null = null;
-
-      try {
-        const pdfBuffer = await generateTaxInvoicePdf({
-          invoiceNumber: billRecord.bill_number,
-          invoiceDate: billRecord.bill_date,
-          state: billRecord.state,
-          stateCode: billRecord.state_code,
-          transportationMode: billRecord.transportation_mode,
-          vehicleNumber: billRecord.vehicle_number,
-          dateOfSupply: billRecord.date_of_supply,
-          placeOfSupply: billRecord.place_of_supply,
-          customer: {
-            name: billRecord.customer_name,
-            address: billRecord.customer_address,
-            phone: billRecord.customer_phone,
-            state: billRecord.customer_state,
-            stateCode: billRecord.customer_state_code,
-          },
-          items: insertedItems.map((item) => ({
-            name: item.description,
-            hsn: item.hsn_code,
-            quantity: item.quantity,
-            unit: item.unit,
-            rate: item.rate,
-            rateUnit: item.rate_unit,
-            amount: item.amount,
-          })),
-          totals: {
-            taxableAmount: billRecord.total_amount,
-            taxAmount: 0,
-            grandTotal: billRecord.total_amount,
-          },
-          amountInWords: billRecord.amount_in_words,
-          isNormalBill: true,
-          billTitle: 'NORMAL BILL',
-        });
-
-        // 7. Upload PDF to Cloudflare R2
-        if (this.storageService.isConfigured()) {
-          const year = new Date().getFullYear();
-          const month = String(new Date().getMonth() + 1).padStart(2, '0');
-          r2Key = `normal-bills/${year}/${month}/${billRecord.id}.pdf`;
-
-          try {
-            await this.storageService.uploadBufferToR2({
-              buffer: pdfBuffer,
-              objectKey: r2Key,
-              contentType: 'application/pdf',
-            });
-            pdfStatus = 'uploaded';
-          } catch (uploadErr) {
-            console.error('[NORMAL BILL R2 UPLOAD] Upload failed:', uploadErr);
-            pdfStatus = 'failed';
-          }
-        }
-
-      } catch (pdfErr) {
-        console.error('[NORMAL BILL PDF GENERATION ERROR]', (pdfErr as Error).message);
-        pdfStatus = 'failed';
-      }
-
-      try {
-        await appPool.query(
-          'UPDATE normal_bills SET r2_object_key = $1, pdf_status = $2, updated_at = NOW() WHERE id = $3',
-          [r2Key, pdfStatus, billRecord.id]
-        );
-      } catch (statusUpdateErr) {
-        console.warn('[NORMAL BILL STATUS UPDATE NON-FATAL]', (statusUpdateErr as Error).message);
-      }
-
-      billRecord.r2_object_key = r2Key;
-      billRecord.pdf_status = pdfStatus;
-      billRecord.items = insertedItems;
-      return billRecord;
-    } catch (err) {
-      try {
-        await client.query('ROLLBACK');
-      } catch {
-        // Ignore rollback failure if already committed
-      }
-      throw err;
-    } finally {
-      client.release();
     }
-  }
 
-  /**
-   * Generates a preview PDF buffer for normal bills on-the-fly without database writes.
-   */
-  public async generateDraftPdf(input: CreateNormalBillInput): Promise<{ buffer: Buffer; filename: string }> {
-    let totalAmountDec = new Decimal(0);
+    // Check collision
+    const existsRes = await client.query('SELECT 1 FROM normal_bills WHERE bill_number = $1', [billNumber]);
+    if ((existsRes.rowCount ?? 0) > 0) {
+      throw new AppError(`Bill number "${billNumber}" already exists.`, 409, 'DUPLICATE_BILL_NUMBER');
+    }
+
+    // Auto-update customer address if linked customer lacks one
+    if (input.customerId && input.customerAddress?.trim()) {
+      await client.query(
+        `UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2 AND (address IS NULL OR address = '')`,
+        [input.customerAddress.trim(), input.customerId]
+      );
+    }
+
+    // 2. Calculate item amounts and subtotal value using Decimal.js with 2-decimal scale
+    let subtotalDec = new Decimal(0);
     const computedItems: Array<CreateNormalBillItemInput & { amount: string }> = [];
 
-    for (const item of input.items || []) {
-      const qtyDec = validateDecimalQuantityInput(item.quantity || 1, 'Quantity');
-      const rateDec = validateMoneyInput(item.rate || 0, 'Rate');
+    for (const item of input.items) {
+      const qtyDec = validateDecimalQuantityInput(item.quantity, `Item "${item.description}" quantity`);
+      const rateDec = validateMoneyInput(item.rate, `Item "${item.description}" rate`);
+
       const lineAmountDec = qtyDec.times(rateDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-      totalAmountDec = totalAmountDec.plus(lineAmountDec);
+      subtotalDec = subtotalDec.plus(lineAmountDec);
 
       computedItems.push({
         ...item,
@@ -509,6 +278,310 @@ export class NormalBillsService {
       });
     }
 
+    // 3. Discount calculations
+    const discountType = input.discountType || null;
+    let discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    let discountAmountDec = new Decimal(0);
+
+    if (discountType === 'percentage') {
+      if (discountValDec.isNegative() || discountValDec.greaterThan(100)) {
+        throw new AppError('Discount percentage must be between 0 and 100.', 400, 'INVALID_DISCOUNT');
+      }
+      discountAmountDec = subtotalDec.times(discountValDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    } else if (discountType === 'fixed') {
+      if (discountValDec.isNegative()) {
+        throw new AppError('Discount fixed amount cannot be negative.', 400, 'INVALID_DISCOUNT');
+      }
+      discountAmountDec = Decimal.min(discountValDec, subtotalDec);
+    } else if (input.discountAmount) {
+      discountAmountDec = validateMoneyInput(input.discountAmount, 'Discount amount');
+      discountAmountDec = Decimal.min(discountAmountDec, subtotalDec);
+    }
+
+    const totalAmountDec = subtotalDec.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const amountInWords = numberToIndianWords(totalAmountDec.toNumber());
+
+    // 4. Insert Normal Bill Header
+    const insertBillSql = `
+      INSERT INTO normal_bills (
+        bill_number,
+        bill_date,
+        state,
+        state_code,
+        transportation_mode,
+        vehicle_number,
+        date_of_supply,
+        place_of_supply,
+        customer_id,
+        customer_name,
+        customer_address,
+        customer_phone,
+        customer_state,
+        customer_state_code,
+        subtotal_amount,
+        discount_type,
+        discount_value,
+        discount_amount,
+        total_amount,
+        amount_in_words,
+        pdf_status,
+        notes
+      ) VALUES (
+        $1,
+        COALESCE($2::DATE, CURRENT_DATE),
+        COALESCE($3, 'Bihar'),
+        COALESCE($4, '10'),
+        $5,
+        $6,
+        $7::DATE,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12,
+        COALESCE($13, 'Bihar'),
+        COALESCE($14, '10'),
+        $15,
+        $16,
+        $17,
+        $18,
+        $19,
+        $20,
+        'pending',
+        $21
+      ) RETURNING
+        id,
+        bill_number,
+        TO_CHAR(bill_date, 'YYYY-MM-DD') AS bill_date,
+        state,
+        state_code,
+        transportation_mode,
+        vehicle_number,
+        TO_CHAR(date_of_supply, 'YYYY-MM-DD') AS date_of_supply,
+        place_of_supply,
+        customer_id,
+        customer_name,
+        customer_address,
+        customer_phone,
+        customer_state,
+        customer_state_code,
+        subtotal_amount,
+        discount_type,
+        discount_value,
+        discount_amount,
+        total_amount,
+        amount_in_words,
+        r2_object_key,
+        pdf_status,
+        notes,
+        created_at,
+        updated_at;
+    `;
+
+    const billRes = await client.query(insertBillSql, [
+      billNumber,
+      input.billDate || null,
+      input.state || 'Bihar',
+      input.stateCode || '10',
+      input.transportationMode || null,
+      input.vehicleNumber || null,
+      input.dateOfSupply || null,
+      input.placeOfSupply || null,
+      input.customerId || null,
+      input.customerName.trim(),
+      input.customerAddress || null,
+      input.customerPhone || null,
+      input.customerState || 'Bihar',
+      input.customerStateCode || '10',
+      subtotalDec.toFixed(2),
+      discountType,
+      discountValDec.toFixed(2),
+      discountAmountDec.toFixed(2),
+      totalAmountDec.toFixed(2),
+      amountInWords,
+      input.notes || null,
+    ]);
+
+    const billRecord: NormalBillRecord = billRes.rows[0];
+
+    // 5. Insert line items
+    const insertedItems: NormalBillItemRecord[] = [];
+    for (let i = 0; i < computedItems.length; i++) {
+      const item = computedItems[i];
+      const itemRes = await client.query(
+        `
+        INSERT INTO normal_bill_items (
+          bill_id,
+          product_id,
+          item_index,
+          description,
+          hsn_code,
+          quantity,
+          unit,
+          rate,
+          rate_unit,
+          amount
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING *;
+      `,
+        [
+          billRecord.id,
+          item.productId || null,
+          i + 1,
+          item.description.trim(),
+          item.hsnCode || null,
+          item.quantity,
+          item.unit || null,
+          item.rate,
+          item.rateUnit || null,
+          item.amount,
+        ]
+      );
+      insertedItems.push(itemRes.rows[0]);
+    }
+
+    billRecord.items = insertedItems;
+    return billRecord;
+  }
+
+  /**
+   * Creates a Normal Bill without GST calculations, manages transaction boundaries, and generates PDF.
+   */
+  public async createBill(input: CreateNormalBillInput): Promise<NormalBillRecord> {
+    const client = await appPool.connect();
+    let billRecord: NormalBillRecord;
+
+    try {
+      await client.query('BEGIN');
+      billRecord = await this.createBillInTransaction(client, input);
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Ignore rollback failure if already rolled back
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // 6. Generate Normal Bill PDF (No GST calculations) outside of database transaction
+    let pdfStatus: 'uploaded' | 'local_only' | 'failed' = 'local_only';
+    let r2Key: string | null = null;
+
+    try {
+      const pdfBuffer = await generateTaxInvoicePdf({
+        invoiceNumber: billRecord.bill_number,
+        invoiceDate: billRecord.bill_date,
+        state: billRecord.state,
+        stateCode: billRecord.state_code,
+        transportationMode: billRecord.transportation_mode,
+        vehicleNumber: billRecord.vehicle_number,
+        dateOfSupply: billRecord.date_of_supply,
+        placeOfSupply: billRecord.place_of_supply,
+        customer: {
+          name: billRecord.customer_name,
+          address: billRecord.customer_address,
+          phone: billRecord.customer_phone,
+          state: billRecord.customer_state,
+          stateCode: billRecord.customer_state_code,
+        },
+        items: (billRecord.items || []).map((item) => ({
+          name: item.description,
+          hsn: item.hsn_code,
+          quantity: item.quantity,
+          unit: item.unit,
+          rate: item.rate,
+          rateUnit: item.rate_unit,
+          amount: item.amount,
+        })),
+        totals: {
+          subtotal: billRecord.subtotal_amount || billRecord.total_amount,
+          discountType: billRecord.discount_type,
+          discountValue: billRecord.discount_value,
+          discountAmount: billRecord.discount_amount,
+          taxableAmount: billRecord.total_amount,
+          taxAmount: 0,
+          grandTotal: billRecord.total_amount,
+        },
+        amountInWords: billRecord.amount_in_words,
+        isNormalBill: true,
+        billTitle: 'NORMAL BILL',
+      });
+
+      // 7. Upload PDF to Cloudflare R2
+      if (this.storageService.isConfigured()) {
+        const year = new Date().getFullYear();
+        const month = String(new Date().getMonth() + 1).padStart(2, '0');
+        r2Key = `normal-bills/${year}/${month}/${billRecord.id}.pdf`;
+
+        try {
+          await this.storageService.uploadBufferToR2({
+            buffer: pdfBuffer,
+            objectKey: r2Key,
+            contentType: 'application/pdf',
+          });
+          pdfStatus = 'uploaded';
+        } catch (uploadErr) {
+          console.error('[NORMAL BILL R2 UPLOAD] Upload failed:', uploadErr);
+          pdfStatus = 'failed';
+        }
+      }
+    } catch (pdfErr) {
+      console.error('[NORMAL BILL PDF GENERATION] PDF generation failed:', pdfErr);
+      pdfStatus = 'failed';
+    }
+
+    // Update PDF status in DB
+    try {
+      await appPool.query(
+        `UPDATE normal_bills SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3`,
+        [pdfStatus, r2Key, billRecord.id]
+      );
+      billRecord.pdf_status = pdfStatus;
+      billRecord.r2_object_key = r2Key;
+    } catch (statusUpdateErr) {
+      console.warn('[NORMAL BILL STATUS UPDATE NON-FATAL]', (statusUpdateErr as Error).message);
+    }
+
+    return billRecord;
+  }
+
+  /**
+   * Generates a preview PDF buffer for normal bills on-the-fly without database writes.
+   */
+  public async generateDraftPdf(input: CreateNormalBillInput): Promise<{ buffer: Buffer; filename: string }> {
+    let subtotalDec = new Decimal(0);
+    const computedItems: Array<CreateNormalBillItemInput & { amount: string }> = [];
+
+    for (const item of input.items || []) {
+      const qtyDec = validateDecimalQuantityInput(item.quantity || 1, 'Quantity');
+      const rateDec = validateMoneyInput(item.rate || 0, 'Rate');
+      const lineAmountDec = qtyDec.times(rateDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      subtotalDec = subtotalDec.plus(lineAmountDec);
+
+      computedItems.push({
+        ...item,
+        quantity: qtyDec.toFixed(2),
+        rate: rateDec.toFixed(2),
+        amount: lineAmountDec.toFixed(2),
+      });
+    }
+
+    const discountType = input.discountType || null;
+    let discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    let discountAmountDec = new Decimal(0);
+
+    if (discountType === 'percentage') {
+      discountAmountDec = subtotalDec.times(discountValDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    } else if (discountType === 'fixed') {
+      discountAmountDec = Decimal.min(discountValDec, subtotalDec);
+    } else if (input.discountAmount) {
+      discountAmountDec = Decimal.min(new Decimal(input.discountAmount || 0), subtotalDec);
+    }
+
+    const totalAmountDec = subtotalDec.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     const billNumber = input.billNumber || 'Draft';
     const amountInWords = numberToIndianWords(totalAmountDec.toNumber());
 
@@ -538,6 +611,10 @@ export class NormalBillsService {
         amount: item.amount,
       })),
       totals: {
+        subtotal: subtotalDec.toFixed(2),
+        discountType,
+        discountValue: discountValDec.toFixed(2),
+        discountAmount: discountAmountDec.toFixed(2),
         taxableAmount: totalAmountDec.toFixed(2),
         taxAmount: 0,
         grandTotal: totalAmountDec.toFixed(2),
@@ -598,9 +675,9 @@ export class NormalBillsService {
       `SELECT COUNT(*)::INT AS total FROM normal_bills b WHERE ${whereClause}`,
       params
     );
-    const totalCount = Number(countRes.rows[0]?.total || 0);
+    const totalCount = countRes.rows[0]?.total || 0;
 
-    // 2. Data query with json_agg of line items snapshot
+    // 2. Data rows query
     const dataSql = `
       SELECT
         b.id,
@@ -618,6 +695,10 @@ export class NormalBillsService {
         b.customer_phone,
         b.customer_state,
         b.customer_state_code,
+        b.subtotal_amount,
+        b.discount_type,
+        b.discount_value,
+        b.discount_amount,
         b.total_amount,
         b.amount_in_words,
         b.r2_object_key,
@@ -680,6 +761,10 @@ export class NormalBillsService {
         b.customer_phone,
         b.customer_state,
         b.customer_state_code,
+        b.subtotal_amount,
+        b.discount_type,
+        b.discount_value,
+        b.discount_amount,
         b.total_amount,
         b.amount_in_words,
         b.r2_object_key,
@@ -755,6 +840,10 @@ export class NormalBillsService {
         amount: item.amount,
       })),
       totals: {
+        subtotal: bill.subtotal_amount || bill.total_amount,
+        discountType: bill.discount_type,
+        discountValue: bill.discount_value,
+        discountAmount: bill.discount_amount,
         taxableAmount: bill.total_amount,
         taxAmount: 0,
         grandTotal: bill.total_amount,

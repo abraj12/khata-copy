@@ -37,6 +37,8 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isTorchOn, setIsTorchOn] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
+  const [cameraRetryKey, setCameraRetryKey] = useState(0);
+  const isTorchOnRef = useRef(false);
   const [manualInput, setManualInput] = useState('');
   const [isLookingUp, setIsLookingUp] = useState(false);
 
@@ -56,7 +58,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   const lastScanTimeRef = useRef<number>(0);
   const isCooldownRef = useRef(false);
 
-  // Cleanup helper that halts all hardware camera streams safely
+  // Cleanup helper that halts all hardware camera streams safely with stable dependencies
   const stopCamera = useCallback(() => {
     try {
       if (controlsRef.current) {
@@ -64,7 +66,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
         controlsRef.current = null;
       }
       if (activeTrackRef.current) {
-        if (isTorchOn) {
+        if (isTorchOnRef.current) {
           try {
             (activeTrackRef.current as any).applyConstraints?.({ advanced: [{ torch: false }] });
           } catch {
@@ -82,10 +84,11 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     } catch (e) {
       console.warn('[BARCODE SCANNER] Cleanup warning:', e);
     }
+    isTorchOnRef.current = false;
     setIsTorchOn(false);
     setHasTorch(false);
     setCameraLoading(false);
-  }, [isTorchOn]);
+  }, []);
 
   const handleBarcodeIdentified = useCallback(
     async (rawCode: string) => {
@@ -234,7 +237,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       isSubscribed = false;
       stopCamera();
     };
-  }, [isOpen, activeTab, unknownBarcode, handleBarcodeIdentified, stopCamera]);
+  }, [isOpen, activeTab, unknownBarcode, handleBarcodeIdentified, stopCamera, cameraRetryKey]);
 
   // Handle torch toggle
   const toggleTorch = async () => {
@@ -244,6 +247,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       await (activeTrackRef.current as any).applyConstraints?.({
         advanced: [{ torch: nextState }],
       });
+      isTorchOnRef.current = nextState;
       setIsTorchOn(nextState);
     } catch (e) {
       console.warn('[BARCODE SCANNER] Torch toggle error:', e);
@@ -520,7 +524,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                       type="button"
                       onClick={() => {
                         setCameraError(null);
-                        setCameraLoading(true);
+                        setCameraRetryKey((k) => k + 1);
                       }}
                       className="px-3 py-1.5 rounded-lg bg-rose-500 text-white text-xs font-bold flex items-center gap-1.5"
                     >

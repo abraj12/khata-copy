@@ -68,6 +68,10 @@ const createGstInvoiceSchema = z.object({
     const n = Number(val);
     return Number.isFinite(n) && n >= 0 && n <= 100;
   }, 'GST rate must be between 0 and 100'),
+  subtotalAmount: z.union([z.number(), z.string()]).optional(),
+  discountType: z.enum(['percentage', 'fixed']).nullable().optional(),
+  discountValue: z.union([z.number(), z.string()]).optional(),
+  discountAmount: z.union([z.number(), z.string()]).optional(),
   items: z.array(gstInvoiceItemSchema).min(1, 'At least one item is required in the invoice').max(20, 'A single invoice can have at most 20 line items to ensure standard A4 print layout integrity'),
   notes: z.string().trim().max(1000).nullable().optional(),
 });

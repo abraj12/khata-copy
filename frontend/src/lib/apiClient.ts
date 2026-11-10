@@ -258,3 +258,73 @@ export async function apiClient<T = unknown>(
 
   return { data, status: response.status };
 }
+
+
+export async function apiClientBlob(
+  endpoint: string,
+  options: ApiClientOptions = {}
+): Promise<Blob> {
+  const url = `${API_BASE_URL}${endpoint}`;
+  const method = (options.method || 'GET').toUpperCase();
+
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string>),
+  };
+
+  if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    if (!inMemoryCsrfToken) {
+      await fetchCsrfToken();
+    }
+    if (inMemoryCsrfToken) {
+      headers['X-CSRF-Token'] = inMemoryCsrfToken;
+    }
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: options.signal || controller.signal,
+      credentials: 'include',
+      headers,
+    });
+
+    if (!response.ok) {
+      if (response.status === 403 && !options._isCsrfRetry) {
+        const refreshedToken = await fetchCsrfToken();
+        if (refreshedToken) {
+          return apiClientBlob(endpoint, {
+            ...options,
+            headers: {
+              ...headers,
+              'X-CSRF-Token': refreshedToken,
+            },
+            _isCsrfRetry: true,
+          });
+        }
+      }
+      let errMsg = 'Blob request failed with status ' + response.status;
+      try {
+        const text = await response.text();
+        const json = JSON.parse(text);
+        if (json.message) errMsg = json.message;
+      } catch {}
+      throw new ApiClientError(errMsg, {
+        status: response.status,
+        code: response.status === 403 ? 'FORBIDDEN' : 'BLOB_ERROR',
+      });
+    }
+
+    return await response.blob();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}

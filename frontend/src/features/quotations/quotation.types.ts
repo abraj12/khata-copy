@@ -113,6 +113,7 @@ export interface CreateQuotationPayload {
   gstRate?: number | string;
   termsAndConditions?: string | null;
   notes?: string | null;
+  initialStatus?: 'draft' | 'sent';
 }
 
 export interface QuotationSummaryCounts {

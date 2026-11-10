@@ -18,6 +18,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
   onConverted,
 }) => {
   const [billType, setBillType] = useState<'normal' | 'gst'>('normal');
+  const [gstRateOverride, setGstRateOverride] = useState<number>(18);
   const [force, setForce] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,13 +26,17 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
   if (!isOpen || !quotation) return null;
 
   const isAccepted = quotation.status === 'accepted';
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const isExpired = Boolean(quotation.valid_until && quotation.valid_until < todayStr);
+  const requiresForce = !isAccepted || isExpired;
 
   const handleConvert = async () => {
     setIsSubmitting(true);
     setError(null);
 
     try {
-      const result = await convertQuotationToBill(quotation.id, billType, force);
+      const appliedRate = (!quotation.gst_enabled && billType === 'gst') ? gstRateOverride : undefined;
+      const result = await convertQuotationToBill(quotation.id, billType, force, appliedRate);
       onConverted(result.billType, result.billId, result.billNumber);
       onClose();
     } catch (err: any) {
@@ -91,7 +96,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
             <span className="font-bold text-[var(--khata-accent)]">₹{formatCurrency(quotation.grand_total)}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-[var(--khata-text-muted)]">Current Status:</span>
+            <span className="text-[var(--khata-text-muted)]">Status:</span>
             <span
               className={`font-bold capitalize px-2 py-0.5 rounded text-[10px] ${
                 isAccepted
@@ -102,16 +107,33 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
               {quotation.status}
             </span>
           </div>
+          {quotation.valid_until && (
+            <div className="flex justify-between">
+              <span className="text-[var(--khata-text-muted)]">Valid Until:</span>
+              <span className={`font-medium ${isExpired ? 'text-rose-500 font-bold' : ''}`}>
+                {quotation.valid_until} {isExpired ? '(Expired)' : ''}
+              </span>
+            </div>
+          )}
         </div>
 
-        {/* Warning if not in 'accepted' status */}
-        {!isAccepted && (
+        {/* Warning if expired or not accepted */}
+        {requiresForce && (
           <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-500 text-xs space-y-2">
             <div className="flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              <span>
-                Standard workflow requires quotations to be <strong>Accepted</strong> before conversion.
-              </span>
+              <div>
+                {!isAccepted && (
+                  <p>
+                    Standard workflow requires quotations to be <strong>Accepted</strong> before conversion.
+                  </p>
+                )}
+                {isExpired && (
+                  <p>
+                    This quotation has <strong>expired</strong> on {quotation.valid_until}.
+                  </p>
+                )}
+              </div>
             </div>
             <label className="flex items-center gap-2 cursor-pointer font-bold pt-1">
               <input
@@ -120,7 +142,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
                 onChange={(e) => setForce(e.target.checked)}
                 className="rounded accent-[var(--khata-accent)]"
               />
-              <span>I confirm and wish to convert anyway</span>
+              <span>I confirm and authorize conversion with force=true</span>
             </label>
           </div>
         )}
@@ -145,7 +167,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
                 {billType === 'normal' && <CheckCircle className="w-3.5 h-3.5 text-[var(--khata-accent)]" />}
               </div>
               <span className="text-[10px] text-[var(--khata-text-muted)]">
-                Standard non-GST retail commercial bill
+                Standard non-GST commercial retail bill
               </span>
             </button>
 
@@ -169,6 +191,34 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
           </div>
         </div>
 
+        {/* Explicit GST Rate selector when converting GST-disabled quotation to GST Tax Invoice */}
+        {billType === 'gst' && !quotation.gst_enabled && (
+          <div className="p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-2">
+            <label className="block text-xs font-bold text-[var(--khata-text)]">
+              Specify Applicable GST Rate:
+            </label>
+            <p className="text-[11px] text-[var(--khata-text-muted)]">
+              This quotation was created without GST. Select the tax rate to apply for the tax invoice:
+            </p>
+            <div className="grid grid-cols-4 gap-2 pt-1">
+              {[0, 5, 12, 18, 28].map((rate) => (
+                <button
+                  key={rate}
+                  type="button"
+                  onClick={() => setGstRateOverride(rate)}
+                  className={`py-1.5 rounded-lg border text-xs font-bold transition ${
+                    gstRateOverride === rate
+                      ? 'border-[var(--khata-accent)] bg-[var(--khata-accent)] text-white'
+                      : 'border-[var(--khata-border)] bg-[var(--khata-surface)] text-[var(--khata-text)]'
+                  }`}
+                >
+                  {rate}%
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {error && (
           <div className="p-3 bg-red-500/10 border border-red-500/30 text-rose-500 text-xs rounded-xl font-medium">
             {error}
@@ -186,7 +236,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
           </button>
           <button
             type="button"
-            disabled={isSubmitting || (!isAccepted && !force)}
+            disabled={isSubmitting || (requiresForce && !force)}
             onClick={handleConvert}
             className="neu-btn-primary text-xs px-5 py-2 font-bold inline-flex items-center justify-center gap-2 disabled:opacity-50 flex-1 sm:flex-initial"
           >

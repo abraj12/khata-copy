@@ -124,7 +124,7 @@ router.get('/barcode/:barcode', async (req: Request, res: Response, next: NextFu
 });
 
 const patchBarcodeSchema = z.object({
-  barcode: z.string().trim().max(64, 'Barcode cannot exceed 64 characters').nullable().optional(),
+  barcode: z.string().trim().max(64, 'Barcode cannot exceed 64 characters').nullable(),
 });
 
 /**

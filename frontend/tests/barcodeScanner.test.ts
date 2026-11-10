@@ -1,105 +1,164 @@
-import { describe, it, expect, vi } from 'vitest';
+// @vitest-environment happy-dom
+(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { useHardwareBarcodeScanner } from '../src/features/barcode/useHardwareBarcodeScanner.js';
 
-describe('Barcode Scanner Frontend Module Test Suite', () => {
-  it('1. Detects rapid HID scanner keystrokes ending in Enter', () => {
-    let capturedBarcode: string | null = null;
-    let buffer = '';
-    let lastKeyTime = 0;
-    const maxKeystrokeIntervalMs = 60;
-    const minBarcodeLength = 3;
+describe('useHardwareBarcodeScanner Hook & Integration Test Suite', () => {
+  let container: HTMLDivElement | null = null;
+  let root: any = null;
 
-    const simulateKeyDown = (key: string, timestamp: number, targetTagName: string = 'DIV') => {
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(targetTagName)) {
-        return;
-      }
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
 
-      const timeSinceLastKey = timestamp - lastKeyTime;
-      lastKeyTime = timestamp;
-
-      if (key === 'Enter') {
-        const candidate = buffer.trim();
-        buffer = '';
-        if (candidate.length >= minBarcodeLength) {
-          capturedBarcode = candidate;
-        }
-        return;
-      }
-
-      if (key.length === 1) {
-        if (timeSinceLastKey > maxKeystrokeIntervalMs && buffer.length > 0) {
-          buffer = '';
-        }
-        buffer += key;
-      }
-    };
-
-    // Simulate fast scanner barcode "8901234567890" arriving with 15ms interval
-    const barcodeStr = '8901234567890';
-    let t = 1000;
-    for (const char of barcodeStr) {
-      simulateKeyDown(char, t);
-      t += 15;
+  afterEach(() => {
+    if (root) {
+      act(() => {
+        root.unmount();
+      });
     }
-    // Enter key
-    simulateKeyDown('Enter', t);
-
-    expect(capturedBarcode).toBe('8901234567890');
+    if (container && container.parentNode) {
+      container.parentNode.removeChild(container);
+    }
+    container = null;
+    root = null;
   });
 
-  it('2. Bypasses normal keyboard input while typing inside INPUT or TEXTAREA elements', () => {
-    let capturedBarcode: string | null = null;
-    let buffer = '';
-
-    const simulateKeyDown = (key: string, targetTagName: string) => {
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(targetTagName)) {
-        return; // Ignored to avoid interfering with ordinary form fields
-      }
-      if (key === 'Enter') {
-        capturedBarcode = buffer;
-      } else {
-        buffer += key;
-      }
+  const mountScanner = (props: {
+    onScan: (barcode: string) => void;
+    enabled?: boolean;
+    maxKeystrokeIntervalMs?: number;
+    minBarcodeLength?: number;
+  }) => {
+    const Component = () => {
+      useHardwareBarcodeScanner(props);
+      return React.createElement('div', { 'data-testid': 'scanner-host' }, 'Scanner Active');
     };
+    act(() => {
+      root.render(React.createElement(Component));
+    });
+  };
 
-    // Keystrokes inside a form input field
-    simulateKeyDown('a', 'INPUT');
-    simulateKeyDown('b', 'INPUT');
-    simulateKeyDown('c', 'INPUT');
-    simulateKeyDown('Enter', 'INPUT');
+  it('1. Detects rapid HID scanner keystrokes ending in Enter and triggers onScan', () => {
+    const onScan = vi.fn();
+    mountScanner({ onScan });
 
-    expect(capturedBarcode).toBeNull();
-    expect(buffer).toBe('');
+    const barcode = '8901234567890';
+    let baseTime = 1000000;
+    vi.spyOn(Date, 'now').mockImplementation(() => baseTime);
+
+    for (const char of barcode) {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: char,
+          bubbles: true,
+        })
+      );
+      baseTime += 15; // 15ms intervals (< 60ms)
+    }
+
+    // Terminate with Enter key
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+      })
+    );
+
+    expect(onScan).toHaveBeenCalledWith('8901234567890');
+    vi.restoreAllMocks();
   });
 
-  it('3. Clears buffer when slow typing occurs (interval > maxKeystrokeIntervalMs)', () => {
-    let capturedBarcode: string | null = null;
-    let buffer = '';
-    let lastKeyTime = 0;
-    const maxKeystrokeIntervalMs = 60;
+  it('2. Bypasses keystrokes when typing inside INPUT or TEXTAREA elements', () => {
+    const onScan = vi.fn();
+    mountScanner({ onScan });
 
-    const simulateKeyDown = (key: string, timestamp: number) => {
-      const timeSinceLastKey = timestamp - lastKeyTime;
-      lastKeyTime = timestamp;
+    const input = document.createElement('input');
+    document.body.appendChild(input);
 
-      if (key === 'Enter') {
-        capturedBarcode = buffer;
-        buffer = '';
-        return;
-      }
+    const barcode = '8901234567890';
+    let baseTime = 1000000;
+    vi.spyOn(Date, 'now').mockImplementation(() => baseTime);
 
-      if (key.length === 1) {
-        if (timeSinceLastKey > maxKeystrokeIntervalMs && buffer.length > 0) {
-          buffer = ''; // Reset because user typed slowly manually
-        }
-        buffer += key;
-      }
-    };
+    for (const char of barcode) {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: char,
+          bubbles: true,
+        })
+      );
+      baseTime += 15;
+    }
 
-    // User types "1", waits 500ms, then types "2", then "Enter"
-    simulateKeyDown('1', 1000);
-    simulateKeyDown('2', 1500); // 500ms gap resets buffer so "1" is dropped
-    simulateKeyDown('Enter', 1510);
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+      })
+    );
 
-    expect(capturedBarcode).toBe('2');
+    expect(onScan).not.toHaveBeenCalled();
+    input.remove();
+    vi.restoreAllMocks();
+  });
+
+  it('3. Clears buffer when keystroke interval exceeds maxKeystrokeIntervalMs', () => {
+    const onScan = vi.fn();
+    mountScanner({ onScan, maxKeystrokeIntervalMs: 60 });
+
+    let baseTime = 1000000;
+    vi.spyOn(Date, 'now').mockImplementation(() => baseTime);
+
+    // Type '1'
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true }));
+
+    // User pauses for 300ms (> 60ms)
+    baseTime += 300;
+
+    // Type '2', '3'
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true }));
+    baseTime += 10;
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '3', bubbles: true }));
+    baseTime += 10;
+
+    // Press Enter -> candidate buffer has only '23' which is < 3 characters (minBarcodeLength)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    expect(onScan).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it('4. Ignores keystrokes when enabled=false', () => {
+    const onScan = vi.fn();
+    mountScanner({ onScan, enabled: false });
+
+    for (const char of '12345') {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+    }
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    expect(onScan).not.toHaveBeenCalled();
+  });
+
+  it('5. Ignores short barcodes under minBarcodeLength', () => {
+    const onScan = vi.fn();
+    mountScanner({ onScan, minBarcodeLength: 5 });
+
+    let baseTime = 1000000;
+    vi.spyOn(Date, 'now').mockImplementation(() => baseTime);
+
+    // Type 4 characters (< 5)
+    for (const char of '1234') {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+      baseTime += 10;
+    }
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    expect(onScan).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
   });
 });
