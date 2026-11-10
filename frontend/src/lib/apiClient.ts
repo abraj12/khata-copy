@@ -9,7 +9,7 @@
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
   import.meta.env.VITE_API_URL ||
-  (import.meta.env.DEV ? '' : 'https://api-erp.algions.in');
+  (import.meta.env.DEV ? '' : 'https://erp-api.algions.in');
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 export const AUTH_CHECK_TIMEOUT_MS = 75_000;

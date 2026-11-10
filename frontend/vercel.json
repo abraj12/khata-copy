@@ -32,7 +32,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; connect-src 'self' https://api-erp.algions.in https://erp.algions.in https://khata-api-wkn9.onrender.com https://3088e12e1c6d61c9875c479ea549ff7b.r2.cloudflarestorage.com https://*.r2.cloudflarestorage.com; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://api-erp.algions.in https://erp.algions.in https://3088e12e1c6d61c9875c479ea549ff7b.r2.cloudflarestorage.com https://*.r2.cloudflarestorage.com; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+          "value": "default-src 'self'; connect-src 'self' https://erp-api.algions.in https://api-erp.algions.in https://erp.algions.in https://khata-api-m17b.onrender.com https://khata-api-wkn9.onrender.com https://3088e12e1c6d61c9875c479ea549ff7b.r2.cloudflarestorage.com https://*.r2.cloudflarestorage.com; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://erp-api.algions.in https://api-erp.algions.in https://erp.algions.in https://3088e12e1c6d61c9875c479ea549ff7b.r2.cloudflarestorage.com https://*.r2.cloudflarestorage.com; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
         }
       ]
     }

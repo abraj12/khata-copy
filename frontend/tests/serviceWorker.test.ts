@@ -72,7 +72,7 @@ describe('Service Worker Vite Asset Matching & Security Exclusions (Phase 9)', (
     const externalR2Urls = [
       'https://3088e12e1c6d61c9875c479ea549ff7b.r2.cloudflarestorage.com/khata/offline-bills/1/abc.jpg',
       'https://khata.3088e12e1c6d61c9875c479ea549ff7b.r2.cloudflarestorage.com/offline-bills/1/bill.png',
-      'https://api-erp.algions.in/api/v1/products/10/image',
+      'https://erp-api.algions.in/api/v1/products/10/image',
     ];
 
     for (const urlStr of externalR2Urls) {
