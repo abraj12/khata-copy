@@ -3,7 +3,7 @@ import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { env } from '../src/config/env.js';
 import { appPool } from '../src/config/database.js';
-import { generateMannatInvoicePdf } from '../src/modules/gstInvoices/gstInvoices.pdf.js';
+import { generateTaxInvoicePdf } from '../src/modules/gstInvoices/gstInvoices.pdf.js';
 
 const TEST_PHONE = '9876543210';
 const TEST_PASSWORD = 'KhataOwner@2026!';
@@ -188,7 +188,7 @@ describe('Normal Billing Module (Non-GST Standard Bills) Test Suite', () => {
   });
 
   it('3. Generates a valid Normal Bill PDF buffer with "NORMAL BILL" title and without GST breakdown', async () => {
-    const pdfBuffer = await generateMannatInvoicePdf({
+    const pdfBuffer = await generateTaxInvoicePdf({
       invoiceNumber: '001',
       invoiceDate: '2026-11-02',
       customer: {

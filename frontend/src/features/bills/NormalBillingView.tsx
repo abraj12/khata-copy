@@ -638,7 +638,7 @@ export const NormalBillingView: React.FC = () => {
             </span>
           </div>
           <p className="text-xs sm:text-sm text-[var(--khata-text-muted)] font-medium mt-0.5">
-            M/s Mannat Hardware Store — Standard Retail Bill &amp; Estimate Pad
+            Algions AI Labs Private Limited — Standard Bill &amp; Estimate Pad
           </p>
         </div>
 
@@ -703,7 +703,7 @@ export const NormalBillingView: React.FC = () => {
                 <span>Section A: Bill Information</span>
               </div>
               <span className="text-[11px] font-semibold text-[var(--khata-text-muted)]">
-                Shop: M/s Mannat Hardware Store
+                Company: Algions AI Labs Private Limited
               </span>
             </div>
 

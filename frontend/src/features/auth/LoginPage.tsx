@@ -105,7 +105,7 @@ export const LoginPage: React.FC = () => {
           </div>
           <h1 className="text-2xl font-black tracking-tight text-[var(--khata-text)]">Khata</h1>
           <p className="text-xs text-[var(--khata-text-muted)] mt-1 font-medium">
-            Single-Shopkeeper Digital Ledger
+            Algions AI Labs Private Limited
           </p>
           <div className="mt-2.5 inline-block text-[11px] font-semibold px-3 py-0.5 rounded-full bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] text-[var(--khata-text)]">
             Owner Authentication

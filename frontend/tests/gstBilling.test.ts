@@ -4,7 +4,7 @@ import { numberWords } from '../src/components/MannatTaxInvoice/MannatTaxInvoice
 import { mapRecordToInvoiceProps, GstInvoiceRecord } from '../src/features/bills/gstInvoicesApi.js';
 import { getTodayLocalDate } from '../src/features/bills/GstBillingView.js';
 
-describe('GST Billing Module (Frontend Calculation & Mannat Invoice Mapping)', () => {
+describe('GST Billing Module (Frontend Calculation & Invoice Mapping)', () => {
   it('1. Accurately converts currency to Indian words', () => {
     expect(numberWords(9581.60)).toBe('Rupees Nine Thousand Five Hundred Eighty One and Sixty Paise Only');
     expect(numberWords(8120)).toBe('Rupees Eight Thousand One Hundred Twenty Only');

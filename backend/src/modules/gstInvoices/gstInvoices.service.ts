@@ -4,7 +4,8 @@ import { StorageService } from '../../services/storage.service.js';
 import { AppError } from '../../utils/errors.js';
 import { validateMoneyInput, validateDecimalQuantityInput } from '../../utils/validation.js';
 import {
-  generateMannatInvoicePdf,
+  generateTaxInvoicePdf,
+
   numberToIndianWords,
   GstInvoicePdfData,
 } from './gstInvoices.pdf.js';
@@ -437,7 +438,7 @@ export class GstInvoicesService {
           amountInWords: createdInvoice.amount_in_words,
         };
 
-        const pdfBuffer = await generateMannatInvoicePdf(pdfData);
+        const pdfBuffer = await generateTaxInvoicePdf(pdfData);
 
         if (this.storageService.isConfigured()) {
           const year = new Date().getFullYear();
@@ -668,7 +669,7 @@ export class GstInvoicesService {
       amountInWords: invoice.amount_in_words,
     };
 
-    const buffer = await generateMannatInvoicePdf(pdfData);
+    const buffer = await generateTaxInvoicePdf(pdfData);
     return { buffer, filename };
   }
 
@@ -763,7 +764,7 @@ export class GstInvoicesService {
       amountInWords,
     };
 
-    const buffer = await generateMannatInvoicePdf(pdfData);
+    const buffer = await generateTaxInvoicePdf(pdfData);
     return {
       buffer,
       filename: `Invoice_${invoiceNumber}.pdf`,

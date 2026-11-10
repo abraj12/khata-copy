@@ -1,6 +1,6 @@
 -- ==============================================================================
 -- Khata Application Migration (011):
--- GST Billing Module (Mannat Hardware Store Tax Invoices & Line Items)
+-- GST Billing Module (Algions AI Labs Private Limited Tax Invoices & Line Items)
 -- ==============================================================================
 
 -- 1. Sequence for collision-free sequential invoice numbers

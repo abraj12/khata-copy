@@ -4,7 +4,8 @@ import { StorageService } from '../../services/storage.service.js';
 import { AppError } from '../../utils/errors.js';
 import { validateMoneyInput, validateDecimalQuantityInput } from '../../utils/validation.js';
 import {
-  generateMannatInvoicePdf,
+  generateTaxInvoicePdf,
+
   numberToIndianWords,
 } from '../gstInvoices/gstInvoices.pdf.js';
 
@@ -403,7 +404,7 @@ export class NormalBillsService {
       let r2Key: string | null = null;
 
       try {
-        const pdfBuffer = await generateMannatInvoicePdf({
+        const pdfBuffer = await generateTaxInvoicePdf({
           invoiceNumber: billRecord.bill_number,
           invoiceDate: billRecord.bill_date,
           state: billRecord.state,
@@ -511,7 +512,7 @@ export class NormalBillsService {
     const billNumber = input.billNumber || 'Draft';
     const amountInWords = numberToIndianWords(totalAmountDec.toNumber());
 
-    const buffer = await generateMannatInvoicePdf({
+    const buffer = await generateTaxInvoicePdf({
       invoiceNumber: billNumber,
       invoiceDate: input.billDate || new Date().toISOString().slice(0, 10),
       state: input.state || 'Uttar Pradesh',
@@ -728,7 +729,7 @@ export class NormalBillsService {
     }
 
     // Regenerate on demand
-    const buffer = await generateMannatInvoicePdf({
+    const buffer = await generateTaxInvoicePdf({
       invoiceNumber: bill.bill_number,
       invoiceDate: bill.bill_date,
       state: bill.state,

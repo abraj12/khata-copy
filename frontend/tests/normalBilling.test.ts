@@ -3,7 +3,7 @@ import Decimal from 'decimal.js';
 import { numberWords } from '../src/components/MannatTaxInvoice/MannatTaxInvoice.js';
 import { mapNormalBillToInvoiceProps, NormalBillRecord } from '../src/features/bills/normalBillsApi.js';
 
-describe('Normal Billing Module (Frontend Calculation & Mannat Bill Mapping)', () => {
+describe('Normal Billing Module (Frontend Calculation & Bill Mapping)', () => {
   it('1. Calculates line items and grand total without any GST using Decimal.js', () => {
     const items = [
       { quantity: '2', rate: '1750' }, // 3500

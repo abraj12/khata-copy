@@ -1,6 +1,6 @@
 -- ==============================================================================
 -- Khata Application Migration (012):
--- Normal Billing Module (Mannat Hardware Store Standard / Non-GST Bills)
+-- Normal Billing Module (Algions AI Labs Private Limited Standard / Non-GST Bills)
 -- ==============================================================================
 
 -- 1. Sequence for collision-free sequential normal bill numbers

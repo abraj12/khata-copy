@@ -1,7 +1,7 @@
 {
-  "name": "Khata",
+  "name": "Khata — Algions AI Labs",
   "short_name": "Khata",
-  "description": "Single-Shopkeeper Digital Ledger & Credit Management Application",
+  "description": "Algions AI Labs Private Limited Digital Ledger & Invoicing Application",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

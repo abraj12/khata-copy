@@ -1,7 +1,7 @@
 import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import path from 'path';
-import { NASREEN_SIGNATURE_BASE64 } from './gstInvoices.signature.js';
+
 
 export interface GstInvoicePdfItem {
   name: string;
@@ -111,7 +111,7 @@ export function formatDateToIndian(val: string | Date | null | undefined): strin
   return str.slice(0, 10);
 }
 
-export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> {
+export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     try {
       const isNormalBill = Boolean(data.isNormalBill);
@@ -121,8 +121,8 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
         size: 'A4',
         margin: 18,
         info: {
-          Title: `${invoiceTitle} ${data.invoiceNumber} - M/s Mannat Hardware Store`,
-          Author: 'M/s Mannat Hardware Store',
+          Title: `${invoiceTitle} ${data.invoiceNumber} - Algions AI Labs Private Limited`,
+          Author: 'Algions AI Labs Private Limited',
         },
       });
 
@@ -146,9 +146,9 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       doc.fontSize(14).text(invoiceTitle, left, top + 5, { align: 'center', underline: true });
       doc.fontSize(9).text('Mob.: 94938 40000', left, top + 6, { align: 'right', width: width - 6 });
 
-      // Shop Name & Address
-      doc.fontSize(22).font('Helvetica-Bold').text('M/s Mannat Hardware Store', left, top + 26, { align: 'center' });
-      doc.fontSize(10).font('Helvetica-Bold').text('Shaniwar Bazar Ki Pulia, Near Shama Marriage Hall, Bilaspur (Rampur) U. P.', left, top + 52, { align: 'center' });
+      // Company Name & Address
+      doc.fontSize(20).font('Helvetica-Bold').text('Algions AI Labs Private Limited', left, top + 26, { align: 'center' });
+      doc.fontSize(9.5).font('Helvetica-Bold').text('Bilaspur (Rampur) U. P.', left, top + 52, { align: 'center' });
 
       // Horizontal line below header
       let y = top + 70;
@@ -376,16 +376,18 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
       // Footer Right
       const rightW = width - (footerMidX - left);
       doc.font('Helvetica-Oblique').fontSize(8).text('Certified that the particulars given above are true and correct.', footerMidX, footerY + 6, { align: 'right', width: rightW - 8 });
-      doc.font('Helvetica-Bold').fontSize(10).text('For M/s Mannat Hardware Store', footerMidX, footerY + 18, { align: 'right', width: rightW - 8 });
+      doc.font('Helvetica-Bold').fontSize(10).text('For Algions AI Labs Private Limited', footerMidX, footerY + 18, { align: 'right', width: rightW - 8 });
 
-      // Embed signature
+      // Embed signature if configured
       try {
         let sigBuffer: Buffer | null = null;
         const candidatePaths = [
-          path.resolve('backend/assets/nasreen-signature.png'),
-          path.resolve('assets/nasreen-signature.png'),
-          path.resolve(process.cwd(), 'backend/assets/nasreen-signature.png'),
-          path.resolve(process.cwd(), 'assets/nasreen-signature.png'),
+          path.resolve('backend/assets/company-signature.png'),
+          path.resolve('assets/company-signature.png'),
+          path.resolve(process.cwd(), 'backend/assets/company-signature.png'),
+          path.resolve(process.cwd(), 'assets/company-signature.png'),
+          path.resolve('backend/assets/signature.png'),
+          path.resolve('assets/signature.png'),
         ];
         for (const p of candidatePaths) {
           if (fs.existsSync(p)) {
@@ -393,14 +395,11 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
             break;
           }
         }
-        if (!sigBuffer && NASREEN_SIGNATURE_BASE64) {
-          sigBuffer = Buffer.from(NASREEN_SIGNATURE_BASE64, 'base64');
-        }
         if (sigBuffer) {
           doc.image(sigBuffer, left + width - 110, footerY + 28, { width: 90, height: 26 });
         }
       } catch (sigErr) {
-        console.warn('[PDF] Nasreen signature image failed to load:', (sigErr as Error).message);
+        console.warn('[PDF] Signature image failed to load:', (sigErr as Error).message);
       }
 
       doc.font('Helvetica-Bold').fontSize(8.5).text('Authorised Signatory', footerMidX, footerY + 58, { align: 'right', width: rightW - 8 });
@@ -411,3 +410,8 @@ export function generateMannatInvoicePdf(data: GstInvoicePdfData): Promise<Buffe
     }
   });
 }
+
+/**
+ * Backward-compatible alias for existing callers.
+ */
+export const generateMannatInvoicePdf = generateTaxInvoicePdf;

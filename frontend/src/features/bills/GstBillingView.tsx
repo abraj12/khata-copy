@@ -607,7 +607,7 @@ export const GstBillingView: React.FC = () => {
                 className="text-xs px-2.5 py-0.5 rounded-md font-mono font-bold border border-[var(--khata-border)]"
                 style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-accent)' }}
               >
-                M/s Mannat Hardware Store
+                Algions AI Labs Private Limited
               </span>
             </h2>
             <p className="text-xs text-[var(--khata-text-muted)] mt-0.5">

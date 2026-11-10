@@ -91,7 +91,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                 Khata
               </h1>
               <p className="text-[10px] sm:text-[11px] text-[var(--khata-text-muted)] font-medium mt-0.5">
-                Single-Shopkeeper Ledger
+                Algions AI Labs Private Limited
               </p>
             </div>
           </div>
@@ -178,7 +178,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                     <FileText className="w-4 h-4" />
                     <div>
                       <div>GST Bill</div>
-                      <div className="text-[10px] opacity-75 font-normal">Mannat Tax Invoice</div>
+                      <div className="text-[10px] opacity-75 font-normal">Official Tax Invoice</div>
                     </div>
                   </button>
 

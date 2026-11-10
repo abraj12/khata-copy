@@ -3,7 +3,7 @@ import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { env } from '../src/config/env.js';
 import { appPool } from '../src/config/database.js';
-import { numberToIndianWords, formatDateToIndian, generateMannatInvoicePdf } from '../src/modules/gstInvoices/gstInvoices.pdf.js';
+import { numberToIndianWords, formatDateToIndian, generateTaxInvoicePdf } from '../src/modules/gstInvoices/gstInvoices.pdf.js';
 
 const TEST_PHONE = '9876543210';
 const TEST_PASSWORD = 'KhataOwner@2026!';
@@ -15,7 +15,7 @@ env.SESSION_COOKIE_SECURE = false;
 
 const app = createApp({ useMemoryStoreInTest: true });
 
-describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
+describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () => {
   let authCookie: string;
   let csrfToken: string;
 
@@ -391,7 +391,7 @@ describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
     expect(res.body.code).toBe('DUPLICATE_INVOICE_NUMBER');
   });
 
-  it('8. Generates valid PDF buffer matching the Mannat invoice layout', async () => {
+  it('8. Generates valid PDF buffer matching the invoice layout', async () => {
     const sample = {
       invoiceNumber: '004',
       invoiceDate: '2026-11-02',
@@ -422,7 +422,7 @@ describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
       },
     };
 
-    const pdfBuffer = await generateMannatInvoicePdf(sample);
+    const pdfBuffer = await generateTaxInvoicePdf(sample);
     expect(pdfBuffer).toBeInstanceOf(Buffer);
     expect(pdfBuffer.length).toBeGreaterThan(1000);
     // Standard PDF header signature
@@ -570,11 +570,11 @@ describe('GST Billing Module (Mannat Hardware Store) Test Suite', () => {
       amount: 150,
     }));
 
-    const pdfBuffer = await generateMannatInvoicePdf({
+    const pdfBuffer = await generateTaxInvoicePdf({
       invoiceNumber: '020',
       invoiceDate: '2026-11-02',
       customer: {
-        name: 'Mannat Customer With Long Multi-line Address',
+        name: 'Corporate Customer With Long Multi-line Address',
         address: 'Plot No. 45, Industrial Area Phase II, Near Subhash Chowk, Bilaspur, Rampur, UP',
         gstin: '09ABCDE1234F1Z5',
         state: 'Uttar Pradesh',

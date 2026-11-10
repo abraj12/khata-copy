@@ -1,15 +1,14 @@
 import { useState, useEffect } from 'react';
 import './MannatTaxInvoice.css';
-import nasreenSignature from './assets/nasreen-signature.png';
 
 const SHOP = Object.freeze({
   gstin: '09DFEPN5357D1ZB',
   mobile: '94938 40000',
-  name: 'M/s Mannat Hardware Store',
-  address: 'Shaniwar Bazar Ki Pulia, Near Shama Marriage Hall, Bilaspur (Rampur) U. P.',
+  name: 'Algions AI Labs Private Limited',
+  address: 'Bilaspur (Rampur) U. P.',
   state: 'Uttar Pradesh',
   stateCode: '09',
-  jurisdiction: 'Rampur Jurisdiction only.',
+  jurisdiction: 'Jurisdiction only.',
 });
 
 export const numberWords = (value: number | string): string => {
@@ -138,7 +137,7 @@ export interface MannatTaxInvoiceComponentProps {
 }
 
 /**
- * Print-ready Mannat Hardware Store invoice & bill component.
+ * Print-ready Algions AI Labs Private Limited invoice & bill component.
  * Reproduces the exact A4 portrait black-and-white physical invoice.
  * Supports both GST Tax Invoices and Non-GST Normal Bills.
  */
@@ -271,7 +270,7 @@ export default function MannatTaxInvoice({
               : undefined
           }
         >
-          <article className="mhi-invoice" aria-label={`Mannat Hardware Store ${displayTitle}`}>
+          <article className="mhi-invoice" aria-label={`Algions AI Labs Private Limited ${displayTitle}`}>
           <header className="mhi-shop-header">
             <div className="mhi-topline">
               <strong>GSTIN : {SHOP.gstin}</strong>
@@ -379,9 +378,8 @@ export default function MannatTaxInvoice({
             </div>
             <div className="mhi-footer-right">
               <em>Certified that the particulars given above are true and correct.</em>
-              <strong className="mhi-for-shop">For M/s Mannat Hardware Store</strong>
+              <strong className="mhi-for-shop">For Algions AI Labs Private Limited</strong>
               <div className="mhi-signature-wrap">
-                <img src={nasreenSignature} alt="Nasreen signature" />
                 <div className="mhi-signature-rule" />
                 <strong>Authorised Signatory</strong>
               </div>
