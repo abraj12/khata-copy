@@ -68,13 +68,13 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm overflow-y-auto animate-in fade-in duration-200"
       role="dialog"
       aria-modal="true"
       aria-labelledby="convert-modal-title"
     >
       <div
-        className="w-full max-w-md rounded-2xl border border-[var(--khata-border)] shadow-2xl overflow-hidden p-6 space-y-5"
+        className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-[var(--khata-border)] shadow-2xl p-5 sm:p-6 space-y-5"
         style={{ background: 'var(--khata-surface)', color: 'var(--khata-text)' }}
       >
         {/* Header */}
@@ -172,7 +172,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
           <label className="block text-xs font-bold uppercase text-[var(--khata-text-muted)]">
             Select Bill Type to Generate:
           </label>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
               type="button"
               onClick={() => setBillType('normal')}
@@ -245,13 +245,13 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
             <p className="text-[11px] text-[var(--khata-text-muted)]">
               This quotation was created without GST. Select the tax rate to apply for the tax invoice:
             </p>
-            <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 pt-1">
+            <div className="flex flex-wrap gap-2 pt-1">
               {[0, 5, 12, 18, 28].map((rate) => (
                 <button
                   key={rate}
                   type="button"
                   onClick={() => setGstRateOverride(rate)}
-                  className={`py-1.5 rounded-lg border text-xs font-bold transition ${
+                  className={`flex-1 min-w-[54px] py-1.5 px-2 rounded-lg border text-xs font-bold transition ${
                     gstRateOverride === rate
                       ? 'border-[var(--khata-accent)] bg-[var(--khata-accent)] text-white'
                       : 'border-[var(--khata-border)] bg-[var(--khata-surface)] text-[var(--khata-text)]'

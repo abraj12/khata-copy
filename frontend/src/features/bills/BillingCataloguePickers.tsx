@@ -30,7 +30,7 @@ export const CustomerPickerDropdown: React.FC<CustomerPickerDropdownProps> = ({
 }) => {
   return (
     <div
-      className="absolute right-0 top-full mt-2 w-72 max-w-[85vw] p-2 rounded-xl border border-[var(--khata-border)] shadow-xl z-30 space-y-2 animate-in fade-in"
+      className="absolute left-0 right-0 sm:left-auto sm:right-0 top-full mt-2 w-full sm:w-72 sm:max-w-[85vw] p-2 rounded-xl border border-[var(--khata-border)] shadow-xl z-30 space-y-2 animate-in fade-in"
       style={{ background: 'var(--khata-surface)' }}
     >
       <div className="p-1 text-[10px] font-bold text-[var(--khata-text-muted)] border-b border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-1">
@@ -66,12 +66,12 @@ export const CustomerPickerDropdown: React.FC<CustomerPickerDropdownProps> = ({
             key={c.id}
             type="button"
             onClick={() => onSelectCustomer(c)}
-            className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex items-center justify-between transition cursor-pointer"
+            className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex flex-wrap items-center justify-between gap-2 transition cursor-pointer"
           >
             <div className="min-w-0">
               <span className="font-bold text-[var(--khata-text)] block truncate">{c.name}</span>
               {c.address && (
-                <span className="text-[10px] text-[var(--khata-text-muted)] block truncate max-w-[180px]">
+                <span className="text-[10px] text-[var(--khata-text-muted)] block truncate max-w-full">
                   {c.address}
                 </span>
               )}
@@ -182,7 +182,7 @@ export const ProductPickerPopover: React.FC<ProductPickerPopoverProps> = ({
             key={p.id}
             type="button"
             onClick={() => onSelectProduct(p)}
-            className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex items-center justify-between transition cursor-pointer"
+            className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex flex-wrap items-center justify-between gap-2 transition cursor-pointer"
           >
             <div className="min-w-0">
               <span className="font-bold text-[var(--khata-text)] block truncate">{p.name}</span>

@@ -747,7 +747,7 @@ export const NormalBillingView: React.FC = () => {
         <div className="space-y-6">
           {/* SECTION A: INVOICE / BILL INFORMATION */}
           <div className="neu-card p-4 sm:p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-2.5">
+            <div className="relative flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-2.5">
               <div className="flex flex-wrap items-center gap-2 font-black text-sm text-[var(--khata-text)] uppercase tracking-wide">
                 <FileText className="w-4 h-4 text-[var(--khata-accent)]" />
                 <span>Section A: Bill Information</span>
@@ -916,14 +916,14 @@ export const NormalBillingView: React.FC = () => {
 
           {/* SECTION B: CUSTOMER / RECEIVER DETAILS */}
           <div className="neu-card p-4 sm:p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-2.5">
+            <div className="relative flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-2.5">
               <div className="flex flex-wrap items-center gap-2 font-black text-sm text-[var(--khata-text)] uppercase tracking-wide">
                 <User className="w-4 h-4 text-[var(--khata-accent)]" />
                 <span>Section B: Details of Receiver (Bill to Party)</span>
               </div>
               
               {/* Customer picker toggle */}
-              <div className="relative" ref={customerDropdownRef}>
+              <div className="sm:relative" ref={customerDropdownRef}>
                 <button
                   type="button"
                   onClick={() => setIsCustomerDropdownOpen(!isCustomerDropdownOpen)}
@@ -1071,7 +1071,7 @@ export const NormalBillingView: React.FC = () => {
 
           {/* SECTION C: PRODUCT SELECTION & LINE ITEMS */}
           <div className="neu-card p-4 sm:p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-2.5">
+            <div className="relative flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-2.5">
               <div className="flex flex-wrap items-center gap-2 font-black text-sm text-[var(--khata-text)] uppercase tracking-wide">
                 <Package className="w-4 h-4 text-[var(--khata-accent)]" />
                 <span>Section C: Goods / Products Selection</span>
@@ -1159,7 +1159,7 @@ export const NormalBillingView: React.FC = () => {
                         <div className="flex flex-wrap items-center gap-2 min-w-0">
                           {item.productId ? (
                             <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-                              <span className="text-[var(--khata-accent)] font-semibold truncate max-w-[200px]">
+                              <span className="text-[var(--khata-accent)] font-semibold truncate max-w-full sm:max-w-[200px]">
                                 ✓ Linked: {availableProducts.find((p) => Number(p.id) === Number(item.productId))?.name || item.description || 'Catalogue Product'}
                               </span>
                               <button
@@ -1331,7 +1331,7 @@ export const NormalBillingView: React.FC = () => {
 
           {/* SECTION D: BILL SUMMARY (NO GST CALCULATION) */}
           <div className="neu-card p-4 sm:p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-2.5">
+            <div className="relative flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-2.5">
               <div className="flex flex-wrap items-center gap-2 font-black text-sm text-[var(--khata-text)] uppercase tracking-wide">
                 <Building className="w-4 h-4 text-emerald-500" />
                 <span>Section D: Bill Summary (No GST)</span>
@@ -1768,9 +1768,9 @@ export const NormalBillingView: React.FC = () => {
 
       {/* Success Record Modal (matching GST invoice experience) */}
       {successRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm mhi-no-print">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto mhi-no-print">
           <div
-            className="neu-card w-full max-w-md p-6 text-center space-y-4 rounded-2xl border border-[var(--khata-border)]"
+            className="neu-card w-full max-w-md max-h-[90vh] overflow-y-auto p-6 text-center space-y-4 rounded-2xl border border-[var(--khata-border)]"
             style={{ background: 'var(--khata-surface)' }}
           >
             <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 mx-auto flex items-center justify-center">

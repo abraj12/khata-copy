@@ -337,8 +337,8 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
 
       {/* Explicit Confirmation Quick-Create Product Modal */}
       {quickCreateOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="neu-card w-full max-w-md rounded-2xl p-5 sm:p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
+          <div className="neu-card w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl p-5 sm:p-6 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-3">
               <div className="flex flex-wrap items-center gap-2 min-w-0">
                 <PlusCircle className="w-5 h-5 text-[var(--khata-accent)]" />

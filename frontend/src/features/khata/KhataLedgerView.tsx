@@ -920,7 +920,7 @@ export const KhataLedgerView: React.FC = () => {
                         {isSettled ? 'Settled' : 'Pending'}
                       </span>
                     </div>
-                    <div className="grid grid-cols-3 gap-2 pt-1 text-xs">
+                    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 pt-1 text-xs">
                       <div>
                         <span className="text-[10px] text-[var(--khata-text-muted)] block">Udhar</span>
                         <span className="font-semibold tabular-numbers">{formatCurrency(c.totalUdhar)}</span>
@@ -1505,7 +1505,7 @@ export const KhataLedgerView: React.FC = () => {
                         value={detailStateCode}
                         disabled={isSavingCustomerState}
                         onChange={(e) => handleSaveCustomerState(e.target.value)}
-                        className="neu-input text-xs py-1 px-2.5 max-w-[240px]"
+                        className="neu-input text-xs py-1 px-2.5 max-w-full sm:max-w-[240px]"
                       >
                         <option value="">Not specified (Clear state)</option>
                         {INDIAN_STATES.map((s) => (

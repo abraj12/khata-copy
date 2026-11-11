@@ -536,7 +536,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/40">
                 <div className="text-[10px] uppercase font-bold text-[var(--khata-text-muted)]">
                   Amount

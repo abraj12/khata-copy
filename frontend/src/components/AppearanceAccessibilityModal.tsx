@@ -209,7 +209,7 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
               <Type className="w-4 h-4 text-[var(--khata-accent)]" />
               Text Scale (rem-based)
             </label>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {(['100', '115', '130', '145'] as TextSizeOption[]).map((size) => (
                 <button
                   key={size}
@@ -233,7 +233,7 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
                 <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
                 Contrast Override
               </label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 min-[360px]:grid-cols-2 gap-2">
                 {(['enhanced', 'default'] as ContrastOption[]).map((c) => (
                   <button
                     key={c}
@@ -255,7 +255,7 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
                 <Activity className="w-4 h-4 text-[var(--khata-accent)]" />
                 Reduce Motion
               </label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 min-[360px]:grid-cols-3 gap-2">
                 {(['system', 'on', 'off'] as MotionOption[]).map((m) => (
                   <button
                     key={m}
@@ -280,7 +280,7 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
                 <Layers className="w-4 h-4 text-[var(--khata-accent)]" />
                 Layout Spacing
               </label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 min-[360px]:grid-cols-2 gap-2">
                 {[false, true].map((val) => (
                   <button
                     key={String(val)}
@@ -302,7 +302,7 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
                 <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
                 Keyboard Focus Outline
               </label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 min-[360px]:grid-cols-2 gap-2">
                 {[true, false].map((val) => (
                   <button
                     key={String(val)}

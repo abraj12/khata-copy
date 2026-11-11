@@ -97,10 +97,13 @@ jobs:
           --health-retries 5
       mongodb:
         image: mongo:8
+        env:
+          GLIBC_TUNABLES: glibc.pthread.rseq=1
         ports:
           - 27017:27017
         options: >-
-          --health-cmd "mongosh --eval \"db.adminCommand('ping')\" --quiet"
+          --health-cmd "mongosh --quiet --eval 'quit(db.runCommand({ ping: 1 }).ok ? 0 : 1)'"
+          --health-start-period 15s
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5

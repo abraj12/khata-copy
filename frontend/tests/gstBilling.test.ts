@@ -143,11 +143,20 @@ describe('GST Billing Module (Frontend Calculation & Invoice Mapping)', () => {
   it('5. Generates local today date in YYYY-MM-DD format (not UTC shifted)', () => {
     const today = getTodayLocalDate();
     expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    const now = new Date();
-    const expectedYear = now.getFullYear();
-    const expectedMonth = String(now.getMonth() + 1).padStart(2, '0');
-    const expectedDay = String(now.getDate()).padStart(2, '0');
+    const istParts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    const expectedYear = istParts.find((p) => p.type === 'year')?.value;
+    const expectedMonth = istParts.find((p) => p.type === 'month')?.value;
+    const expectedDay = istParts.find((p) => p.type === 'day')?.value;
     expect(today).toBe(`${expectedYear}-${expectedMonth}-${expectedDay}`);
+
+    // Verify IST midnight rollover (18:30 UTC) returns next IST calendar date on UTC CI runners
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-11-10T18:30:00.000Z'));
+      expect(getTodayLocalDate()).toBe('2026-11-11');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

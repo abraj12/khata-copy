@@ -805,7 +805,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                     {renderStatusBadge(b)}
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2 pt-2 border-t border-[var(--khata-border)]/60">
+                  <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 pt-2 border-t border-[var(--khata-border)]/60">
                     <div>
                       <span className="text-[10px] text-[var(--khata-text-muted)] block">Total</span>
                       <span className="font-mono font-bold">{formatAbsRupees(b.grandTotal)}</span>
@@ -919,7 +919,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
                     <label className="block text-[11px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
                       Bill Date <span className="text-rose-500">*</span>
@@ -1119,7 +1119,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
               {/* Totals, Tax, Attachment & Notes */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-[var(--khata-border)] pt-3">
                 <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 min-[360px]:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[11px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
                         Discount (₹)
@@ -1336,7 +1336,8 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                     </div>
                   </div>
 
-                  <table className="w-full text-left border-collapse text-xs">
+                  <div className="overflow-x-auto print:overflow-visible">
+                    <table className="w-full text-left border-collapse text-xs">
                     <thead>
                       <tr className="border-b-2 border-slate-300 text-[11px] uppercase text-slate-600">
                         <th className="py-2 pr-2">#</th>
@@ -1372,6 +1373,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                       ))}
                     </tbody>
                   </table>
+                  </div>
 
                   <div className="flex flex-wrap justify-between gap-4 border-t border-slate-300 pt-4 text-xs">
                     <div className="max-w-sm space-y-1 text-slate-600">

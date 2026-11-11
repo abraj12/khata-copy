@@ -471,7 +471,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
                 ) : (
                   <div className="relative border border-[var(--khata-border)] rounded-2xl p-3 bg-[var(--khata-surface-inset)]/30 space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--khata-text-muted)] mb-1">
-                      <span className="font-semibold text-[var(--khata-text)] truncate max-w-[200px]">
+                      <span className="font-semibold text-[var(--khata-text)] truncate max-w-full sm:max-w-[200px]">
                         {selectedFile.name}
                       </span>
                       <span>{(selectedFile.size / 1024).toFixed(1)} KB</span>
@@ -718,7 +718,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
       {/* Delete Confirmation Modal */}
       {deletingBillId && (
         <div
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4 overflow-y-auto"
           role="dialog"
           aria-modal="true"
         >

@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Navbar } from '../src/components/Navbar.js';
 import { NotificationCenterButton } from '../src/components/NotificationCenterButton.js';
 import { PdfDocumentPreviewModal } from '../src/components/PdfDocumentPreviewModal.js';
+import { CustomerPickerDropdown } from '../src/features/bills/BillingCataloguePickers.js';
 import { AuthProvider } from '../src/features/auth/AuthProvider.js';
 import { authApi } from '../src/features/auth/authApi.js';
 import { ThemeAccessibilityProvider } from '../src/context/ThemeAccessibilityContext.js';
@@ -73,12 +74,28 @@ describe('Mobile responsiveness: flex-wrap containers and bounded popovers', () 
 
     const headerRow = header?.querySelector('div.max-w-7xl > div');
     expect(hasFlexWrap(headerRow)).toBe(true);
+    expect(headerRow?.className).not.toContain('sm:h-16');
 
     const brandBadge = headerRow?.children[0] ?? null;
     expect(hasFlexWrap(brandBadge)).toBe(true);
 
     const utilityControls = headerRow?.querySelector('div.order-2');
     expect(hasFlexWrap(utilityControls)).toBe(true);
+
+    const billTrigger = Array.from(mainNav?.querySelectorAll('button') ?? []).find((btn) =>
+      btn.textContent?.includes('Bill')
+    ) as HTMLButtonElement | undefined;
+    expect(billTrigger).toBeDefined();
+
+    await act(async () => {
+      billTrigger?.click();
+    });
+
+    const billMenu = container.querySelector('[role="menu"]');
+    expect(billMenu).not.toBeNull();
+    expect(billMenu?.className).toContain('right-0');
+    expect(billMenu?.className).toContain('w-[min(13rem,calc(100vw-1.5rem))]');
+    expect(billMenu?.className).not.toContain('left-0');
   });
 
   it('2. NotificationCenterButton constrains popover width to the mobile viewport and wraps header and alert rows', async () => {
@@ -182,5 +199,41 @@ describe('Mobile responsiveness: flex-wrap containers and bounded popovers', () 
     );
     expect(retryButton).toBeDefined();
     expect(hasFlexWrap(retryButton?.parentElement)).toBe(true);
+  });
+
+  it('4. CustomerPickerDropdown aligns full-width inside mobile section header without off-screen left overflow', async () => {
+    await act(async () => {
+      root.render(
+        <div className="relative">
+          <CustomerPickerDropdown
+            customers={[
+              {
+                id: 1,
+                name: 'Shri Balaji Timber & Plywood Emporium',
+                phone: '9876543210',
+                address: 'Plot 14, Industrial Area Phase 2',
+              },
+            ]}
+            search=""
+            onSearchChange={() => {}}
+            isLoading={false}
+            isLoadingMore={false}
+            error={null}
+            hasMore={false}
+            onLoadMore={() => {}}
+            onSelectCustomer={() => {}}
+          />
+        </div>
+      );
+    });
+
+    const picker = container.querySelector('div.relative > div.absolute');
+    expect(picker).not.toBeNull();
+    expect(picker?.className).toContain('left-0');
+    expect(picker?.className).toContain('right-0');
+    expect(picker?.className).toContain('sm:w-72');
+
+    const optionBtn = picker?.querySelector('button');
+    expect(hasFlexWrap(optionBtn)).toBe(true);
   });
 });

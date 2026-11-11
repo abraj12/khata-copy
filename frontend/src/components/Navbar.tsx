@@ -85,12 +85,12 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex flex-wrap items-center justify-between min-h-[64px] sm:h-16 py-2 sm:py-0 gap-y-2">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
+        <div className="flex flex-wrap items-center justify-between min-h-[60px] py-2 sm:py-2.5 gap-x-3 gap-y-2">
           {/* Brand Identity / Store Badge */}
-          <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 min-w-0 flex-1 lg:flex-initial">
             <div
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-inner border border-[var(--khata-border)]"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-inner border border-[var(--khata-border)] shrink-0"
               style={{ background: 'var(--khata-surface-inset)' }}
               aria-hidden="true"
             >
@@ -100,7 +100,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               <h1 className="text-sm sm:text-base md:text-lg font-black tracking-tight text-[var(--khata-text)] leading-none">
                 Khata
               </h1>
-              <p className="text-[10px] sm:text-[11px] text-[var(--khata-text-muted)] font-medium mt-0.5">
+              <p className="text-[10px] sm:text-[11px] text-[var(--khata-text-muted)] font-medium mt-0.5 truncate max-w-[11rem] sm:max-w-none">
                 Algions AI Labs Private Limited
               </p>
             </div>
@@ -108,7 +108,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
 
           {/* Navigation Tabs (Home, Khata, Products, Quotations, Suppliers, Bill -> GST Bill / Normal Bill) */}
           <nav
-            className="flex flex-wrap items-center gap-1 sm:gap-2 order-3 sm:order-2 w-full sm:w-auto justify-center sm:justify-start pt-1 sm:pt-0"
+            className="flex flex-wrap items-center gap-1.5 sm:gap-2 order-3 lg:order-2 w-full lg:w-auto justify-center lg:justify-start pt-1 lg:pt-0"
             aria-label="Main Navigation"
           >
             {/* 0. Home Tab */}
@@ -117,7 +117,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                 setIsBillMenuOpen(false);
                 onTabChange('home');
               }}
-              className={`inline-flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[44px] flex-1 sm:flex-initial ${
+              className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
                 currentTab === 'home'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
                   : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
@@ -134,7 +134,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                 setIsBillMenuOpen(false);
                 onTabChange('khata');
               }}
-              className={`inline-flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[44px] flex-1 sm:flex-initial ${
+              className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
                 currentTab === 'khata'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
                   : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
@@ -151,7 +151,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                 setIsBillMenuOpen(false);
                 onTabChange('products');
               }}
-              className={`inline-flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[44px] flex-1 sm:flex-initial ${
+              className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
                 currentTab === 'products'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
                   : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
@@ -168,7 +168,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                 setIsBillMenuOpen(false);
                 onTabChange('quotations');
               }}
-              className={`inline-flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[44px] flex-1 sm:flex-initial ${
+              className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
                 currentTab === 'quotations'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
                   : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
@@ -183,7 +183,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             <button
               type="button"
               onClick={() => onTabChange('suppliers')}
-              className={`inline-flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[44px] flex-1 sm:flex-initial ${
+              className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
                 currentTab === 'suppliers'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
                   : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
@@ -195,11 +195,11 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             </button>
 
             {/* 4. Bill Dropdown Menu (Contains GST Bill & Normal Bill) */}
-            <div className="relative flex-1 sm:flex-initial" ref={billMenuRef}>
+            <div className="relative flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial" ref={billMenuRef}>
               <button
                 type="button"
                 onClick={() => setIsBillMenuOpen(!isBillMenuOpen)}
-                className={`w-full inline-flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[44px] ${
+                className={`w-full inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] whitespace-nowrap ${
                   isBillActive
                     ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
                     : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
@@ -216,7 +216,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               {/* Submenu Dropdown */}
               {isBillMenuOpen && (
                 <div
-                  className="absolute left-0 sm:left-auto sm:right-0 top-full mt-1.5 w-52 p-1.5 rounded-xl border border-[var(--khata-border)] shadow-xl z-50 animate-in fade-in slide-in-from-top-1"
+                  className="absolute right-0 top-full mt-1.5 w-[min(13rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] p-1.5 rounded-xl border border-[var(--khata-border)] shadow-xl z-50 animate-in fade-in slide-in-from-top-1"
                   style={{ background: 'var(--khata-surface)' }}
                   role="menu"
                 >
@@ -267,7 +267,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
           </nav>
 
           {/* Controls: Notifications, Appearance, Owner Phone, Logout */}
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 order-2 sm:order-3">
+          <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2 order-2 lg:order-3 shrink-0">
             <NotificationCenterButton />
 
             {/* Persistent Appearance & Accessibility Button */}
@@ -275,7 +275,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               onClick={onOpenAppearance}
               title="Appearance & Accessibility"
               aria-label="Open Appearance & Accessibility settings"
-              className="neu-btn-secondary text-xs px-2.5 sm:px-3 py-1.5 sm:py-2 flex items-center gap-1.5 min-h-[38px] sm:min-h-[44px]"
+              className="neu-btn-secondary text-xs px-2.5 sm:px-3 py-1.5 sm:py-2 inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
             >
               <Palette className="w-4 h-4 text-[var(--khata-accent)]" />
               <span className="hidden sm:inline">Appearance</span>
@@ -293,7 +293,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             <button
               onClick={handleLogout}
               disabled={isLoggingOut}
-              className="neu-btn-secondary text-rose-500 hover:text-rose-600 text-xs px-3 sm:px-3.5 py-1.5 sm:py-2 flex items-center gap-1.5 min-h-[38px] sm:min-h-[44px]"
+              className="neu-btn-secondary text-rose-500 hover:text-rose-600 text-xs px-2.5 sm:px-3.5 py-1.5 sm:py-2 inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
               aria-label="Log out of Khata"
             >
               {isLoggingOut ? (

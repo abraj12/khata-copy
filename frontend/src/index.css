@@ -329,6 +329,7 @@ html, body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
+  overflow-x: clip;
 }
 
 input, button, select, textarea, table {
@@ -366,6 +367,8 @@ input, button, select, textarea, table {
   padding: 0.65rem 1rem;
   transition: border-color 150ms ease, box-shadow 150ms ease;
   min-height: 42px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* Dedicated icon padding variants that safely override the shorthand */
@@ -485,7 +488,8 @@ input, button, select, textarea, table {
   border-radius: 9999px;
   font-size: 0.75rem;
   font-weight: 600;
-  line-height: 1;
+  line-height: 1.1;
+  max-width: 100%;
 }
 
 .neu-badge-success {

@@ -950,7 +950,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
               </div>
 
               {/* Qty, Unit, Rate, Amount */}
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 min-[360px]:grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[10px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
                     Qty
@@ -999,7 +999,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
               </div>
 
               {/* Optional HSN & Barcode */}
-              <div className="grid grid-cols-2 gap-2 pt-1 border-t border-[var(--khata-border)]/50">
+              <div className="grid grid-cols-1 min-[360px]:grid-cols-2 gap-2 pt-1 border-t border-[var(--khata-border)]/50">
                 <div>
                   <label className="block text-[10px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
                     HSN

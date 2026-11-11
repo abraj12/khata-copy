@@ -1003,13 +1003,13 @@ export const ProductsView: React.FC = () => {
       {/* Edit Product Modal */}
       {editingProduct && (
         <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto"
           role="dialog"
           aria-modal="true"
           aria-labelledby="edit-product-title"
         >
           <div
-            className="neu-card max-w-md w-full p-6 space-y-4 rounded-2xl"
+            className="neu-card max-w-md w-full max-h-[90vh] overflow-y-auto p-6 space-y-4 rounded-2xl"
             style={{ background: 'var(--khata-surface)' }}
           >
             <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--khata-border)]">
@@ -1330,13 +1330,13 @@ export const ProductsView: React.FC = () => {
       {/* Archive Confirmation Modal */}
       {archivingProduct && (
         <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto"
           role="dialog"
           aria-modal="true"
           aria-labelledby="archive-product-title"
         >
           <div
-            className="neu-card max-w-md w-full p-6 space-y-4 rounded-2xl"
+            className="neu-card max-w-md w-full max-h-[90vh] overflow-y-auto p-6 space-y-4 rounded-2xl"
             style={{ background: 'var(--khata-surface)' }}
           >
             <div className="flex flex-wrap items-center gap-3">

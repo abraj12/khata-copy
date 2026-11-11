@@ -467,14 +467,14 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
 
       {voidTarget && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs overflow-y-auto"
           role="dialog"
           aria-modal="true"
           aria-labelledby="void-expense-title"
           onClick={() => !voiding && setVoidTarget(null)}
         >
           <div
-            className="neu-card w-full max-w-md p-5 sm:p-6 space-y-4"
+            className="neu-card w-full max-w-md max-h-[90vh] overflow-y-auto p-5 sm:p-6 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -543,7 +543,7 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
 
       {historyTarget && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs overflow-y-auto"
           role="dialog"
           aria-modal="true"
           aria-labelledby="expense-history-title"

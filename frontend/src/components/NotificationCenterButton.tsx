@@ -134,7 +134,7 @@ export const NotificationCenterButton: React.FC = () => {
       <button
         type="button"
         onClick={handleToggle}
-        className="neu-btn-secondary p-2.5 sm:px-3 text-sm font-medium relative inline-flex items-center justify-center gap-1.5"
+        className="neu-btn-secondary p-2 sm:px-3 text-sm font-medium relative inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
         aria-expanded={isOpen}
         title="Notifications"

@@ -1428,7 +1428,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs">
                   <div>
                     <span className="text-[10px] uppercase text-slate-500 block">
                       {receiptPayment.status === 'reversed' ? 'Original Amount (Reversed)' : 'Amount Paid'}
@@ -1465,7 +1465,8 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                     <h4 className="font-bold uppercase text-[11px] text-slate-600">
                       Applied to Purchase Bills
                     </h4>
-                    <table className="w-full text-left border-collapse">
+                    <div className="overflow-x-auto print:overflow-visible">
+                      <table className="w-full text-left border-collapse">
                       <thead>
                         <tr className="border-b border-slate-300 text-[10px] uppercase text-slate-500">
                           <th className="py-1.5">Invoice #</th>
@@ -1519,6 +1520,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                         })}
                       </tbody>
                     </table>
+                    </div>
                   </div>
                 ) : (
                   <p className="text-xs text-slate-600 italic">
@@ -1565,7 +1567,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                 )}
 
                 {receiptPayment.supplierSummary && (
-                  <div className="grid grid-cols-3 gap-2 pt-3 border-t border-slate-300 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-3 border-t border-slate-300 text-xs">
                     <div>
                       <span className="text-[10px] uppercase text-slate-500 block">
                         Lifetime Purchases

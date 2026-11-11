@@ -377,7 +377,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
               actionLabel="Normal Bills"
               onAction={() => onNavigate('normal-bill')}
             >
-              <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div className="p-3 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)]">
                   <p className="text-[11px] font-bold uppercase text-[var(--khata-text-muted)]">
                     Normal Bills ({data.sales.normalBillsCount})
@@ -427,7 +427,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
               actionLabel="Open Khata"
               onAction={() => onNavigate('khata')}
             >
-              <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div className="p-3 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)]">
                   <p className="text-[11px] font-bold uppercase text-[var(--khata-text-muted)]">
                     Total Customers
@@ -480,7 +480,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
               actionLabel="Open Suppliers"
               onAction={() => onNavigate('suppliers')}
             >
-              <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div className="p-3 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)]">
                   <p className="text-[11px] font-bold uppercase text-[var(--khata-text-muted)]">
                     Purchases ({data.suppliers.purchaseBillsCount} Bills)
@@ -539,7 +539,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
               actionLabel="Open Quotations"
               onAction={() => onNavigate('quotations')}
             >
-              <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div className="p-3 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)]">
                   <p className="text-[11px] font-bold uppercase text-[var(--khata-text-muted)]">
                     Pending Open Pipeline

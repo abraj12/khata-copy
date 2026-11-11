@@ -771,7 +771,7 @@ export const GstBillingView: React.FC = () => {
                 className="p-5 rounded-2xl border border-[var(--khata-border)] space-y-4"
                 style={{ background: 'var(--khata-surface)' }}
               >
-                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--khata-border)]">
+                  <div className="relative flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--khata-border)]">
                   <h3 className="text-sm font-bold uppercase tracking-wider text-[var(--khata-text-muted)] flex items-center gap-2">
                     <Building2 className="w-4 h-4 text-[var(--khata-accent)]" />
                     <span>A. Invoice Information</span>
@@ -926,14 +926,14 @@ export const GstBillingView: React.FC = () => {
                 className="p-5 rounded-2xl border border-[var(--khata-border)] space-y-4"
                 style={{ background: 'var(--khata-surface)' }}
               >
-                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--khata-border)]">
+                  <div className="relative flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--khata-border)]">
                   <h3 className="text-sm font-bold uppercase tracking-wider text-[var(--khata-text-muted)] flex items-center gap-2">
                     <User className="w-4 h-4 text-[var(--khata-accent)]" />
                     <span>B. Customer / Receiver Details (Bill To Party)</span>
                   </h3>
 
                   {/* Customer picker dropdown */}
-                  <div className="relative" ref={customerDropdownRef}>
+                  <div className="sm:relative" ref={customerDropdownRef}>
                     <button
                       type="button"
                       onClick={() => setIsCustomerDropdownOpen(!isCustomerDropdownOpen)}
@@ -1084,7 +1084,7 @@ export const GstBillingView: React.FC = () => {
                 className="p-5 rounded-2xl border border-[var(--khata-border)] space-y-4"
                 style={{ background: 'var(--khata-surface)' }}
               >
-                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--khata-border)]">
+                  <div className="relative flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--khata-border)]">
                   <h3 className="text-sm font-bold uppercase tracking-wider text-[var(--khata-text-muted)] flex items-center gap-2">
                     <Package className="w-4 h-4 text-[var(--khata-accent)]" />
                     <span>C. Product Selection &amp; Line Items</span>
@@ -1171,7 +1171,7 @@ export const GstBillingView: React.FC = () => {
                           <div className="flex flex-wrap items-center gap-2">
                             {item.productId ? (
                               <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-                                <span className="text-[var(--khata-accent)] font-semibold truncate max-w-[200px]">
+                                <span className="text-[var(--khata-accent)] font-semibold truncate max-w-full sm:max-w-[200px]">
                                   ✓ Linked: {availableProducts.find((p) => Number(p.id) === Number(item.productId))?.name || item.description || 'Catalogue Product'}
                                 </span>
                                 <button
@@ -1365,13 +1365,13 @@ export const GstBillingView: React.FC = () => {
                   <label className="block text-xs font-bold text-[var(--khata-text-muted)] mb-1.5">
                     GST Rate Applicable
                   </label>
-                  <div className="grid grid-cols-4 gap-1.5">
+                  <div className="flex flex-wrap gap-1.5">
                     {[18, 28, 12, 5].map((r) => (
                       <button
                         key={r}
                         type="button"
                         onClick={() => setGstRate(r)}
-                        className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition ${
+                        className={`flex-1 min-w-[54px] py-1.5 px-2 rounded-lg text-xs font-bold border transition ${
                           gstRate === r
                             ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-sm'
                             : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
@@ -1800,9 +1800,9 @@ export const GstBillingView: React.FC = () => {
 
       {/* Success Modal */}
       {successRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
           <div
-            className="neu-card w-full max-w-md p-6 text-center space-y-4 rounded-2xl border border-[var(--khata-border)]"
+            className="neu-card w-full max-w-md max-h-[90vh] overflow-y-auto p-6 text-center space-y-4 rounded-2xl border border-[var(--khata-border)]"
             style={{ background: 'var(--khata-surface)' }}
           >
             <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 mx-auto flex items-center justify-center">
