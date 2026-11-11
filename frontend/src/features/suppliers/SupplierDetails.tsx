@@ -25,6 +25,7 @@ import type {
 
 export interface SupplierDetailsProps {
   supplierId: string;
+  refreshSignal?: number;
   onBack: () => void;
   onOpenStatement: (supplierId: string) => void;
   onNewPurchaseBill: (supplierId: string) => void;
@@ -35,6 +36,7 @@ export interface SupplierDetailsProps {
 
 export const SupplierDetails: React.FC<SupplierDetailsProps> = ({
   supplierId,
+  refreshSignal = 0,
   onBack,
   onOpenStatement,
   onNewPurchaseBill,
@@ -72,7 +74,7 @@ export const SupplierDetails: React.FC<SupplierDetailsProps> = ({
     return () => {
       active = false;
     };
-  }, [supplierId]);
+  }, [supplierId, refreshSignal]);
 
   if (loading) {
     return (
@@ -144,7 +146,7 @@ export const SupplierDetails: React.FC<SupplierDetailsProps> = ({
               <FileSpreadsheet className="w-4 h-4 text-[var(--khata-accent)]" />
               <span>Full Statement</span>
             </button>
-            {!supplier.archivedAt && (
+            {!supplier.archivedAt ? (
               <>
                 <button
                   type="button"
@@ -163,9 +165,38 @@ export const SupplierDetails: React.FC<SupplierDetailsProps> = ({
                   <span>Record Payment</span>
                 </button>
               </>
+            ) : (
+              <>
+                {safeDecimal(supplier.outstandingPayable).greaterThan(0) && (
+                  <button
+                    type="button"
+                    onClick={() => onNewPayment(supplier.id)}
+                    className="neu-btn-primary text-xs px-3.5 py-2 font-bold inline-flex items-center gap-1.5"
+                  >
+                    <CreditCard className="w-4 h-4" />
+                    <span>Settle Outstanding Bills</span>
+                  </button>
+                )}
+                {safeDecimal(supplier.unallocatedPayments).greaterThan(0) && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenPaymentsTab(supplier.id)}
+                    className="neu-btn-secondary text-xs px-3.5 py-2 font-bold inline-flex items-center gap-1.5"
+                  >
+                    <Receipt className="w-4 h-4 text-[var(--khata-accent)]" />
+                    <span>Allocate Advance</span>
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>
+
+        {supplier.archivedAt && (
+          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-800 dark:text-amber-300">
+            <strong>Archived Supplier:</strong> New purchase bills and edits to existing bills are disabled. You can still settle unpaid historical bills, allocate existing advances, reverse mistaken payments, and export historical statements.
+          </div>
+        )}
 
         {/* Unified Supplier Financial Figures */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 pt-3 border-t border-[var(--khata-border)]">

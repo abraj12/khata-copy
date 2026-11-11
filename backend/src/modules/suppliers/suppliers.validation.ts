@@ -215,18 +215,29 @@ export const paymentAllocationInputSchema = z.object({
   amount: positiveMoneyValidator('Allocation amount'),
 });
 
-export const createSupplierPaymentSchema = z.object({
-  supplierId: z.string().uuid('Valid supplier ID is required'),
-  paymentDate: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    calendarDateSchema.optional()
-  ),
-  amount: positiveMoneyValidator('Payment amount'),
-  paymentMethod: z.enum(['cash', 'upi', 'bank_transfer', 'cheque', 'other']),
-  transactionReference: optionalTrimmedString(120),
-  notes: optionalTrimmedString(2000),
-  allocations: z.array(paymentAllocationInputSchema).optional().default([]),
-});
+export const createSupplierPaymentSchema = z
+  .object({
+    supplierId: z.string().uuid('Valid supplier ID is required'),
+    paymentDate: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      calendarDateSchema.optional()
+    ),
+    amount: positiveMoneyValidator('Payment amount'),
+    paymentMethod: z.enum(['cash', 'upi', 'bank_transfer', 'cheque', 'other']),
+    transactionReference: optionalTrimmedString(120),
+    notes: optionalTrimmedString(2000),
+    allocations: z.array(paymentAllocationInputSchema).optional().default([]),
+  })
+  .superRefine((data, ctx) => {
+    const requiresReference = ['upi', 'bank_transfer', 'cheque'].includes(data.paymentMethod);
+    if (requiresReference && !data.transactionReference?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['transactionReference'],
+        message: `Transaction reference is required for ${data.paymentMethod}.`,
+      });
+    }
+  });
 
 export const allocateAdvanceSchema = z.object({
   allocations: z.array(paymentAllocationInputSchema).min(1, 'At least one bill allocation is required'),
@@ -284,6 +295,7 @@ export const listSupplierPaymentsQuerySchema = z.object({
     z.enum(['cash', 'upi', 'bank_transfer', 'cheque', 'other']).optional()
   ),
   status: z.enum(['active', 'reversed', 'all']).optional().default('all'),
+  search: z.string().trim().max(120).optional(),
   fromDate: optionalQueryDateSchema,
   toDate: optionalQueryDateSchema,
   limit: z.coerce.number().int().min(1).max(200).optional().default(100),
@@ -298,6 +310,21 @@ export const supplierStatementQuerySchema = z
       .enum(['true', 'false'])
       .optional()
       .transform((v) => v !== 'false'),
+  })
+  .superRefine((data, ctx) => {
+    if (data.fromDate && data.toDate && data.toDate < data.fromDate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['toDate'],
+        message: 'End date cannot be earlier than start date.',
+      });
+    }
+  });
+
+export const supplierDashboardQuerySchema = z
+  .object({
+    fromDate: optionalQueryDateSchema,
+    toDate: optionalQueryDateSchema,
   })
   .superRefine((data, ctx) => {
     if (data.fromDate && data.toDate && data.toDate < data.fromDate) {

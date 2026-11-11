@@ -15,20 +15,21 @@ import { SupplierPaymentsView } from './SupplierPaymentsView.js';
 import { SupplierStatement } from './SupplierStatement.js';
 
 export type SupplierSectionTab =
-  | 'dashboard'
   | 'all-suppliers'
   | 'purchase-bills'
   | 'payments'
-  | 'statements';
+  | 'statements'
+  | 'dashboard';
+
+export const DEFAULT_SUPPLIER_SECTION_TAB: SupplierSectionTab = 'all-suppliers';
 
 export const SuppliersModuleView: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<SupplierSectionTab>('dashboard');
+  const [activeTab, setActiveTab] = useState<SupplierSectionTab>(DEFAULT_SUPPLIER_SECTION_TAB);
   const [detailSupplierId, setDetailSupplierId] = useState<string | null>(null);
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>('');
   const [refreshSignal, setRefreshSignal] = useState(0);
 
   // Trigger signals for quick actions from Dashboard / Supplier Details
-  const [createSupplierSignal, setCreateSupplierSignal] = useState(0);
   const [createBillSignal, setCreateBillSignal] = useState(0);
   const [createPaymentSignal, setCreatePaymentSignal] = useState(0);
 
@@ -58,10 +59,10 @@ export const SuppliersModuleView: React.FC = () => {
     setCreatePaymentSignal((n) => n + 1);
   };
 
-  const handleQuickAddSupplier = () => {
+  const handleOpenAllPayments = () => {
     setDetailSupplierId(null);
-    setActiveTab('all-suppliers');
-    setCreateSupplierSignal((n) => n + 1);
+    setSelectedSupplierId('');
+    setActiveTab('payments');
   };
 
   const subTabs: Array<{
@@ -69,11 +70,6 @@ export const SuppliersModuleView: React.FC = () => {
     label: string;
     icon: React.ReactNode;
   }> = [
-    {
-      key: 'dashboard',
-      label: 'Supplier Dashboard',
-      icon: <LayoutDashboard className="w-3.5 h-3.5" />,
-    },
     {
       key: 'all-suppliers',
       label: 'All Suppliers',
@@ -93,6 +89,11 @@ export const SuppliersModuleView: React.FC = () => {
       key: 'statements',
       label: 'Supplier Statements',
       icon: <FileSpreadsheet className="w-3.5 h-3.5" />,
+    },
+    {
+      key: 'dashboard',
+      label: 'Supplier Dashboard',
+      icon: <LayoutDashboard className="w-3.5 h-3.5" />,
     },
   ];
 
@@ -148,6 +149,7 @@ export const SuppliersModuleView: React.FC = () => {
       {detailSupplierId ? (
         <SupplierDetails
           supplierId={detailSupplierId}
+          refreshSignal={refreshSignal}
           onBack={() => setDetailSupplierId(null)}
           onOpenStatement={handleOpenStatement}
           onNewPurchaseBill={handleQuickNewBill}
@@ -166,18 +168,15 @@ export const SuppliersModuleView: React.FC = () => {
       ) : activeTab === 'dashboard' ? (
         <SupplierDashboard
           refreshSignal={refreshSignal}
-          onOpenSupplierDetails={handleOpenSupplierDetails}
-          onOpenStatement={handleOpenStatement}
-          onNewPurchaseBill={handleQuickNewBill}
-          onNewPayment={handleQuickNewPayment}
-          onAddSupplier={handleQuickAddSupplier}
+          onOpenAllPayments={handleOpenAllPayments}
         />
       ) : activeTab === 'all-suppliers' ? (
         <SuppliersView
           refreshSignal={refreshSignal}
-          openCreateModalSignal={createSupplierSignal}
           onOpenSupplierDetails={handleOpenSupplierDetails}
           onOpenStatement={handleOpenStatement}
+          onNewPurchaseBill={handleQuickNewBill}
+          onNewPayment={handleQuickNewPayment}
           onDataChanged={bumpRefresh}
         />
       ) : activeTab === 'purchase-bills' ? (

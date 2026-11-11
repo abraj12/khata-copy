@@ -20,8 +20,10 @@ import {
   normalizeSupplierPhone,
   extractAndValidateIdempotencyKey,
   normalizeTransactionReference,
+  listSupplierPaymentsQuerySchema,
   reversePaymentAllocationSchema,
   reversePaymentSchema,
+  supplierDashboardQuerySchema,
   supplierStatementQuerySchema,
 } from '../src/modules/suppliers/suppliers.validation.js';
 import { suppliersService, SupplierStatementResponse } from '../src/modules/suppliers/suppliers.service.js';
@@ -229,7 +231,7 @@ describe('Suppliers Accounting, Validation, Security & API Test Suite', () => {
         amount: '500.00',
         paymentMethod: 'upi',
       }).success
-    ).toBe(true);
+    ).toBe(false);
     expect(
       supplierStatementQuerySchema.safeParse({
         fromDate: '2026-05-01',
@@ -270,6 +272,7 @@ describe('Suppliers Accounting, Validation, Security & API Test Suite', () => {
       periodPurchases: '500.00',
       periodPayments: '0.00',
       periodReversals: '0.00',
+      periodCancellations: '0.00',
       closingBalance: '500.00',
       entries: [
         {
@@ -591,5 +594,348 @@ describe('Suppliers Accounting, Validation, Security & API Test Suite', () => {
       .send({ reason: 'Duplicate check' });
     expect(revRes.status).toBe(409);
     expect(revRes.body.code).toBe('PAYMENT_ALREADY_REVERSED');
+  });
+
+  it('13. Enforces mandatory digital/cheque references while keeping cash & other optional', async () => {
+    for (const method of ['upi', 'bank_transfer', 'cheque'] as const) {
+      const missingRes = createSupplierPaymentSchema.safeParse({
+        supplierId: '11111111-1111-4111-8111-111111111111',
+        amount: '250.00',
+        paymentMethod: method,
+        transactionReference: '   ',
+      });
+      expect(missingRes.success).toBe(false);
+      if (!missingRes.success) {
+        expect(missingRes.error.issues.some((i) => i.path.includes('transactionReference'))).toBe(true);
+      }
+
+      const validRes = createSupplierPaymentSchema.safeParse({
+        supplierId: '11111111-1111-4111-8111-111111111111',
+        amount: '250.00',
+        paymentMethod: method,
+        transactionReference: 'REF-1001',
+      });
+      expect(validRes.success).toBe(true);
+    }
+
+    for (const method of ['cash', 'other'] as const) {
+      expect(
+        createSupplierPaymentSchema.safeParse({
+          supplierId: '11111111-1111-4111-8111-111111111111',
+          amount: '250.00',
+          paymentMethod: method,
+        }).success
+      ).toBe(true);
+    }
+
+    // Service-layer enforcement (defense-in-depth)
+    const missingRefClient = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM suppliers WHERE id = $1')) {
+          return { rows: [{ id: '11111111-1111-4111-8111-111111111111', archived_at: null }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    vi.spyOn(appPool, 'connect').mockResolvedValueOnce(missingRefClient as any);
+    await expect(
+      suppliersService.createSupplierPayment({
+        supplierId: '11111111-1111-4111-8111-111111111111',
+        amount: '250.00',
+        paymentMethod: 'bank_transfer',
+        transactionReference: '   ',
+      })
+    ).rejects.toMatchObject({ status: 400, code: 'TRANSACTION_REFERENCE_REQUIRED' });
+
+    // HTTP endpoint validation rejection
+    const httpMissingRef = await request(app)
+      .post('/api/v1/suppliers/payments')
+      .set('Cookie', authCookie)
+      .set('x-csrf-token', csrfToken)
+      .set('Idempotency-Key', 'ref-req-http-check-01')
+      .send({
+        supplierId: '11111111-1111-4111-8111-111111111111',
+        amount: '250.00',
+        paymentMethod: 'cheque',
+      });
+    expect(httpMissingRef.status).toBe(400);
+    expect(httpMissingRef.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('14. Enforces archived supplier rules on edit, payment advances, partial allocation & post-archival bills', async () => {
+    const editArchivedClient = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM supplier_purchase_bills spb')) {
+          return {
+            rows: [
+              {
+                id: 90,
+                supplier_id: '11111111-1111-4111-8111-111111111111',
+                status: 'finalized',
+                supplier_archived_at: '2026-04-15T10:00:00.000Z',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    vi.spyOn(appPool, 'connect').mockResolvedValueOnce(editArchivedClient as any);
+    await expect(
+      suppliersService.updatePurchaseBill(90, {
+        invoiceNumber: 'INV-90',
+        invoiceDate: '2026-04-10',
+        items: [{ description: 'Item', quantity: '1', purchaseRate: '100.00' }],
+      })
+    ).rejects.toMatchObject({ status: 409, code: 'SUPPLIER_ARCHIVED' });
+
+    const archivedAdvClient = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM suppliers WHERE id = $1')) {
+          return {
+            rows: [{ id: '11111111-1111-4111-8111-111111111111', archived_at: '2026-04-15T10:00:00.000Z' }],
+            rowCount: 1,
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    vi.spyOn(appPool, 'connect').mockResolvedValueOnce(archivedAdvClient as any);
+    await expect(
+      suppliersService.createSupplierPayment({
+        supplierId: '11111111-1111-4111-8111-111111111111',
+        amount: '500.00',
+        paymentMethod: 'cash',
+        allocations: [],
+      })
+    ).rejects.toMatchObject({ status: 409, code: 'ARCHIVED_SUPPLIER_ADVANCE_BLOCKED' });
+
+    const archivedPartialClient = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM suppliers WHERE id = $1')) {
+          return {
+            rows: [{ id: '11111111-1111-4111-8111-111111111111', archived_at: '2026-04-15T10:00:00.000Z' }],
+            rowCount: 1,
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    vi.spyOn(appPool, 'connect').mockResolvedValueOnce(archivedPartialClient as any);
+    await expect(
+      suppliersService.createSupplierPayment({
+        supplierId: '11111111-1111-4111-8111-111111111111',
+        amount: '500.00',
+        paymentMethod: 'cash',
+        allocations: [{ purchaseBillId: 90, amount: '300.00' }],
+      })
+    ).rejects.toMatchObject({ status: 409, code: 'ARCHIVED_SUPPLIER_PARTIAL_ALLOCATION' });
+
+    const billAfterArchiveClient = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM supplier_payments sp')) {
+          return {
+            rows: [
+              {
+                id: 55,
+                receipt_number: 'SUP-PAY-0055',
+                supplier_id: '11111111-1111-4111-8111-111111111111',
+                amount: '500.00',
+                status: 'active',
+                supplier_archived_at: '2026-04-15T10:00:00.000Z',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('AS allocated_amount') && sql.includes('FROM supplier_payment_allocations')) {
+          return { rows: [{ allocated_amount: '0.00' }], rowCount: 1 };
+        }
+        if (sql.includes('FROM supplier_purchase_bills spb') && sql.includes('FOR UPDATE OF spb, s')) {
+          return {
+            rows: [
+              {
+                id: 91,
+                supplier_id: '11111111-1111-4111-8111-111111111111',
+                invoice_number: 'POST-ARC-91',
+                grand_total: '500.00',
+                status: 'finalized',
+                bill_created_at: '2026-04-16T09:00:00.000Z',
+                supplier_archived_at: '2026-04-15T10:00:00.000Z',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    vi.spyOn(appPool, 'connect').mockResolvedValueOnce(billAfterArchiveClient as any);
+    await expect(
+      suppliersService.allocateAdvancePayment(55, [{ purchaseBillId: 91, amount: '500.00' }])
+    ).rejects.toMatchObject({ status: 409, code: 'ARCHIVED_SUPPLIER_BILL_AFTER_ARCHIVE' });
+  });
+
+  it('15. Accounts for purchase_bill_cancellation in statement ledger, ordering & CSV export', () => {
+    const stmt = buildSupplierStatementLedger(
+      '1000.00', // priorPurchases
+      '300.00',  // priorPayments
+      [
+        {
+          entryType: 'purchase_bill_cancellation',
+          entryDate: '2026-04-10',
+          sortOrder: 3,
+          id: 4,
+          referenceNumber: 'INV-10',
+          description: 'Bill Cancellation (INV-10) — Wrong invoice',
+          amount: '200.00',
+          cancellationReason: 'Wrong invoice',
+          originalBillInvoiceNumber: 'INV-10',
+        },
+        {
+          entryType: 'payment_reversal',
+          entryDate: '2026-04-10',
+          sortOrder: 2,
+          id: 3,
+          referenceNumber: 'REV-SUP-PAY-0001',
+          description: 'Reversal of SUP-PAY-0001',
+          amount: '150.00',
+        },
+        {
+          entryType: 'purchase_bill',
+          entryDate: '2026-04-10',
+          sortOrder: 0,
+          id: 1,
+          referenceNumber: 'INV-10',
+          description: 'Purchase Bill INV-10 [Cancelled later]',
+          amount: '200.00',
+          billStatus: 'cancelled',
+        },
+        {
+          entryType: 'payment',
+          entryDate: '2026-04-10',
+          sortOrder: 1,
+          id: 2,
+          referenceNumber: 'SUP-PAY-0002',
+          description: 'Payment SUP-PAY-0002 (CASH)',
+          amount: '400.00',
+          paymentMethod: 'cash',
+          paymentStatus: 'active',
+        },
+      ],
+      '50.00',  // priorReversals
+      '250.00'  // priorCancellations -> opening = 1000 - 300 + 50 - 250 = 500.00
+    );
+
+    expect(stmt.openingBalance).toBe('500.00');
+    expect(stmt.entries.map((e) => e.entryType)).toEqual([
+      'purchase_bill',
+      'payment',
+      'payment_reversal',
+      'purchase_bill_cancellation',
+    ]);
+    expect(stmt.entries.map((e) => e.runningBalance)).toEqual([
+      '700.00', // 500 + 200
+      '300.00', // 700 - 400
+      '450.00', // 300 + 150
+      '250.00', // 450 - 200
+    ]);
+    expect(stmt.periodPurchases).toBe('200.00');
+    expect(stmt.periodPayments).toBe('400.00');
+    expect(stmt.periodReversals).toBe('150.00');
+    expect(stmt.periodCancellations).toBe('200.00');
+    expect(stmt.closingBalance).toBe('250.00');
+
+    const csv = suppliersService.formatStatementCsv({
+      supplier: {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'Shree Traders',
+        contactPerson: null,
+        phone: null,
+        email: null,
+        address: null,
+        state: null,
+        stateCode: null,
+        gstin: null,
+        notes: null,
+        archivedAt: null,
+        createdAt: '2026-04-01T00:00:00.000Z',
+        updatedAt: '2026-04-01T00:00:00.000Z',
+        lastActivity: '2026-04-10',
+        purchaseBillCount: 1,
+        paymentCount: 1,
+        totalPurchases: '1000.00',
+        totalPayments: '750.00',
+        allocatedPayments: '0.00',
+        unallocatedPayments: '750.00',
+        outstandingPayable: '250.00',
+        advanceBalance: '0.00',
+        netBalance: '250.00',
+      },
+      filters: { fromDate: '2026-04-10', toDate: '2026-04-30' },
+      ...stmt,
+    });
+    expect(csv).toContain('"Purchase Bill Cancellation"');
+    expect(csv).toContain('"350.00","600.00","250.00"');
+  });
+
+  it('16. Validates dashboard date range & payment search queries over HTTP API', async () => {
+    expect(
+      supplierDashboardQuerySchema.safeParse({ fromDate: '2026-05-01', toDate: '2026-04-01' }).success
+    ).toBe(false);
+    expect(
+      supplierDashboardQuerySchema.safeParse({ fromDate: '2026-04-01', toDate: '2026-04-30' }).success
+    ).toBe(true);
+    const parsedSearch = listSupplierPaymentsQuerySchema.safeParse({ search: '  UTR-42  ' });
+    expect(parsedSearch.success).toBe(true);
+    if (parsedSearch.success) {
+      expect(parsedSearch.data.search).toBe('UTR-42');
+    }
+
+    const dashSpy = vi.spyOn(suppliersService, 'getDashboard').mockResolvedValueOnce({
+      summary: {
+        totalSuppliers: 3,
+        activeSuppliers: 2,
+        totalPurchases: '5000.00',
+        totalPaymentsMade: '2000.00',
+        totalPaymentsReversed: '0.00',
+        totalOutstandingPayable: '3000.00',
+        totalAdvanceCredit: '0.00',
+        totalUnallocatedPayments: '500.00',
+        paymentMethodTotals: [
+          { paymentMethod: 'cash', amount: '500.00', count: 1 },
+          { paymentMethod: 'upi', amount: '1500.00', count: 1 },
+          { paymentMethod: 'bank_transfer', amount: '0.00', count: 0 },
+          { paymentMethod: 'cheque', amount: '0.00', count: 0 },
+          { paymentMethod: 'other', amount: '0.00', count: 0 },
+        ],
+      },
+      recentPayments: [],
+      recentPaymentsTotal: 0,
+    });
+
+    const dashHttp = await request(app)
+      .get('/api/v1/suppliers/dashboard?fromDate=2026-04-01&toDate=2026-04-30')
+      .set('Cookie', authCookie);
+    expect(dashHttp.status).toBe(200);
+    expect(dashSpy).toHaveBeenCalledWith({ fromDate: '2026-04-01', toDate: '2026-04-30' });
+    expect(dashHttp.body.data.summary.totalPurchases).toBe('5000.00');
+
+    const paySpy = vi.spyOn(suppliersService, 'listSupplierPayments').mockResolvedValueOnce({
+      payments: [],
+      total: 0,
+      pagination: { limit: 50, offset: 0, hasMore: false, nextOffset: null },
+    });
+    const payHttp = await request(app)
+      .get('/api/v1/suppliers/payments?search=UTR-42')
+      .set('Cookie', authCookie);
+    expect(payHttp.status).toBe(200);
+    expect(paySpy).toHaveBeenCalledWith(expect.objectContaining({ search: 'UTR-42' }));
   });
 });

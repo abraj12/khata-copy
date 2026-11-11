@@ -108,8 +108,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '018_numbering_and_legacy_data_integrity.sql',
         '019_customer_tax_integrity_and_idempotency.sql',
         '020_supplier_management.sql',
-      '021_supplier_financial_integrity.sql',
-        // Release #021 listed above
+        '021_supplier_financial_integrity.sql',
+        '022_supplier_operational_hardening.sql',
       ];
 
       await client.query(`
@@ -167,6 +167,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '019_customer_tax_integrity_and_idempotency.sql',
       '020_supplier_management.sql',
       '021_supplier_financial_integrity.sql',
+      '022_supplier_operational_hardening.sql',
     ]);
 
     const expectedTables = [
@@ -195,6 +196,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       'supplier_payment_allocations',
       'supplier_payment_reversals',
       'supplier_payment_allocation_reversals',
+      'supplier_purchase_bill_cancellations',
     ];
 
     const tablesRes = await pool.query(
@@ -1733,7 +1735,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       expect(supADetails.outstandingPayable).toBe('290.00');
       expect(statementA.openingBalance).toBe('0.00');
       expect(statementA.closingBalance).toBe('290.00');
-      expect(dashboard.kpis.totalOutstandingPayable).toBe('290.00');
+      expect(dashboard.summary.totalOutstandingPayable).toBe('290.00');
 
       // History-safe delete block & archive statement access
       await expect(suppliersService.deleteSupplier(supA.id)).rejects.toMatchObject({
@@ -2269,8 +2271,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
 
       const endDash = await suppliersService.getDashboard();
       expect(
-        new Decimal(endDash.kpis.totalOutstandingPayable)
-          .minus(new Decimal(baseDash.kpis.totalOutstandingPayable))
+        new Decimal(endDash.summary.totalOutstandingPayable)
+          .minus(new Decimal(baseDash.summary.totalOutstandingPayable))
           .toFixed(2)
       ).toBe('400.00');
 
@@ -2401,6 +2403,288 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       });
       expect(payOutOfRange.payments).toHaveLength(0);
       expect(payOutOfRange.total).toBe(205);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  // 29. Release #022 Operational Hardening, Cancellation Ledger, Triggers, Archived Settlement & SQL Dashboard
+  it('29. Release #022 Operational Hardening: Cancellation Ledger, Append-Only Triggers, Archived Settlement & SQL Dashboard', async () => {
+    vi.spyOn(appPool, 'connect').mockImplementation(() => pool.connect());
+    vi.spyOn(appPool, 'query').mockImplementation((...args: any[]) => (pool.query as any)(...args));
+
+    try {
+      const baseDash = await suppliersService.getDashboard();
+
+      // A. Idempotent 022 migration re-run & cancellation ledger backfill check
+      const mig022Sql = fs.readFileSync(
+        path.resolve(__dirname, '../../migrations/022_supplier_operational_hardening.sql'),
+        'utf-8'
+      );
+      await pool.query(mig022Sql);
+
+      // B. Historical purchase bill cancellation ledger & cross-month statement math
+      const cancelVendor = await suppliersService.createSupplier({
+        name: 'Cancellation Audit Vendor',
+        phone: '9822011223',
+      });
+      const aprBill = await suppliersService.createPurchaseBill({
+        supplierId: cancelVendor.id,
+        invoiceNumber: 'CAN-APR-2026',
+        invoiceDate: '2026-04-10',
+        items: [{ description: 'Switchgear Box', quantity: '2', purchaseRate: '1250.00' }],
+      });
+      const cancelledBill = await suppliersService.cancelPurchaseBill(
+        aprBill.id,
+        'Duplicate vendor invoice entry'
+      );
+      expect(cancelledBill.status).toBe('cancelled');
+
+      const cancelLedgerRows = await pool.query(
+        'SELECT * FROM supplier_purchase_bill_cancellations WHERE purchase_bill_id = $1',
+        [aprBill.id]
+      );
+      expect(cancelLedgerRows.rows).toHaveLength(1);
+      expect(Number(cancelLedgerRows.rows[0].original_grand_total)).toBe(2500);
+
+      // Append-only trigger enforcement (SQLSTATE 55000) on cancellation ledger
+      await expect(
+        pool.query(
+          `UPDATE supplier_purchase_bill_cancellations SET reason = 'Tampered' WHERE purchase_bill_id = $1`,
+          [aprBill.id]
+        )
+      ).rejects.toMatchObject({ code: '55000' });
+      await expect(
+        pool.query(
+          `DELETE FROM supplier_purchase_bill_cancellations WHERE purchase_bill_id = $1`,
+          [aprBill.id]
+        )
+      ).rejects.toMatchObject({ code: '55000' });
+
+      // April period preserves historical debit; post-April period shows opening +2500 and cancellation credit -2500
+      const aprilStmt = await suppliersService.getSupplierStatement(cancelVendor.id, {
+        fromDate: '2026-04-01',
+        toDate: '2026-04-30',
+      });
+      expect(aprilStmt.periodPurchases).toBe('2500.00');
+      expect(aprilStmt.closingBalance).toBe('2500.00');
+
+      const postAprilStmt = await suppliersService.getSupplierStatement(cancelVendor.id, {
+        fromDate: '2026-05-01',
+      });
+      expect(postAprilStmt.openingBalance).toBe('2500.00');
+      expect(postAprilStmt.periodCancellations).toBe('2500.00');
+      expect(postAprilStmt.closingBalance).toBe('0.00');
+
+      const fullCancelStmt = await suppliersService.getSupplierStatement(cancelVendor.id, {});
+      expect(fullCancelStmt.closingBalance).toBe('0.00');
+      expect(fullCancelStmt.entries.map((e) => e.entryType)).toEqual([
+        'purchase_bill',
+        'purchase_bill_cancellation',
+      ]);
+      expect(suppliersService.formatStatementCsv(fullCancelStmt)).toContain(
+        '"Purchase Bill Cancellation"'
+      );
+
+      // C. Archived supplier settlement + advance allocation + digital payment ref + append-only reversal triggers
+      const arcVendor = await suppliersService.createSupplier({
+        name: 'Archived Settlement Vendor',
+        phone: '9833044556',
+      });
+      const arcBill1 = await suppliersService.createPurchaseBill({
+        supplierId: arcVendor.id,
+        invoiceNumber: 'ARC-BILL-01',
+        invoiceDate: '2026-04-05',
+        items: [{ description: 'LED Floodlight', quantity: '1', purchaseRate: '1200.00' }],
+      });
+      const arcBill2 = await suppliersService.createPurchaseBill({
+        supplierId: arcVendor.id,
+        invoiceNumber: 'ARC-BILL-02',
+        invoiceDate: '2026-04-06',
+        items: [{ description: 'Cable Coil', quantity: '1', purchaseRate: '400.00' }],
+      });
+
+      // Digital payment requires non-empty reference
+      await expect(
+        suppliersService.createSupplierPayment({
+          supplierId: arcVendor.id,
+          paymentDate: '2026-04-07',
+          amount: '800.00',
+          paymentMethod: 'upi',
+          transactionReference: '   ',
+        })
+      ).rejects.toMatchObject({ status: 400, code: 'TRANSACTION_REFERENCE_REQUIRED' });
+
+      // Record an active digital advance payment with 200 allocated to ARC-BILL-01 (600 unallocated left)
+      const advPay = await suppliersService.createSupplierPayment({
+        supplierId: arcVendor.id,
+        paymentDate: '2026-04-07',
+        amount: '800.00',
+        paymentMethod: 'bank_transfer',
+        transactionReference: '  UTR-REL22-01  ',
+        allocations: [{ purchaseBillId: arcBill1.id, amount: '200.00' }],
+      });
+
+      // Case-insensitive duplicate active reference is blocked
+      await expect(
+        suppliersService.createSupplierPayment({
+          supplierId: arcVendor.id,
+          paymentDate: '2026-04-08',
+          amount: '100.00',
+          paymentMethod: 'bank_transfer',
+          transactionReference: 'utr-rel22-01',
+        })
+      ).rejects.toMatchObject({ status: 409, code: 'SUPPLIER_PAYMENT_REFERENCE_DUPLICATE' });
+
+      // Search & out-of-range pagination on listSupplierPayments with suppliers JOIN
+      const searchHits = await suppliersService.listSupplierPayments({
+        search: 'Archived Settlement',
+        limit: 20,
+        offset: 0,
+      });
+      expect(searchHits.payments.some((p) => p.id === advPay.id)).toBe(true);
+      const searchOutOfRange = await suppliersService.listSupplierPayments({
+        search: 'Archived Settlement',
+        limit: 20,
+        offset: 500,
+      });
+      expect(searchOutOfRange.payments).toHaveLength(0);
+      expect(searchOutOfRange.total).toBe(searchHits.total);
+
+      // Also verify append-only triggers on payment_reversals & allocation_reversals
+      const revTempPay = await suppliersService.createSupplierPayment({
+        supplierId: arcVendor.id,
+        paymentDate: '2026-04-07',
+        amount: '150.00',
+        paymentMethod: 'upi',
+        transactionReference: 'UPI-REV-22',
+        allocations: [{ purchaseBillId: arcBill2.id, amount: '150.00' }],
+      });
+      await suppliersService.reversePaymentAllocation(
+        revTempPay.id,
+        revTempPay.allocations[0].allocationId,
+        {
+          amount: '50.00',
+          reason: 'Test partial allocation reversal trigger',
+        }
+      );
+      await suppliersService.reverseSupplierPayment(
+        revTempPay.id,
+        'Mistaken entry trigger check'
+      );
+
+      await expect(
+        pool.query(
+          `UPDATE supplier_payment_reversals SET reason = 'Mutated' WHERE payment_id = $1`,
+          [revTempPay.id]
+        )
+      ).rejects.toMatchObject({ code: '55000' });
+      await expect(
+        pool.query(
+          `DELETE FROM supplier_payment_allocation_reversals WHERE payment_id = $1`,
+          [revTempPay.id]
+        )
+      ).rejects.toMatchObject({ code: '55000' });
+
+      // Archive the supplier after a short timestamp gap
+      await new Promise((r) => setTimeout(r, 25));
+      await suppliersService.archiveSupplier(arcVendor.id);
+
+      // Creating or editing bills is blocked while archived
+      await expect(
+        suppliersService.createPurchaseBill({
+          supplierId: arcVendor.id,
+          invoiceNumber: 'ARC-NEW-BLOCKED',
+          items: [{ description: 'Item', quantity: '1', purchaseRate: '100.00' }],
+        })
+      ).rejects.toMatchObject({ status: 409, code: 'SUPPLIER_ARCHIVED' });
+      await expect(
+        suppliersService.updatePurchaseBill(arcBill1.id, {
+          invoiceNumber: 'ARC-BILL-01',
+          invoiceDate: '2026-04-05',
+          items: [{ description: 'Edited', quantity: '1', purchaseRate: '1200.00' }],
+        })
+      ).rejects.toMatchObject({ status: 409, code: 'SUPPLIER_ARCHIVED' });
+
+      // Archived supplier blocks new unallocated advance or partial allocation
+      await expect(
+        suppliersService.createSupplierPayment({
+          supplierId: arcVendor.id,
+          amount: '100.00',
+          paymentMethod: 'cash',
+          allocations: [],
+        })
+      ).rejects.toMatchObject({ status: 409, code: 'ARCHIVED_SUPPLIER_ADVANCE_BLOCKED' });
+
+      await expect(
+        suppliersService.createSupplierPayment({
+          supplierId: arcVendor.id,
+          amount: '500.00',
+          paymentMethod: 'cash',
+          allocations: [{ purchaseBillId: arcBill2.id, amount: '400.00' }],
+        })
+      ).rejects.toMatchObject({ status: 409, code: 'ARCHIVED_SUPPLIER_PARTIAL_ALLOCATION' });
+
+      // Existing unallocated 600 advance CAN be allocated to historical bill ARC-BILL-01 (1000 left -> 400 left)
+      const allocatedOnArchived = await suppliersService.allocateAdvancePayment(advPay.id, [
+        { purchaseBillId: arcBill1.id, amount: '600.00' },
+      ]);
+      expect(allocatedOnArchived.unallocatedAmount).toBe('0.00');
+
+      // Full settlement payment against remaining balances (ARC-BILL-01: 400 + ARC-BILL-02: 400 = 800) SUCCEEDS
+      const fullSettle = await suppliersService.createSupplierPayment({
+        supplierId: arcVendor.id,
+        paymentDate: '2026-04-12',
+        amount: '800.00',
+        paymentMethod: 'cheque',
+        transactionReference: 'CHQ-SETTLE-22',
+        allocations: [
+          { purchaseBillId: arcBill1.id, amount: '400.00' },
+          { purchaseBillId: arcBill2.id, amount: '400.00' },
+        ],
+      });
+      expect(fullSettle.allocatedAmount).toBe('800.00');
+
+      const settledArchivedSupplier = await suppliersService.getSupplierById(arcVendor.id);
+      expect(settledArchivedSupplier.outstandingPayable).toBe('0.00');
+
+      // Post-archival bill row cannot receive advance allocation
+      const futureBillRes = await pool.query(
+        `INSERT INTO supplier_purchase_bills (
+          supplier_id, invoice_number, normalized_invoice_number, invoice_date,
+          subtotal_amount, discount_amount, taxable_amount, gst_rate, gst_amount, grand_total, created_at
+        ) VALUES ($1, 'POST-ARC-99', 'post-arc-99', '2026-04-20', 200.00, 0, 200.00, 0, 0, 200.00, NOW() + interval '1 day')
+        RETURNING id`,
+        [arcVendor.id]
+      );
+      const postArcBillId = Number(futureBillRes.rows[0].id);
+      await expect(
+        suppliersService.createSupplierPayment({
+          supplierId: arcVendor.id,
+          paymentDate: '2026-04-21',
+          amount: '200.00',
+          paymentMethod: 'cash',
+          allocations: [{ purchaseBillId: postArcBillId, amount: '200.00' }],
+        })
+      ).rejects.toMatchObject({ status: 409, code: 'ARCHIVED_SUPPLIER_BILL_AFTER_ARCHIVE' });
+
+      // D. SQL-Aggregated Dashboard verification & date filtering
+      const periodDash = await suppliersService.getDashboard({
+        fromDate: '2026-04-05',
+        toDate: '2026-04-12',
+      });
+      expect(periodDash.recentPayments.length).toBeGreaterThanOrEqual(2);
+      expect(periodDash.recentPayments.length).toBeLessThanOrEqual(15);
+      expect(periodDash.recentPayments.some((p) => p.id === fullSettle.id)).toBe(true);
+      expect(periodDash.summary.totalSuppliers).toBeGreaterThanOrEqual(205);
+
+      const allTimeDash = await suppliersService.getDashboard();
+      // Only added +200.00 postArcBillId open payable compared to baseDash (arcVendor 1600 bills fully paid by 800+800, cancelVendor net 0)
+      expect(
+        new Decimal(allTimeDash.summary.totalOutstandingPayable)
+          .minus(new Decimal(baseDash.summary.totalOutstandingPayable))
+          .toFixed(2)
+      ).toBe('200.00');
     } finally {
       vi.restoreAllMocks();
     }

@@ -1,12 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Archive,
   CheckCircle2,
+  CreditCard,
   Edit2,
   FileSpreadsheet,
   Loader2,
   Plus,
+  Receipt,
   RotateCcw,
   Search,
   Trash2,
@@ -31,6 +33,8 @@ const SUPPLIER_PAGE_LIMIT = 50;
 export interface SuppliersViewProps {
   onOpenSupplierDetails: (supplierId: string) => void;
   onOpenStatement: (supplierId: string) => void;
+  onNewPurchaseBill?: (supplierId: string) => void;
+  onNewPayment?: (supplierId: string) => void;
   onDataChanged: () => void;
   openCreateModalSignal?: number;
   refreshSignal?: number;
@@ -51,6 +55,8 @@ const EMPTY_FORM: CreateSupplierPayload = {
 export const SuppliersView: React.FC<SuppliersViewProps> = ({
   onOpenSupplierDetails,
   onOpenStatement,
+  onNewPurchaseBill,
+  onNewPayment,
   onDataChanged,
   openCreateModalSignal = 0,
   refreshSignal = 0,
@@ -63,6 +69,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'active' | 'archived' | 'all'>('active');
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const requestIdRef = useRef(0);
 
   // Add/Edit Modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -76,6 +83,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
     status = statusFilter,
     targetOffset = offset
   ) => {
+    const reqId = ++requestIdRef.current;
     setLoading(true);
     try {
       const res = await listSuppliersApi({
@@ -84,15 +92,19 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
         limit: SUPPLIER_PAGE_LIMIT,
         offset: targetOffset,
       });
+      if (reqId !== requestIdRef.current) return;
       setSuppliers(res.suppliers);
       setTotalSuppliers(res.total);
       setHasMore(
         res.pagination?.hasMore ?? targetOffset + res.suppliers.length < res.total
       );
     } catch (err: any) {
+      if (reqId !== requestIdRef.current) return;
       setNotice({ type: 'error', text: err?.message || 'Failed to load suppliers.' });
     } finally {
-      setLoading(false);
+      if (reqId === requestIdRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -318,147 +330,293 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
           No suppliers found. Click &ldquo;Add New Supplier&rdquo; to create your first supplier record.
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {suppliers.map((s) => {
-            const net = safeDecimal(s.netBalance);
-            const hasHistory = s.purchaseBillCount > 0 || s.paymentCount > 0;
-            return (
-              <div
-                key={s.id}
-                className="neu-card p-4 sm:p-5 rounded-2xl flex flex-col justify-between gap-3"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => onOpenSupplierDetails(s.id)}
-                      className="text-left text-base font-extrabold text-[var(--khata-text)] hover:text-[var(--khata-accent)]"
-                    >
-                      {s.name}
-                    </button>
-                    <div className="text-xs text-[var(--khata-text-muted)] mt-0.5 space-y-0.5">
-                      {s.contactPerson && <div>Contact: {s.contactPerson}</div>}
-                      {s.phone && <div className="font-mono">{s.phone}</div>}
-                      {s.gstin && <div className="font-mono">GSTIN: {s.gstin}</div>}
-                      {s.state && (
-                        <div>
-                          State: {s.state} {s.stateCode ? `(${s.stateCode})` : ''}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    {s.archivedAt ? (
-                      <span className="neu-badge neu-badge-warning text-[10px]">
-                        <Archive className="w-3 h-3" /> Archived
-                      </span>
-                    ) : (
-                      <span className="neu-badge neu-badge-success text-[10px]">Active</span>
-                    )}
-                    <div className="mt-2">
-                      <span className="text-[10px] uppercase text-[var(--khata-text-muted)] block">
-                        {net.greaterThan(0)
-                          ? 'Payable'
-                          : net.lessThan(0)
-                            ? 'Advance Credit'
-                            : 'Balance'}
-                      </span>
-                      <span
-                        className={`font-mono font-black text-sm ${
-                          net.greaterThan(0)
-                            ? 'text-rose-600 dark:text-rose-400'
-                            : net.lessThan(0)
-                              ? 'text-emerald-600 dark:text-emerald-400'
-                              : 'text-[var(--khata-text)]'
-                        }`}
-                      >
-                        {formatAbsRupees(net)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
+        <div className="space-y-4">
+          {/* Compact Operational Table on Desktop */}
+          <div className="hidden lg:block neu-card rounded-2xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-[var(--khata-surface-inset)]/60 text-[10px] uppercase tracking-wider text-[var(--khata-text-muted)]">
+                  <tr>
+                    <th className="text-left px-4 py-3 font-bold">Supplier</th>
+                    <th className="text-left px-4 py-3 font-bold">Mobile</th>
+                    <th className="text-right px-4 py-3 font-bold">Outstanding / Advance</th>
+                    <th className="text-left px-4 py-3 font-bold">Last Activity</th>
+                    <th className="text-right px-4 py-3 font-bold">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--khata-border)]/60">
+                  {suppliers.map((s) => {
+                    const net = safeDecimal(s.netBalance);
+                    const hasHistory = s.purchaseBillCount > 0 || s.paymentCount > 0;
+                    const canPayOrSettle =
+                      !s.archivedAt || safeDecimal(s.outstandingPayable).greaterThan(0);
+                    return (
+                      <tr key={s.id} className="hover:bg-[var(--khata-surface-inset)]/25">
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => onOpenSupplierDetails(s.id)}
+                              className="text-left text-xs font-extrabold text-[var(--khata-text)] hover:text-[var(--khata-accent)]"
+                            >
+                              {s.name}
+                            </button>
+                            {s.archivedAt && (
+                              <span className="neu-badge neu-badge-warning text-[9px]">
+                                Archived
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-[var(--khata-text-muted)]">
+                            {s.gstin
+                              ? `GSTIN: ${s.gstin}`
+                              : s.contactPerson
+                                ? `Contact: ${s.contactPerson}`
+                                : `Bills: ${s.purchaseBillCount} · Payments: ${s.paymentCount}`}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 font-mono text-[var(--khata-text)]">
+                          {s.phone || '—'}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="inline-flex flex-col items-end gap-0.5">
+                            {net.greaterThan(0) ? (
+                              <span className="px-2 py-0.5 rounded bg-rose-500/12 text-rose-600 dark:text-rose-400 font-mono font-bold">
+                                Payable {formatAbsRupees(net)}
+                              </span>
+                            ) : net.lessThan(0) ? (
+                              <span className="px-2 py-0.5 rounded bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 font-mono font-bold">
+                                Advance {formatAbsRupees(net)}
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded bg-[var(--khata-surface-inset)] text-[var(--khata-text-muted)] font-mono font-semibold">
+                                Settled ₹0.00
+                              </span>
+                            )}
+                            {safeDecimal(s.unallocatedPayments).greaterThan(0) && (
+                              <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold">
+                                Unallocated: {formatAbsRupees(s.unallocatedPayments)}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 font-mono text-[11px] text-[var(--khata-text-muted)]">
+                          {s.lastActivity || 'No activity'}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => onOpenSupplierDetails(s.id)}
+                              className="neu-btn-secondary text-[11px] px-2.5 py-1 min-h-0 font-bold"
+                            >
+                              Details
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onOpenStatement(s.id)}
+                              className="neu-btn-secondary text-[11px] px-2.5 py-1 min-h-0 font-bold inline-flex items-center gap-1"
+                              title="Supplier Statement"
+                            >
+                              <FileSpreadsheet className="w-3 h-3 text-[var(--khata-accent)]" />
+                              <span>Statement</span>
+                            </button>
+                            {!s.archivedAt && onNewPurchaseBill && (
+                              <button
+                                type="button"
+                                onClick={() => onNewPurchaseBill(s.id)}
+                                className="neu-btn-secondary text-[11px] px-2.5 py-1 min-h-0 font-bold inline-flex items-center gap-1"
+                                title="Record Purchase Bill"
+                              >
+                                <Receipt className="w-3 h-3 text-[var(--khata-accent)]" />
+                                <span>+ Bill</span>
+                              </button>
+                            )}
+                            {canPayOrSettle && onNewPayment && (
+                              <button
+                                type="button"
+                                onClick={() => onNewPayment(s.id)}
+                                className="neu-btn-secondary text-[11px] px-2.5 py-1 min-h-0 font-bold inline-flex items-center gap-1"
+                                title={s.archivedAt ? 'Settle Outstanding Bills' : 'Record Payment'}
+                              >
+                                <CreditCard className="w-3 h-3 text-emerald-600" />
+                                <span>{s.archivedAt ? 'Settle' : 'Pay'}</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => openEditModal(s)}
+                              className="p-1.5 rounded-lg bg-[var(--khata-surface-inset)] hover:bg-[var(--khata-accent)]/15 text-[var(--khata-text)] transition"
+                              title="Edit Supplier"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleArchiveToggle(s)}
+                              className="p-1.5 rounded-lg bg-[var(--khata-surface-inset)] hover:bg-amber-500/15 text-amber-700 dark:text-amber-300 transition"
+                              title={s.archivedAt ? 'Restore Supplier' : 'Archive Supplier'}
+                            >
+                              {s.archivedAt ? (
+                                <RotateCcw className="w-3.5 h-3.5" />
+                              ) : (
+                                <Archive className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                            {!hasHistory && (
+                              <button
+                                type="button"
+                                onClick={() => handlePermanentDelete(s)}
+                                className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 transition"
+                                title="Delete Unused Supplier"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
 
-                <div className="grid grid-cols-3 gap-2 pt-2 border-t border-[var(--khata-border)]/60 text-xs">
-                  <div>
-                    <span className="text-[10px] text-[var(--khata-text-muted)] block">
-                      Purchases ({s.purchaseBillCount})
-                    </span>
-                    <span className="font-mono font-bold">{formatAbsRupees(s.totalPurchases)}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-[var(--khata-text-muted)] block">
-                      Payments ({s.paymentCount})
-                    </span>
-                    <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                      {formatAbsRupees(s.totalPayments)}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-[var(--khata-text-muted)] block">
-                      Unallocated
-                    </span>
-                    <span className="font-mono font-bold">
-                      {formatAbsRupees(s.unallocatedPayments)}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[var(--khata-border)]/60">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => onOpenSupplierDetails(s.id)}
-                      className="neu-btn-secondary text-xs px-3 py-1.5 min-h-0 font-bold"
-                    >
-                      View Details
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onOpenStatement(s.id)}
-                      className="neu-btn-secondary text-xs px-3 py-1.5 min-h-0 font-bold inline-flex items-center gap-1"
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
-                      <span>Statement</span>
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => openEditModal(s)}
-                      className="p-2 rounded-lg bg-[var(--khata-surface-inset)] hover:bg-[var(--khata-accent)]/15 text-[var(--khata-text)] transition"
-                      title="Edit Supplier"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleArchiveToggle(s)}
-                      className="p-2 rounded-lg bg-[var(--khata-surface-inset)] hover:bg-amber-500/15 text-amber-700 dark:text-amber-300 transition"
-                      title={s.archivedAt ? 'Restore Supplier' : 'Archive Supplier'}
-                    >
-                      {s.archivedAt ? (
-                        <RotateCcw className="w-3.5 h-3.5" />
-                      ) : (
-                        <Archive className="w-3.5 h-3.5" />
-                      )}
-                    </button>
-                    {!hasHistory && (
+          {/* Mobile & Tablet Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:hidden gap-4">
+            {suppliers.map((s) => {
+              const net = safeDecimal(s.netBalance);
+              const hasHistory = s.purchaseBillCount > 0 || s.paymentCount > 0;
+              const canPayOrSettle =
+                !s.archivedAt || safeDecimal(s.outstandingPayable).greaterThan(0);
+              return (
+                <div
+                  key={s.id}
+                  className="neu-card p-4 sm:p-5 rounded-2xl flex flex-col justify-between gap-3"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
                       <button
                         type="button"
-                        onClick={() => handlePermanentDelete(s)}
-                        className="p-2 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 transition"
-                        title="Delete Unused Supplier"
+                        onClick={() => onOpenSupplierDetails(s.id)}
+                        className="text-left text-base font-extrabold text-[var(--khata-text)] hover:text-[var(--khata-accent)]"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        {s.name}
                       </button>
-                    )}
+                      <div className="text-xs text-[var(--khata-text-muted)] mt-0.5 space-y-0.5">
+                        {s.phone && <div className="font-mono">{s.phone}</div>}
+                        {s.gstin && <div className="font-mono">GSTIN: {s.gstin}</div>}
+                        <div>Last activity: {s.lastActivity || 'None'}</div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      {s.archivedAt ? (
+                        <span className="neu-badge neu-badge-warning text-[10px]">
+                          <Archive className="w-3 h-3" /> Archived
+                        </span>
+                      ) : (
+                        <span className="neu-badge neu-badge-success text-[10px]">Active</span>
+                      )}
+                      <div className="mt-2">
+                        <span className="text-[10px] uppercase text-[var(--khata-text-muted)] block">
+                          {net.greaterThan(0)
+                            ? 'Payable'
+                            : net.lessThan(0)
+                              ? 'Advance Credit'
+                              : 'Settled'}
+                        </span>
+                        <span
+                          className={`font-mono font-black text-sm ${
+                            net.greaterThan(0)
+                              ? 'text-rose-600 dark:text-rose-400'
+                              : net.lessThan(0)
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-[var(--khata-text)]'
+                          }`}
+                        >
+                          {formatAbsRupees(net)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[var(--khata-border)]/60">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onOpenSupplierDetails(s.id)}
+                        className="neu-btn-secondary text-xs px-2.5 py-1.5 min-h-0 font-bold"
+                      >
+                        Details
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onOpenStatement(s.id)}
+                        className="neu-btn-secondary text-xs px-2.5 py-1.5 min-h-0 font-bold inline-flex items-center gap-1"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
+                        <span>Statement</span>
+                      </button>
+                      {!s.archivedAt && onNewPurchaseBill && (
+                        <button
+                          type="button"
+                          onClick={() => onNewPurchaseBill(s.id)}
+                          className="neu-btn-secondary text-xs px-2.5 py-1.5 min-h-0 font-bold"
+                        >
+                          + Bill
+                        </button>
+                      )}
+                      {canPayOrSettle && onNewPayment && (
+                        <button
+                          type="button"
+                          onClick={() => onNewPayment(s.id)}
+                          className="neu-btn-secondary text-xs px-2.5 py-1.5 min-h-0 font-bold"
+                        >
+                          {s.archivedAt ? 'Settle' : 'Pay'}
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(s)}
+                        className="p-2 rounded-lg bg-[var(--khata-surface-inset)] hover:bg-[var(--khata-accent)]/15 text-[var(--khata-text)] transition"
+                        title="Edit Supplier"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleArchiveToggle(s)}
+                        className="p-2 rounded-lg bg-[var(--khata-surface-inset)] hover:bg-amber-500/15 text-amber-700 dark:text-amber-300 transition"
+                        title={s.archivedAt ? 'Restore Supplier' : 'Archive Supplier'}
+                      >
+                        {s.archivedAt ? (
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        ) : (
+                          <Archive className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                      {!hasHistory && (
+                        <button
+                          type="button"
+                          onClick={() => handlePermanentDelete(s)}
+                          className="p-2 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 transition"
+                          title="Delete Unused Supplier"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
-          <div className="md:col-span-2 neu-card p-3 sm:p-4 rounded-2xl">
+              );
+            })}
+          </div>
+
+          <div className="neu-card p-3 sm:p-4 rounded-2xl">
             <SupplierPaginationBar
               offset={offset}
               limit={SUPPLIER_PAGE_LIMIT}

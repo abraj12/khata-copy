@@ -327,6 +327,7 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
         isOpen={isCameraOpen}
         onClose={() => setIsCameraOpen(false)}
         title="Scan Product Barcode"
+        continuousScan={true}
         onProductFound={(product) => applyResolvedProduct(product)}
         onCreateWithBarcode={(code) => {
           setIsCameraOpen(false);

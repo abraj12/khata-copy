@@ -22,11 +22,13 @@ import {
   createSupplierPaymentApi,
   formatAbsRupees,
   getSupplierPaymentApi,
+  getSupplierPaymentReferenceFieldMeta,
   listAllOpenPurchaseBillsForSupplierApi,
   listAllSuppliersApi,
   listSupplierPaymentsApi,
   reverseSupplierAllocationApi,
   reverseSupplierPaymentApi,
+  validateSupplierPaymentFormInput,
 } from './suppliersApi.js';
 import { SupplierPaginationBar } from './SupplierPaginationBar.js';
 import type {
@@ -75,9 +77,11 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
   const [supplierFilter, setSupplierFilter] = useState(initialSupplierFilter);
   const [methodFilter, setMethodFilter] = useState<SupplierPaymentMethod | ''>('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'reversed'>('all');
+  const [search, setSearch] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const requestIdRef = useRef(0);
 
   // Create Payment Modal
   const [createOpen, setCreateOpen] = useState(false);
@@ -86,6 +90,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
   const [amount, setAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<SupplierPaymentMethod>('bank_transfer');
   const [transactionReference, setTransactionReference] = useState('');
+  const [refFieldError, setRefFieldError] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
   const [openBills, setOpenBills] = useState<PurchaseBillSummary[]>([]);
   const [billSearchQuery, setBillSearchQuery] = useState('');
@@ -159,26 +164,32 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
   };
 
   const loadPayments = async (targetOffset = offset) => {
+    const reqId = ++requestIdRef.current;
     setLoading(true);
     try {
       const res = await listSupplierPaymentsApi({
         supplierId: supplierFilter || undefined,
         paymentMethod: methodFilter || undefined,
         status: statusFilter,
+        search: search.trim() || undefined,
         fromDate: fromDate || undefined,
         toDate: toDate || undefined,
         limit: PAYMENTS_PAGE_LIMIT,
         offset: targetOffset,
       });
+      if (reqId !== requestIdRef.current) return;
       setPayments(res.payments);
       setTotalPayments(res.total);
       setHasMore(
         res.pagination?.hasMore ?? targetOffset + res.payments.length < res.total
       );
     } catch (err: any) {
+      if (reqId !== requestIdRef.current) return;
       setNotice({ type: 'error', text: err?.message || 'Failed to load supplier payments.' });
     } finally {
-      setLoading(false);
+      if (reqId === requestIdRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -187,8 +198,11 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
   }, []);
 
   useEffect(() => {
-    void loadPayments(offset);
-  }, [supplierFilter, methodFilter, statusFilter, fromDate, toDate, offset]);
+    const timer = setTimeout(() => {
+      void loadPayments(offset);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [supplierFilter, methodFilter, statusFilter, search, fromDate, toDate, offset]);
 
   useEffect(() => {
     if (openCreateSignal > 0) {
@@ -197,6 +211,16 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
   }, [openCreateSignal]);
 
   const activeSuppliers = allSuppliers.filter((s) => !s.archivedAt);
+  const selectablePaymentSuppliers = allSuppliers.filter(
+    (s) =>
+      !s.archivedAt ||
+      s.id === formSupplierId ||
+      safeDecimal(s.outstandingPayable).greaterThan(0)
+  );
+  const selectedCreateSupplier =
+    allSuppliers.find((s) => s.id === formSupplierId) || null;
+  const isCreateSupplierArchived = Boolean(selectedCreateSupplier?.archivedAt);
+  const refFieldMeta = getSupplierPaymentReferenceFieldMeta(paymentMethod);
 
   const loadOpenBillsForSupplier = async (supId: string) => {
     if (!supId) {
@@ -222,6 +246,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
     setAmount('');
     setPaymentMethod('bank_transfer');
     setTransactionReference('');
+    setRefFieldError(null);
     setNotes('');
     setBillSearchQuery('');
     setAllocMap({});
@@ -288,6 +313,24 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
 
     if (totalAllocatedInput.greaterThan(parsedPayAmount)) {
       setFormError('Total allocated amount cannot exceed total payment amount.');
+      return;
+    }
+
+    const validationResult = validateSupplierPaymentFormInput({
+      supplierArchivedAt: selectedCreateSupplier?.archivedAt ?? null,
+      amount: parsedPayAmount.toFixed(2),
+      paymentMethod,
+      transactionReference,
+      allocatedAmountTotal: totalAllocatedInput.toFixed(2),
+      allocationCount: allocationsPayload.length,
+    });
+    if (validationResult.referenceError) {
+      setRefFieldError(validationResult.referenceError);
+      setFormError(validationResult.referenceError);
+      return;
+    }
+    if (validationResult.allocationError) {
+      setFormError(validationResult.allocationError);
       return;
     }
 
@@ -571,7 +614,21 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
             </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5">
+            <div className="relative lg:col-span-2">
+              <Search className="w-3.5 h-3.5 text-[var(--khata-text-muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setOffset(0);
+                }}
+                placeholder="Search receipt number, supplier, UTR or cheque number..."
+                className="neu-input w-full pl-8 pr-2.5 py-1.5 text-xs"
+              />
+            </div>
+
             <select
               value={supplierFilter}
               onChange={(e) => {
@@ -627,6 +684,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                 setOffset(0);
               }}
               className="neu-input text-xs font-mono"
+              aria-label="Filter payments from date"
             />
             <input
               type="date"
@@ -636,6 +694,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                 setOffset(0);
               }}
               className="neu-input text-xs font-mono"
+              aria-label="Filter payments to date"
             />
           </div>
         </div>
@@ -648,7 +707,9 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
           </div>
         ) : payments.length === 0 ? (
           <div className="neu-card p-10 rounded-2xl text-center text-xs text-[var(--khata-text-muted)]">
-            No supplier payments found.
+            {search.trim() || supplierFilter || methodFilter || statusFilter !== 'all' || fromDate || toDate
+              ? 'No supplier payments match your search or filter criteria.'
+              : 'No supplier payments found.'}
           </div>
         ) : (
           <div className="neu-card p-4 rounded-2xl space-y-3">
@@ -746,8 +807,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                               <span>Receipt</span>
                             </button>
                             {!isReversed &&
-                              safeDecimal(p.unallocatedAmount).greaterThan(0) &&
-                              !p.supplierArchivedAt && (
+                              safeDecimal(p.unallocatedAmount).greaterThan(0) && (
                                 <button
                                   type="button"
                                   onClick={() => void openAllocateAdvanceModal(p)}
@@ -829,8 +889,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                         View / Print Receipt
                       </button>
                       {!isReversed &&
-                        safeDecimal(p.unallocatedAmount).greaterThan(0) &&
-                        !p.supplierArchivedAt && (
+                        safeDecimal(p.unallocatedAmount).greaterThan(0) && (
                           <button
                             type="button"
                             onClick={() => void openAllocateAdvanceModal(p)}
@@ -908,9 +967,11 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                     className="neu-input w-full text-xs font-semibold"
                   >
                     <option value="">-- Select Supplier --</option>
-                    {activeSuppliers.map((s) => (
+                    {selectablePaymentSuppliers.map((s) => (
                       <option key={s.id} value={s.id}>
-                        {s.name} (Payable: {formatAbsRupees(s.outstandingPayable)})
+                        {s.name}
+                        {s.archivedAt ? ' [Archived — Full Bill Settlement]' : ''} (Payable:{' '}
+                        {formatAbsRupees(s.outstandingPayable)})
                       </option>
                     ))}
                   </select>
@@ -929,6 +990,12 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                   />
                 </div>
               </div>
+
+              {isCreateSupplierArchived && (
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-800 dark:text-amber-300">
+                  <strong>Archived Supplier Settlement:</strong> This supplier is archived. The entire payment amount must be allocated across eligible historical finalized bills created before archival; new unallocated advances are not permitted.
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
@@ -952,7 +1019,10 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                   </label>
                   <select
                     value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value as SupplierPaymentMethod)}
+                    onChange={(e) => {
+                      setPaymentMethod(e.target.value as SupplierPaymentMethod);
+                      setRefFieldError(null);
+                    }}
                     className="neu-input w-full text-xs font-semibold"
                   >
                     {PAYMENT_METHODS.map((m) => (
@@ -965,15 +1035,27 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
 
                 <div>
                   <label className="block text-[11px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
-                    Reference / UTR / Cheque #
+                    {refFieldMeta.label}{' '}
+                    {refFieldMeta.required && <span className="text-rose-500">*</span>}
                   </label>
                   <input
                     type="text"
+                    required={refFieldMeta.required}
                     value={transactionReference}
-                    onChange={(e) => setTransactionReference(e.target.value)}
-                    placeholder="Optional"
-                    className="neu-input w-full text-xs font-mono"
+                    onChange={(e) => {
+                      setTransactionReference(e.target.value);
+                      if (refFieldError) setRefFieldError(null);
+                    }}
+                    placeholder={refFieldMeta.placeholder}
+                    className={`neu-input w-full text-xs font-mono ${
+                      refFieldError ? 'border-rose-500 ring-1 ring-rose-500/40' : ''
+                    }`}
                   />
+                  {refFieldError && (
+                    <p className="text-[11px] text-rose-600 dark:text-rose-400 font-semibold mt-1">
+                      {refFieldError}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -995,7 +1077,9 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <h4 className="text-xs font-extrabold uppercase text-[var(--khata-text)]">
-                      Allocate to Purchase Bills (Optional — Leave blank for Advance)
+                      {isCreateSupplierArchived
+                        ? 'Allocate Full Payment to Historical Bills (Required)'
+                        : 'Allocate to Purchase Bills (Optional — Leave blank for Advance)'}
                     </h4>
                     <p className="text-[11px] text-[var(--khata-text-muted)]">
                       Allocated: {formatAbsRupees(totalAllocatedInput)} · Unallocated Advance:{' '}
@@ -1103,11 +1187,21 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={submitting}
-                  className="neu-btn-primary px-5 py-2 text-xs font-bold inline-flex items-center gap-1.5"
+                  disabled={
+                    submitting ||
+                    (isCreateSupplierArchived &&
+                      (openBills.length === 0 ||
+                        parsedPayAmount.lessThanOrEqualTo(0) ||
+                        !totalAllocatedInput.equals(parsedPayAmount)))
+                  }
+                  className="neu-btn-primary px-5 py-2 text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
                 >
                   {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>Save Payment &amp; Generate Receipt</span>
+                  <span>
+                    {isCreateSupplierArchived
+                      ? 'Settle Historical Bills & Generate Receipt'
+                      : 'Save Payment & Generate Receipt'}
+                  </span>
                 </button>
               </div>
             </form>

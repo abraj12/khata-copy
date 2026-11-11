@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Decimal from 'decimal.js';
 import {
   AlertCircle,
@@ -118,6 +118,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
   const [cancelReason, setCancelReason] = useState('');
   const [showCancelBox, setShowCancelBox] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
     setSupplierFilter(initialSupplierFilter);
@@ -138,6 +139,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
   };
 
   const loadBills = async (targetOffset = offset) => {
+    const reqId = ++requestIdRef.current;
     setLoading(true);
     try {
       const res = await listPurchaseBillsApi({
@@ -149,15 +151,19 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
         limit: BILLS_PAGE_LIMIT,
         offset: targetOffset,
       });
+      if (reqId !== requestIdRef.current) return;
       setBills(res.purchaseBills);
       setTotalBills(res.total);
       setHasMore(
         res.pagination?.hasMore ?? targetOffset + res.purchaseBills.length < res.total
       );
     } catch (err: any) {
+      if (reqId !== requestIdRef.current) return;
       setNotice({ type: 'error', text: err?.message || 'Failed to load purchase bills.' });
     } finally {
-      setLoading(false);
+      if (reqId === requestIdRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -185,8 +191,18 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
   }, [attachmentPreviewUrl]);
 
   const activeSuppliers = allSuppliers.filter((s) => !s.archivedAt);
+  const selectedFilterSupplier = allSuppliers.find((s) => s.id === supplierFilter) || null;
+  const isSelectedFilterArchived = Boolean(selectedFilterSupplier?.archivedAt);
 
   const openCreateModal = (defaultSupId = '') => {
+    const targetSupplier = allSuppliers.find((s) => s.id === defaultSupId);
+    if (targetSupplier?.archivedAt) {
+      setNotice({
+        type: 'error',
+        text: `Supplier "${targetSupplier.name}" is archived. Restore the supplier before recording a new purchase bill.`,
+      });
+      return;
+    }
     setEditingBillId(null);
     setFormSupplierId(defaultSupId || activeSuppliers[0]?.id || '');
     setInvoiceNumber('');
@@ -206,6 +222,13 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
     setFormError(null);
     try {
       const detail = await getPurchaseBillApi(billId);
+      if (detail.supplierArchivedAt) {
+        setNotice({
+          type: 'error',
+          text: `Purchase bill "${detail.invoiceNumber}" belongs to archived supplier "${detail.supplierName}" and cannot be edited.`,
+        });
+        return;
+      }
       setEditingBillId(detail.id);
       setFormSupplierId(detail.supplierId);
       setInvoiceNumber(detail.invoiceNumber);
@@ -523,12 +546,23 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
             <button
               type="button"
               onClick={() => openCreateModal(supplierFilter)}
-              className="neu-btn-primary text-xs px-4 py-2 font-bold inline-flex items-center gap-1.5"
+              disabled={isSelectedFilterArchived}
+              className="neu-btn-primary text-xs px-4 py-2 font-bold inline-flex items-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed"
+              title={
+                isSelectedFilterArchived
+                  ? 'Creating purchase bills is disabled for archived suppliers'
+                  : 'Record Purchase Bill'
+              }
             >
               <Plus className="w-4 h-4" />
               <span>Record Purchase Bill</span>
             </button>
           </div>
+          {isSelectedFilterArchived && selectedFilterSupplier && (
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-800 dark:text-amber-300">
+              <strong>Archived Supplier:</strong> "{selectedFilterSupplier.name}" is archived. Historical purchase bills remain viewable and printable, while creating or editing bills is disabled. Settle unpaid bills or allocate advances under Supplier Payments.
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
             <select
@@ -668,7 +702,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                             <Eye className="w-3.5 h-3.5" />
                             <span>View / Print</span>
                           </button>
-                          {b.status === 'finalized' && (
+                          {b.status === 'finalized' && !b.supplierArchivedAt && (
                             <button
                               type="button"
                               onClick={() => openEditModal(b.id)}
@@ -736,7 +770,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                     >
                       View / Print
                     </button>
-                    {b.status === 'finalized' && (
+                    {b.status === 'finalized' && !b.supplierArchivedAt && (
                       <button
                         type="button"
                         onClick={() => openEditModal(b.id)}
@@ -1167,7 +1201,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                       <Printer className="w-3.5 h-3.5" />
                       <span>Print Bill</span>
                     </button>
-                    {detailBill.status === 'finalized' && (
+                    {detailBill.status === 'finalized' && !detailBill.supplierArchivedAt && (
                       <button
                         type="button"
                         onClick={() => openEditModal(detailBill.id)}

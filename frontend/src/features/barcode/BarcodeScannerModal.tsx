@@ -15,7 +15,13 @@ import {
 } from 'lucide-react';
 import { BrowserMultiFormatReader, IScannerControls } from '@zxing/browser';
 import { fetchProductByBarcode, updateProductBarcode, ProductBarcodeRecord } from './barcodeApi.js';
+import {
+  createCameraBarcodePresenceLock,
+  resolveContinuousBarcodeLookup,
+} from './barcodePresenceLock.js';
 import { apiClient } from '../../lib/apiClient.js';
+
+export { createCameraBarcodePresenceLock, resolveContinuousBarcodeLookup };
 
 export interface BarcodeScannerModalProps {
   isOpen: boolean;
@@ -23,6 +29,7 @@ export interface BarcodeScannerModalProps {
   onProductFound?: (product: ProductBarcodeRecord) => void;
   onCreateWithBarcode?: (barcode: string) => void;
   title?: string;
+  continuousScan?: boolean;
 }
 
 export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
@@ -31,6 +38,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   onProductFound,
   onCreateWithBarcode,
   title = 'Scan Barcode',
+  continuousScan = false,
 }) => {
   const [activeTab, setActiveTab] = useState<'camera' | 'manual'>('camera');
   const [cameraLoading, setCameraLoading] = useState(false);
@@ -41,6 +49,11 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   const isTorchOnRef = useRef(false);
   const [manualInput, setManualInput] = useState('');
   const [isLookingUp, setIsLookingUp] = useState(false);
+  const [continuousFeedback, setContinuousFeedback] = useState<{
+    productName: string;
+    barcode: string;
+    count: number;
+  } | null>(null);
 
   // Unknown barcode resolution state
   const [unknownBarcode, setUnknownBarcode] = useState<string | null>(null);
@@ -58,6 +71,55 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
   const lastScanTimeRef = useRef<number>(0);
   const isCooldownRef = useRef(false);
+  const presenceLockRef = useRef(createCameraBarcodePresenceLock(750));
+  const lookupQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const sessionScanCountRef = useRef(0);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const managedTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const mountedRef = useRef(true);
+
+  const clearManagedTimers = useCallback(() => {
+    if (feedbackTimerRef.current) {
+      clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = null;
+    }
+    for (const timer of managedTimersRef.current) {
+      clearTimeout(timer);
+    }
+    managedTimersRef.current.clear();
+  }, []);
+
+  const scheduleManagedTimeout = useCallback((fn: () => void, ms: number) => {
+    const t = setTimeout(() => {
+      managedTimersRef.current.delete(t);
+      if (mountedRef.current) {
+        fn();
+      }
+    }, ms);
+    managedTimersRef.current.add(t);
+    return t;
+  }, []);
+
+  const showContinuousFeedbackBanner = useCallback(
+    (product: ProductBarcodeRecord, barcode: string) => {
+      sessionScanCountRef.current += 1;
+      setContinuousFeedback({
+        productName: product.name,
+        barcode,
+        count: sessionScanCountRef.current,
+      });
+      if (feedbackTimerRef.current) {
+        clearTimeout(feedbackTimerRef.current);
+      }
+      feedbackTimerRef.current = setTimeout(() => {
+        feedbackTimerRef.current = null;
+        if (mountedRef.current) {
+          setContinuousFeedback(null);
+        }
+      }, 2800);
+    },
+    []
+  );
 
   // Cleanup helper that halts all hardware camera streams safely with stable dependencies
   const stopCamera = useCallback(() => {
@@ -86,59 +148,116 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       console.warn('[BARCODE SCANNER] Cleanup warning:', e);
     }
     isTorchOnRef.current = false;
+    isCooldownRef.current = false;
     setIsTorchOn(false);
     setHasTorch(false);
     setCameraLoading(false);
   }, []);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearManagedTimers();
+      stopCamera();
+    };
+  }, [clearManagedTimers, stopCamera]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      presenceLockRef.current.reset();
+      sessionScanCountRef.current = 0;
+      setContinuousFeedback(null);
+      setUnknownBarcode(null);
+      setPendingReplaceProduct(null);
+      clearManagedTimers();
+      stopCamera();
+    }
+  }, [isOpen, clearManagedTimers, stopCamera]);
+
   const handleBarcodeIdentified = useCallback(
-    async (rawCode: string) => {
+    (rawCode: string, source: 'camera' | 'manual' = 'camera') => {
       const code = rawCode.trim();
       if (!code) return;
 
-      const now = Date.now();
-      if (isCooldownRef.current || now - lastScanTimeRef.current < 1600) {
-        return;
-      }
-      lastScanTimeRef.current = now;
-      isCooldownRef.current = true;
-
-      // Haptic feedback if available on mobile
-      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-        try {
-          navigator.vibrate(60);
-        } catch {
-          // Non-fatal
+      if (!continuousScan && source === 'camera') {
+        const now = Date.now();
+        if (isCooldownRef.current || now - lastScanTimeRef.current < 1600) {
+          return;
         }
+        lastScanTimeRef.current = now;
+        isCooldownRef.current = true;
       }
 
-      setIsLookingUp(true);
-      setCameraError(null);
-      setUnknownBarcode(null);
-      setPendingReplaceProduct(null);
+      lookupQueueRef.current = lookupQueueRef.current
+        .then(async () => {
+          if (!mountedRef.current) return;
+          setIsLookingUp(true);
+          setCameraError(null);
+          setUnknownBarcode(null);
+          setPendingReplaceProduct(null);
 
-      try {
-        const product = await fetchProductByBarcode(code);
-        if (product) {
-          stopCamera();
-          if (onProductFound) {
-            onProductFound(product);
+          try {
+            await resolveContinuousBarcodeLookup({
+              code,
+              continuousScan,
+              lookupProduct: fetchProductByBarcode,
+              vibrate: () => {
+                if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+                  try {
+                    navigator.vibrate(60);
+                  } catch {
+                    // Non-fatal
+                  }
+                }
+              },
+              onStopCamera: stopCamera,
+              onClose,
+              onFound: (product) => {
+                if (onProductFound) {
+                  onProductFound(product);
+                }
+              },
+              onContinuousFeedback: (product, scannedCode) => {
+                if (mountedRef.current) {
+                  showContinuousFeedbackBanner(product, scannedCode);
+                }
+              },
+              onUnknown: (missingCode) => {
+                if (mountedRef.current) {
+                  setUnknownBarcode(missingCode);
+                }
+              },
+            });
+          } catch (err: any) {
+            if (mountedRef.current) {
+              setCameraError(err?.message || 'Error communicating with product catalog.');
+            }
+          } finally {
+            if (mountedRef.current) {
+              setIsLookingUp(false);
+            }
+            if (!continuousScan) {
+              scheduleManagedTimeout(() => {
+                isCooldownRef.current = false;
+              }, 1200);
+            }
           }
-          onClose();
-        } else {
-          // Barcode unknown in this shop's database
-          setUnknownBarcode(code);
-        }
-      } catch (err: any) {
-        setCameraError(err?.message || 'Error communicating with product catalog.');
-      } finally {
-        setIsLookingUp(false);
-        setTimeout(() => {
-          isCooldownRef.current = false;
-        }, 1200);
-      }
+        })
+        .catch(() => {
+          if (mountedRef.current) {
+            setIsLookingUp(false);
+          }
+        });
     },
-    [onProductFound, onClose, stopCamera]
+    [
+      continuousScan,
+      onProductFound,
+      onClose,
+      scheduleManagedTimeout,
+      showContinuousFeedbackBanner,
+      stopCamera,
+    ]
   );
 
   // Initialize camera scanner only when open and camera tab is active
@@ -151,6 +270,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     let isSubscribed = true;
     setCameraLoading(true);
     setCameraError(null);
+    presenceLockRef.current.reset();
 
     const initScanner = async () => {
       try {
@@ -201,11 +321,20 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
           videoRef.current,
           (result, _err) => {
             if (!isSubscribed) return;
+            const nowMs = Date.now();
             if (result) {
               const text = result.getText();
               if (text) {
-                handleBarcodeIdentified(text);
+                if (continuousScan) {
+                  if (presenceLockRef.current.onFrameDetection(text, nowMs)) {
+                    handleBarcodeIdentified(text, 'camera');
+                  }
+                } else {
+                  handleBarcodeIdentified(text, 'camera');
+                }
               }
+            } else if (continuousScan) {
+              presenceLockRef.current.onFrameNoBarcode(nowMs);
             }
           }
         );
@@ -239,7 +368,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       isSubscribed = false;
       stopCamera();
     };
-  }, [isOpen, activeTab, unknownBarcode, handleBarcodeIdentified, stopCamera, cameraRetryKey]);
+  }, [isOpen, activeTab, unknownBarcode, continuousScan, handleBarcodeIdentified, stopCamera, cameraRetryKey]);
 
   // Handle torch toggle
   const toggleTorch = async () => {
@@ -296,13 +425,27 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     setPendingReplaceProduct(null);
     try {
       const updated = await updateProductBarcode(product.id, unknownBarcode, confirmReplace);
+      const attachedCode = unknownBarcode;
       setLinkSuccess(`Successfully attached barcode to "${updated.name}"!`);
-      setTimeout(() => {
-        if (onProductFound) {
-          onProductFound(updated);
+      scheduleManagedTimeout(() => {
+        if (continuousScan) {
+          setUnknownBarcode(null);
+          setLinkSuccess(null);
+          setLinkSearch('');
+          setLinkProducts([]);
+          setPendingReplaceProduct(null);
+          presenceLockRef.current.reset();
+          showContinuousFeedbackBanner(updated, attachedCode);
+          if (onProductFound) {
+            onProductFound(updated);
+          }
+        } else {
+          if (onProductFound) {
+            onProductFound(updated);
+          }
+          onClose();
         }
-        onClose();
-      }, 1000);
+      }, 900);
     } catch (err: any) {
       setLinkError(err?.message || 'Failed to attach barcode to product.');
     } finally {
@@ -313,7 +456,9 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (manualInput.trim()) {
-      handleBarcodeIdentified(manualInput.trim());
+      const code = manualInput.trim();
+      setManualInput('');
+      handleBarcodeIdentified(code, 'manual');
     }
   };
 
@@ -344,21 +489,37 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                 {title}
               </h2>
               <p className="text-[11px] text-[var(--khata-text-muted)]">
-                Scan or enter a product barcode
+                {continuousScan
+                  ? 'Continuous scan active — scan multiple items, click Done when finished'
+                  : 'Scan or enter a product barcode'}
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              stopCamera();
-              onClose();
-            }}
-            className="p-1.5 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] hover:bg-[var(--khata-surface-inset)] transition"
-            aria-label="Close scanner modal"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {continuousScan && (
+              <button
+                type="button"
+                onClick={() => {
+                  stopCamera();
+                  onClose();
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[var(--khata-accent)] text-white text-xs font-bold hover:opacity-90 transition"
+              >
+                Done
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                stopCamera();
+                onClose();
+              }}
+              className="p-1.5 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] hover:bg-[var(--khata-surface-inset)] transition"
+              aria-label="Close scanner modal"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Tab Selector */}
@@ -398,7 +559,25 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
         )}
 
         {/* Modal Body */}
-        <div className="p-4 sm:p-6 overflow-y-auto flex-1">
+        <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-3">
+          {continuousScan && continuousFeedback && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="p-3 rounded-xl border border-emerald-500/35 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-between gap-2"
+            >
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 flex-shrink-0 text-emerald-600 dark:text-emerald-400" />
+                <span>
+                  Added &ldquo;{continuousFeedback.productName}&rdquo;{' '}
+                  <span className="font-mono opacity-80">({continuousFeedback.barcode})</span>
+                </span>
+              </div>
+              <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-500/20">
+                #{continuousFeedback.count}
+              </span>
+            </div>
+          )}
           {/* Unknown Barcode Resolution Dialog */}
           {unknownBarcode ? (
             <div className="space-y-4">
@@ -540,6 +719,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                   setLinkSearch('');
                   setLinkProducts([]);
                   setLinkError(null);
+                  presenceLockRef.current.reset();
                   setActiveTab('camera');
                 }}
                 className="w-full py-2.5 rounded-xl border border-[var(--khata-border)] text-xs font-bold text-[var(--khata-text-muted)] hover:text-[var(--khata-text)] transition flex items-center justify-center gap-1.5"
@@ -645,7 +825,9 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
               )}
 
               <p className="text-[11px] text-center text-[var(--khata-text-muted)]">
-                Supports EAN-13, EAN-8, UPC-A, UPC-E, CODE-128, and QR formats.
+                {continuousScan
+                  ? 'Supermarket continuous mode: move barcode away briefly before rescanning the same item.'
+                  : 'Supports EAN-13, EAN-8, UPC-A, UPC-E, CODE-128, and QR formats.'}
               </p>
             </div>
           ) : (

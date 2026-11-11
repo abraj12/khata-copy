@@ -6,6 +6,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useHardwareBarcodeScanner } from '../src/features/barcode/useHardwareBarcodeScanner.js';
 import { createFifoBarcodeQueue } from '../src/features/barcode/barcodeLookupQueue.js';
 import { BillingBarcodeControls } from '../src/features/barcode/BillingBarcodeControls.js';
+import {
+  createCameraBarcodePresenceLock,
+  resolveContinuousBarcodeLookup,
+} from '../src/features/barcode/barcodePresenceLock.js';
 import { upsertScannedProductLine, DraftLineBase, ProductCatalogReference } from '../src/utils/lineItemDraft.js';
 import * as barcodeApi from '../src/features/barcode/barcodeApi.js';
 
@@ -429,5 +433,202 @@ describe('FIFO Barcode Queue, Synchronous State Commit & BillingBarcodeControls 
       await Promise.resolve();
     });
     expect(resolvedProducts).toHaveLength(1);
+  });
+
+  it('8. Supermarket camera presence lock blocks stationary duplicate frames, switches immediately to a new barcode, and re-arms after genuine absence', () => {
+    const lock = createCameraBarcodePresenceLock(750);
+
+    // Barcode A enters frame -> accepted once
+    expect(lock.onFrameDetection('ITEM-A', 1000)).toBe(true);
+    expect(lock.getLockedCode()).toBe('ITEM-A');
+
+    // Remains locked across many frames & beyond 750ms while ITEM-A stays in view
+    expect(lock.onFrameDetection('ITEM-A', 1200)).toBe(false);
+    expect(lock.onFrameDetection('ITEM-A', 2500)).toBe(false);
+    expect(lock.onFrameDetection('ITEM-A', 5000)).toBe(false);
+
+    // Single brief blurry miss (400ms < 750ms) resets absence clock once ITEM-A reappears
+    expect(lock.onFrameNoBarcode(5100)).toBe(false);
+    expect(lock.onFrameNoBarcode(5500)).toBe(false);
+    expect(lock.onFrameDetection('ITEM-A', 5550)).toBe(false);
+
+    // Switch straight to different barcode B without waiting for absence -> immediate accept
+    expect(lock.onFrameDetection('ITEM-B', 5600)).toBe(true);
+    expect(lock.getLockedCode()).toBe('ITEM-B');
+    expect(lock.onFrameDetection('ITEM-B', 5700)).toBe(false);
+
+    // Remove item from camera view for >= 750ms -> re-arms so ITEM-B can be intentionally rescanned
+    expect(lock.onFrameNoBarcode(6000)).toBe(false);
+    expect(lock.onFrameNoBarcode(6500)).toBe(false);
+    expect(lock.onFrameNoBarcode(6750)).toBe(true);
+    expect(lock.getLockedCode()).toBeNull();
+    expect(lock.onFrameDetection('ITEM-B', 6800)).toBe(true);
+  });
+
+  it('9. Keeps modal open and triggers continuous feedback when continuousScan=true while preserving single-scan close behavior when false', async () => {
+    const mockProduct = {
+      id: 91,
+      name: 'LED Tube 20W',
+      buying_price: '120.00',
+      hsn_code: '9405',
+      barcode: 'LED-20W',
+      created_at: '2026-04-01T00:00:00.000Z',
+    };
+
+    const onFoundContinuous = vi.fn();
+    const onStopContinuous = vi.fn();
+    const onCloseContinuous = vi.fn();
+    const onFeedbackContinuous = vi.fn();
+    const onUnknownContinuous = vi.fn();
+
+    const continuousOutcome = await resolveContinuousBarcodeLookup({
+      code: 'LED-20W',
+      continuousScan: true,
+      lookupProduct: async () => mockProduct,
+      onFound: onFoundContinuous,
+      onStopCamera: onStopContinuous,
+      onClose: onCloseContinuous,
+      onUnknown: onUnknownContinuous,
+      onContinuousFeedback: onFeedbackContinuous,
+    });
+
+    expect(continuousOutcome).toBe('found');
+    expect(onFoundContinuous).toHaveBeenCalledWith(mockProduct);
+    expect(onFeedbackContinuous).toHaveBeenCalledWith(mockProduct, 'LED-20W');
+    expect(onStopContinuous).not.toHaveBeenCalled();
+    expect(onCloseContinuous).not.toHaveBeenCalled();
+
+    const onFoundSingle = vi.fn();
+    const onStopSingle = vi.fn();
+    const onCloseSingle = vi.fn();
+    const onFeedbackSingle = vi.fn();
+
+    const singleOutcome = await resolveContinuousBarcodeLookup({
+      code: 'LED-20W',
+      continuousScan: false,
+      lookupProduct: async () => mockProduct,
+      onFound: onFoundSingle,
+      onStopCamera: onStopSingle,
+      onClose: onCloseSingle,
+      onUnknown: vi.fn(),
+      onContinuousFeedback: onFeedbackSingle,
+    });
+
+    expect(singleOutcome).toBe('found');
+    expect(onStopSingle).toHaveBeenCalledTimes(1);
+    expect(onFoundSingle).toHaveBeenCalledWith(mockProduct);
+    expect(onCloseSingle).toHaveBeenCalledTimes(1);
+    expect(onFeedbackSingle).not.toHaveBeenCalled();
+  });
+
+  it('10. Handles continuous FIFO 4-item scan sequence into billing lines without losing items or overwriting rates', async () => {
+    const products: Record<string, any> = {
+      'SKU-1': {
+        id: 101,
+        name: 'MCB 16A',
+        buying_price: '85.00',
+        hsn_code: '8536',
+        barcode: 'SKU-1',
+        created_at: '2026-04-01T00:00:00.000Z',
+      },
+      'SKU-2': {
+        id: 102,
+        name: 'Modular Switch',
+        buying_price: '24.00',
+        hsn_code: '8536',
+        barcode: 'SKU-2',
+        created_at: '2026-04-01T00:00:00.000Z',
+      },
+    };
+
+    vi.mocked(barcodeApi.fetchProductByBarcode).mockImplementation(async (code) => {
+      return products[code] || null;
+    });
+
+    let items: Array<DraftLineBase & { localId: string }> = [
+      {
+        localId: 'seed',
+        productId: null,
+        description: '',
+        hsnCode: '',
+        barcode: '',
+        quantity: '1',
+        rate: '',
+        buyingPriceReference: null,
+      },
+    ];
+    const itemsRef = { current: items };
+    const onScannedProducts: string[] = [];
+
+    const containerEl = document.createElement('div');
+    document.body.appendChild(containerEl);
+    const r = createRoot(containerEl);
+
+    act(() => {
+      r.render(
+        React.createElement(BillingBarcodeControls, {
+          enableGlobalScanner: true,
+          onProductResolved: (product) => {
+            onScannedProducts.push(product.name);
+            const result = upsertScannedProductLine(itemsRef.current, product, () => ({
+              localId: `line-${Math.random()}`,
+              productId: null,
+              description: '',
+              hsnCode: '',
+              barcode: '',
+              quantity: '1',
+              rate: '',
+              buyingPriceReference: null,
+            }));
+            if (!result.error) {
+              items = result.nextLines;
+              itemsRef.current = result.nextLines;
+            }
+            return { action: result.action, error: result.error };
+          },
+        })
+      );
+    });
+
+    // Simulate rapid supermarket scan sequence: SKU-1 -> SKU-2 -> SKU-1 (qty 2) -> SKU-2 (qty 2)
+    let nowMs = 500000;
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    try {
+      for (const code of ['SKU-1', 'SKU-2', 'SKU-1', 'SKU-2']) {
+        await act(async () => {
+          // Trigger fast HID bursts (< 25ms keystrokes) so continuous BillingBarcodeControls FIFO queue processes all 4
+          for (const ch of code) {
+            window.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
+            nowMs += 10;
+          }
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+          nowMs += 200;
+          await new Promise((resolve) => setTimeout(resolve, 15));
+        });
+      }
+    } finally {
+      dateSpy.mockRestore();
+    }
+
+    expect(items).toHaveLength(2);
+    expect(items[0].description).toBe('MCB 16A');
+    expect(items[0].quantity).toBe('2');
+    expect(items[0].rate).toBe(''); // buying_price never copied into selling rate
+    expect(items[0].buyingPriceReference).toBe('85.00');
+    expect(items[1].description).toBe('Modular Switch');
+    expect(items[1].quantity).toBe('2');
+    expect(items[1].rate).toBe('');
+    expect(items[1].buyingPriceReference).toBe('24.00');
+    expect(onScannedProducts).toEqual([
+      'MCB 16A',
+      'Modular Switch',
+      'MCB 16A',
+      'Modular Switch',
+    ]);
+
+    act(() => {
+      r.unmount();
+    });
+    containerEl.remove();
   });
 });

@@ -27,20 +27,26 @@ export interface SupplierRecord extends SupplierBalanceSummary {
   paymentCount: number;
 }
 
-export interface SupplierDashboardKPIs {
+export interface SupplierDashboardSummary {
   totalSuppliers: number;
   activeSuppliers: number;
   totalPurchases: string;
   totalPaymentsMade: string;
+  totalPaymentsReversed: string;
   totalOutstandingPayable: string;
-  suppliersWithBalanceCount: number;
   totalAdvanceCredit: string;
   totalUnallocatedPayments: string;
+  paymentMethodTotals: Array<{
+    paymentMethod: 'cash' | 'upi' | 'bank_transfer' | 'cheque' | 'other';
+    amount: string;
+    count: number;
+  }>;
 }
 
 export interface SupplierDashboardData {
-  kpis: SupplierDashboardKPIs;
-  suppliers: SupplierRecord[];
+  summary: SupplierDashboardSummary;
+  recentPayments: SupplierPaymentRecord[];
+  recentPaymentsTotal: number;
 }
 
 export interface CreateSupplierPayload {
@@ -249,7 +255,7 @@ export interface CreateSupplierPaymentPayload {
 }
 
 export interface SupplierStatementEntry {
-  entryType: 'purchase_bill' | 'payment' | 'payment_reversal';
+  entryType: 'purchase_bill' | 'purchase_bill_cancellation' | 'payment' | 'payment_reversal';
   entryDate: string;
   sortOrder: number;
   id: number;
@@ -261,6 +267,8 @@ export interface SupplierStatementEntry {
   paymentStatus?: 'active' | 'reversed' | null;
   reversalReason?: string | null;
   originalPaymentReceipt?: string | null;
+  cancellationReason?: string | null;
+  originalBillInvoiceNumber?: string | null;
   billStatus?: string | null;
   billPaidAmount?: string | null;
   billRemainingAmount?: string | null;
@@ -281,6 +289,7 @@ export interface SupplierStatementData {
   periodPurchases: string;
   periodPayments: string;
   periodReversals: string;
+  periodCancellations: string;
   closingBalance: string;
   entries: SupplierStatementEntry[];
 }

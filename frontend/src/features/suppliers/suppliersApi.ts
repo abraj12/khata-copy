@@ -148,9 +148,91 @@ export function computeAutoFifoBillAllocations(
   return allocations;
 }
 
-export async function fetchSupplierDashboard(): Promise<SupplierDashboardData> {
+export function isDigitalSupplierPaymentMethod(method: SupplierPaymentMethod): boolean {
+  return method === 'upi' || method === 'bank_transfer' || method === 'cheque';
+}
+
+export function getSupplierPaymentReferenceFieldMeta(method: SupplierPaymentMethod): {
+  required: boolean;
+  label: string;
+  placeholder: string;
+} {
+  if (method === 'upi') {
+    return {
+      required: true,
+      label: 'UPI Transaction ID',
+      placeholder: 'Enter UPI Transaction ID',
+    };
+  }
+  if (method === 'bank_transfer') {
+    return {
+      required: true,
+      label: 'UTR / Bank Reference',
+      placeholder: 'Enter UTR / Bank reference number',
+    };
+  }
+  if (method === 'cheque') {
+    return {
+      required: true,
+      label: 'Cheque Number',
+      placeholder: 'Enter cheque number',
+    };
+  }
+  if (method === 'cash') {
+    return {
+      required: false,
+      label: 'Reference / Voucher Note (Optional)',
+      placeholder: 'Optional cash receipt or voucher note',
+    };
+  }
+  return {
+    required: false,
+    label: 'Reference / Note (Optional)',
+    placeholder: 'Optional payment reference',
+  };
+}
+
+export function validateSupplierPaymentFormInput(input: {
+  supplierArchivedAt: string | null;
+  amount: string | number;
+  paymentMethod: SupplierPaymentMethod;
+  transactionReference?: string | null;
+  allocatedAmountTotal: string | number;
+  allocationCount: number;
+}): {
+  referenceError: string | null;
+  allocationError: string | null;
+} {
+  const refMeta = getSupplierPaymentReferenceFieldMeta(input.paymentMethod);
+  const trimmedRef = (input.transactionReference || '').trim();
+  const referenceError =
+    refMeta.required && !trimmedRef ? `${refMeta.label} is required.` : null;
+
+  let allocationError: string | null = null;
+  if (input.supplierArchivedAt) {
+    const payAmt = safeDecimal(input.amount);
+    const allocTotal = safeDecimal(input.allocatedAmountTotal);
+    if (input.allocationCount === 0 || allocTotal.lessThanOrEqualTo(0)) {
+      allocationError =
+        'Archived suppliers cannot receive unallocated advances. Allocate the full payment to existing finalized bills.';
+    } else if (!allocTotal.equals(payAmt)) {
+      allocationError = `Archived supplier settlement must allocate exact full amount (${payAmt.toFixed(2)}) across existing bills (currently ${allocTotal.toFixed(2)}).`;
+    }
+  }
+
+  return { referenceError, allocationError };
+}
+
+export async function fetchSupplierDashboard(params?: {
+  fromDate?: string;
+  toDate?: string;
+}): Promise<SupplierDashboardData> {
+  const qs = new URLSearchParams();
+  if (params?.fromDate) qs.set('fromDate', params.fromDate);
+  if (params?.toDate) qs.set('toDate', params.toDate);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
   const res = await apiClient<{ success: boolean; data: SupplierDashboardData }>(
-    '/api/v1/suppliers/dashboard'
+    `/api/v1/suppliers/dashboard${suffix}`
   );
   return res.data.data;
 }
@@ -394,6 +476,7 @@ export async function listSupplierPaymentsApi(params?: {
   supplierId?: string;
   paymentMethod?: SupplierPaymentMethod;
   status?: 'active' | 'reversed' | 'all';
+  search?: string;
   fromDate?: string;
   toDate?: string;
   limit?: number;
@@ -403,6 +486,7 @@ export async function listSupplierPaymentsApi(params?: {
   if (params?.supplierId) qs.set('supplierId', params.supplierId);
   if (params?.paymentMethod) qs.set('paymentMethod', params.paymentMethod);
   if (params?.status) qs.set('status', params.status);
+  if (params?.search?.trim()) qs.set('search', params.search.trim());
   if (params?.fromDate) qs.set('fromDate', params.fromDate);
   if (params?.toDate) qs.set('toDate', params.toDate);
   if (params?.limit) qs.set('limit', String(params.limit));

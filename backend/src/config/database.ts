@@ -53,6 +53,7 @@ export const EXPECTED_MIGRATIONS = [
   '019_customer_tax_integrity_and_idempotency.sql',
   '020_supplier_management.sql',
   '021_supplier_financial_integrity.sql',
+  '022_supplier_operational_hardening.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [
@@ -81,6 +82,7 @@ export const EXPECTED_CORE_TABLES = [
   'supplier_payment_allocations',
   'supplier_payment_reversals',
   'supplier_payment_allocation_reversals',
+  'supplier_purchase_bill_cancellations',
 ];
 
 export interface ReadinessReport {

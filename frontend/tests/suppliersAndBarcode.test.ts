@@ -12,8 +12,13 @@ import {
   createSupplierIdempotencyKey,
   fetchAllPages,
   formatAbsRupees,
+  getSupplierPaymentReferenceFieldMeta,
   isValidIdempotencyKeyFormat,
+  validateSupplierPaymentFormInput,
 } from '../src/features/suppliers/suppliersApi.js';
+import { resolveDashboardDateRange } from '../src/features/suppliers/SupplierDashboard.js';
+import { DEFAULT_SUPPLIER_SECTION_TAB } from '../src/features/suppliers/SuppliersModuleView.js';
+import type { SupplierStatementData } from '../src/features/suppliers/suppliers.types.js';
 
 interface TestBillingLine extends DraftLineBase {
   localId: string;
@@ -191,5 +196,116 @@ describe('Supplier Management & Billing Barcode Frontend Unit Tests', () => {
     expect(collected).toHaveLength(450);
     expect(collected[0]).toEqual({ id: 1 });
     expect(collected[449]).toEqual({ id: 450 });
+  });
+
+  it('9. Enforces required labels & inline validation for UPI, Bank Transfer & Cheque references while leaving Cash/Other optional', () => {
+    expect(getSupplierPaymentReferenceFieldMeta('upi')).toMatchObject({
+      required: true,
+      label: 'UPI Transaction ID',
+    });
+    expect(getSupplierPaymentReferenceFieldMeta('bank_transfer')).toMatchObject({
+      required: true,
+      label: 'UTR / Bank Reference',
+    });
+    expect(getSupplierPaymentReferenceFieldMeta('cheque')).toMatchObject({
+      required: true,
+      label: 'Cheque Number',
+    });
+    expect(getSupplierPaymentReferenceFieldMeta('cash').required).toBe(false);
+    expect(getSupplierPaymentReferenceFieldMeta('other').required).toBe(false);
+
+    for (const method of ['upi', 'bank_transfer', 'cheque'] as const) {
+      const missing = validateSupplierPaymentFormInput({
+        supplierArchivedAt: null,
+        amount: '500.00',
+        paymentMethod: method,
+        transactionReference: '  ',
+        allocatedAmountTotal: '0.00',
+        allocationCount: 0,
+      });
+      expect(missing.referenceError).not.toBeNull();
+    }
+
+    const validCash = validateSupplierPaymentFormInput({
+      supplierArchivedAt: null,
+      amount: '500.00',
+      paymentMethod: 'cash',
+      transactionReference: '',
+      allocatedAmountTotal: '0.00',
+      allocationCount: 0,
+    });
+    expect(validCash.referenceError).toBeNull();
+    expect(validCash.allocationError).toBeNull();
+  });
+
+  it('10. Restricts archived suppliers to full historical bill settlement without creating advances', () => {
+    const emptyAlloc = validateSupplierPaymentFormInput({
+      supplierArchivedAt: '2026-04-15T10:00:00.000Z',
+      amount: '600.00',
+      paymentMethod: 'cash',
+      allocatedAmountTotal: '0.00',
+      allocationCount: 0,
+    });
+    expect(emptyAlloc.allocationError).toContain('unallocated advances');
+
+    const partialAlloc = validateSupplierPaymentFormInput({
+      supplierArchivedAt: '2026-04-15T10:00:00.000Z',
+      amount: '600.00',
+      paymentMethod: 'cash',
+      allocatedAmountTotal: '400.00',
+      allocationCount: 1,
+    });
+    expect(partialAlloc.allocationError).toContain('exact full amount');
+
+    const exactSettlement = validateSupplierPaymentFormInput({
+      supplierArchivedAt: '2026-04-15T10:00:00.000Z',
+      amount: '600.00',
+      paymentMethod: 'upi',
+      transactionReference: 'UPI-ARC-99',
+      allocatedAmountTotal: '600.00',
+      allocationCount: 2,
+    });
+    expect(exactSettlement.referenceError).toBeNull();
+    expect(exactSettlement.allocationError).toBeNull();
+  });
+
+  it('11. Defaults supplier module tab to All Suppliers, resolves dashboard date presets, and models bill cancellations in statements', () => {
+    expect(DEFAULT_SUPPLIER_SECTION_TAB).toBe('all-suppliers');
+
+    expect(resolveDashboardDateRange('all_time', '', '', '2026-04-18')).toEqual({});
+    expect(resolveDashboardDateRange('today', '', '', '2026-04-18')).toEqual({
+      fromDate: '2026-04-18',
+      toDate: '2026-04-18',
+    });
+    expect(resolveDashboardDateRange('this_month', '', '', '2026-04-18')).toEqual({
+      fromDate: '2026-04-01',
+      toDate: '2026-04-18',
+    });
+    expect(
+      resolveDashboardDateRange('custom', ' 2026-04-05 ', ' 2026-04-12 ', '2026-04-18')
+    ).toEqual({
+      fromDate: '2026-04-05',
+      toDate: '2026-04-12',
+    });
+
+    const sampleStatement: Pick<SupplierStatementData, 'periodCancellations' | 'entries'> = {
+      periodCancellations: '1200.00',
+      entries: [
+        {
+          entryType: 'purchase_bill_cancellation',
+          entryDate: '2026-04-18',
+          sortOrder: 3,
+          id: 9,
+          referenceNumber: 'INV-009',
+          description: 'Bill Cancellation (INV-009)',
+          amount: '1200.00',
+          debitAmount: '0.00',
+          creditAmount: '1200.00',
+          runningBalance: '0.00',
+        },
+      ],
+    };
+    expect(sampleStatement.entries[0].entryType).toBe('purchase_bill_cancellation');
+    expect(sampleStatement.periodCancellations).toBe('1200.00');
   });
 });

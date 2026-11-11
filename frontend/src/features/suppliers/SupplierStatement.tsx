@@ -290,7 +290,7 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
           </div>
 
           {/* Unified Summary Strip */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <div className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/40 print:border print:border-slate-200">
               <span className="text-[10px] uppercase font-bold text-[var(--khata-text-muted)] block">
                 Opening Balance
@@ -321,6 +321,14 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
               </span>
               <span className="font-mono font-bold text-sm text-amber-700 dark:text-amber-300">
                 {formatAbsRupees(statement.periodReversals || '0.00')}
+              </span>
+            </div>
+            <div className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/40 print:border print:border-slate-200">
+              <span className="text-[10px] uppercase font-bold text-[var(--khata-text-muted)] block">
+                Bill Cancels (-)
+              </span>
+              <span className="font-mono font-bold text-sm text-emerald-600 dark:text-emerald-400">
+                {formatAbsRupees(statement.periodCancellations || '0.00')}
               </span>
             </div>
             <div className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/40 print:border print:border-slate-200">
@@ -357,7 +365,7 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
                       <th className="py-2.5 px-3">Reference</th>
                       <th className="py-2.5 px-3">Details</th>
                       <th className="py-2.5 px-3 text-right">Debit (+)</th>
-                      <th className="py-2.5 px-3 text-right">Payments (-)</th>
+                      <th className="py-2.5 px-3 text-right">Credit (-)</th>
                       <th className="py-2.5 px-3 text-right">Running Balance</th>
                     </tr>
                   </thead>
@@ -382,13 +390,21 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
                         className={
                           entry.entryType === 'payment_reversal'
                             ? 'bg-amber-500/5'
-                            : undefined
+                            : entry.entryType === 'purchase_bill_cancellation'
+                              ? 'bg-emerald-500/5'
+                              : undefined
                         }
                       >
                         <td className="py-2.5 px-3 font-mono">{entry.entryDate}</td>
                         <td className="py-2.5 px-3">
                           {entry.entryType === 'purchase_bill' ? (
-                            <span className="font-bold text-[var(--khata-text)]">Purchase Bill</span>
+                            <span className="font-bold text-[var(--khata-text)]">
+                              Purchase Bill{entry.billStatus === 'cancelled' ? ' [Cancelled later]' : ''}
+                            </span>
+                          ) : entry.entryType === 'purchase_bill_cancellation' ? (
+                            <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                              Bill Cancellation
+                            </span>
                           ) : entry.entryType === 'payment_reversal' ? (
                             <span className="font-bold text-rose-600 dark:text-rose-400">
                               Payment Reversal
@@ -438,19 +454,23 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
                     entry.entryType === 'purchase_bill' || entry.entryType === 'payment_reversal';
                   const typeLabel =
                     entry.entryType === 'purchase_bill'
-                      ? 'Purchase Bill'
-                      : entry.entryType === 'payment_reversal'
-                        ? 'Payment Reversal'
-                        : entry.paymentStatus === 'reversed'
-                          ? 'Payment [Reversed]'
-                          : 'Payment';
+                      ? `Purchase Bill${entry.billStatus === 'cancelled' ? ' [Cancelled later]' : ''}`
+                      : entry.entryType === 'purchase_bill_cancellation'
+                        ? 'Bill Cancellation'
+                        : entry.entryType === 'payment_reversal'
+                          ? 'Payment Reversal'
+                          : entry.paymentStatus === 'reversed'
+                            ? 'Payment [Reversed]'
+                            : 'Payment';
                   return (
                     <div
                       key={`${entry.entryType}-${entry.id}`}
                       className={`p-3 rounded-xl border border-[var(--khata-border)] space-y-1.5 text-xs ${
                         entry.entryType === 'payment_reversal'
                           ? 'bg-amber-500/5'
-                          : 'bg-[var(--khata-surface-inset)]/25'
+                          : entry.entryType === 'purchase_bill_cancellation'
+                            ? 'bg-emerald-500/5'
+                            : 'bg-[var(--khata-surface-inset)]/25'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
@@ -462,7 +482,8 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
                         </div>
                         <span
                           className={`font-mono font-extrabold ${
-                            entry.entryType === 'payment'
+                            entry.entryType === 'payment' ||
+                            entry.entryType === 'purchase_bill_cancellation'
                               ? 'text-emerald-600 dark:text-emerald-400'
                               : entry.entryType === 'payment_reversal'
                                 ? 'text-rose-600 dark:text-rose-400'

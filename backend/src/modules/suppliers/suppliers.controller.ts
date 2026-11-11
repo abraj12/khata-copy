@@ -14,6 +14,7 @@ import {
   reversePaymentAllocationSchema,
   reversePaymentSchema,
   supplierStatementQuerySchema,
+  supplierDashboardQuerySchema,
   updatePurchaseBillSchema,
   updateSupplierSchema,
   uuidParamSchema,
@@ -36,9 +37,14 @@ function sendValidationError(res: Response, message: string): void {
 }
 
 export const suppliersController = {
-  async getDashboard(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  async getDashboard(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const data = await suppliersService.getDashboard();
+      const parsed = supplierDashboardQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        sendValidationError(res, parsed.error.errors[0]?.message || 'Invalid dashboard query.');
+        return;
+      }
+      const data = await suppliersService.getDashboard(parsed.data);
       res.json({ success: true, data });
     } catch (err) {
       next(err);

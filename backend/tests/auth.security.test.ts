@@ -55,6 +55,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { table_name: 'supplier_payment_allocations' },
             { table_name: 'supplier_payment_reversals' },
             { table_name: 'supplier_payment_allocation_reversals' },
+            { table_name: 'supplier_purchase_bill_cancellations' },
           ],
           rowCount: 15,
         } as any;
@@ -81,6 +82,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '019_customer_tax_integrity_and_idempotency.sql' },
             { version: '020_supplier_management.sql' },
             { version: '021_supplier_financial_integrity.sql' },
+            { version: '022_supplier_operational_hardening.sql' },
             {
             version: '011_gst_invoices.sql',
           },
