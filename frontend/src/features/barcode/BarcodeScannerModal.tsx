@@ -50,6 +50,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   const [isLinking, setIsLinking] = useState(false);
   const [linkSuccess, setLinkSuccess] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [pendingReplaceProduct, setPendingReplaceProduct] = useState<ProductBarcodeRecord | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
@@ -114,6 +115,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       setIsLookingUp(true);
       setCameraError(null);
       setUnknownBarcode(null);
+      setPendingReplaceProduct(null);
 
       try {
         const product = await fetchProductByBarcode(code);
@@ -278,12 +280,22 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     return () => clearTimeout(timer);
   }, [unknownBarcode, linkSearch]);
 
-  const handleAttachBarcodeToProduct = async (product: ProductBarcodeRecord) => {
+  const handleAttachBarcodeToProduct = async (
+    product: ProductBarcodeRecord,
+    confirmReplace = false
+  ) => {
     if (!unknownBarcode) return;
+    if (product.barcode && product.barcode.trim() !== unknownBarcode && !confirmReplace) {
+      setLinkError(null);
+      setPendingReplaceProduct(product);
+      return;
+    }
+
     setIsLinking(true);
     setLinkError(null);
+    setPendingReplaceProduct(null);
     try {
-      const updated = await updateProductBarcode(product.id, unknownBarcode);
+      const updated = await updateProductBarcode(product.id, unknownBarcode, confirmReplace);
       setLinkSuccess(`Successfully attached barcode to "${updated.name}"!`);
       setTimeout(() => {
         if (onProductFound) {
@@ -395,7 +407,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                 <div className="flex-1">
                   <h4 className="text-sm font-bold">Unknown Barcode</h4>
                   <p className="text-xs mt-0.5 text-amber-400">
-                    No active product in your catalog matches barcode:
+                    Product not found for this barcode.
                   </p>
                   <div className="mt-2 inline-block font-mono text-xs px-2.5 py-1 rounded bg-black/20 font-bold border border-amber-500/30">
                     {unknownBarcode}
@@ -466,6 +478,34 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                   </div>
                 )}
 
+                {pendingReplaceProduct && (
+                  <div className="p-3 rounded-lg bg-amber-500/15 border border-amber-500/40 text-xs space-y-2">
+                    <p className="font-semibold text-amber-700 dark:text-amber-300">
+                      &ldquo;{pendingReplaceProduct.name}&rdquo; already has barcode{' '}
+                      <span className="font-mono font-bold">{pendingReplaceProduct.barcode}</span>.
+                      Replace it with <span className="font-mono font-bold">{unknownBarcode}</span>?
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={isLinking}
+                        onClick={() => handleAttachBarcodeToProduct(pendingReplaceProduct, true)}
+                        className="px-3 py-1.5 rounded-lg bg-amber-600 text-white font-bold hover:bg-amber-700 disabled:opacity-50 transition"
+                      >
+                        {isLinking ? 'Replacing...' : 'Confirm Replace Barcode'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isLinking}
+                        onClick={() => setPendingReplaceProduct(null)}
+                        className="px-3 py-1.5 rounded-lg border border-[var(--khata-border)] font-semibold text-[var(--khata-text)] hover:bg-black/5 transition"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {linkProducts.length > 0 && (
                   <div className="space-y-1.5 max-h-40 overflow-y-auto">
                     {linkProducts.map((p) => (
@@ -473,7 +513,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                         key={p.id}
                         type="button"
                         disabled={isLinking}
-                        onClick={() => handleAttachBarcodeToProduct(p)}
+                        onClick={() => handleAttachBarcodeToProduct(p, false)}
                         className="w-full flex items-center justify-between p-2 rounded-lg text-left text-xs bg-[var(--khata-surface)] hover:bg-[var(--khata-accent)]/10 border border-[var(--khata-border)] transition"
                       >
                         <div>
@@ -496,6 +536,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                 type="button"
                 onClick={() => {
                   setUnknownBarcode(null);
+                  setPendingReplaceProduct(null);
                   setLinkSearch('');
                   setLinkProducts([]);
                   setLinkError(null);

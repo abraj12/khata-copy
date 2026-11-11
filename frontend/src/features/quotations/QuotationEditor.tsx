@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Decimal from 'decimal.js';
 import {
   FileText,
   Plus,
   Trash2,
-  Scan,
   Eye,
   Save,
   Send,
@@ -23,9 +22,7 @@ import {
   fetchQuotationSettings,
   createQuotation,
 } from './quotationApi.js';
-import { BarcodeScannerModal } from '../barcode/BarcodeScannerModal.js';
-import { useHardwareBarcodeScanner } from '../barcode/useHardwareBarcodeScanner.js';
-import { fetchProductByBarcode } from '../barcode/barcodeApi.js';
+import { BillingBarcodeControls } from '../barcode/BillingBarcodeControls.js';
 import { QuotationPreview } from './QuotationPreview.js';
 import { apiClient } from '../../lib/apiClient.js';
 import { formatCurrency } from '../../lib/formatters.js';
@@ -33,6 +30,8 @@ import { INDIAN_STATES, getStateByCode, resolveCustomerStateSelection } from '..
 import { getBusinessDateISO, addBusinessCalendarDays } from '../../utils/businessDate.js';
 import {
   applyCatalogProductToDraftLine,
+  ProductCatalogReference,
+  upsertScannedProductLine,
   validateQuantityInput,
   validateSellingRateInput,
 } from '../../utils/lineItemDraft.js';
@@ -99,9 +98,6 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
   // State
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Scanner modal state
-  const [isScannerOpen, setIsScannerOpen] = useState(false);
 
   // Preview modal state
   const [previewPayload, setPreviewPayload] = useState<CreateQuotationPayload | null>(null);
@@ -279,80 +275,47 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     setProductSearchResults((prev) => ({ ...prev, [rowIdx]: [] }));
   };
 
-  // Barcode Scan Handler (Hardware Scanner & Camera Scanner)
-  const handleBarcodeScanned = useCallback(async (code: string) => {
-    try {
-      const product = await fetchProductByBarcode(code);
-      if (!product) {
-        setError(`No active product found with barcode "${code}".`);
-        return;
-      }
-
-      // Check if product is already in line items
-      setItems((prev) => {
-        const existingIdx = prev.findIndex(
-          (it) => (it.barcode && it.barcode === product.barcode) || it.productId === product.id
-        );
-
-        if (existingIdx >= 0) {
-          // Increment quantity by 1
-          const next = [...prev];
-          const curQty = new Decimal(String(next[existingIdx].quantity || 1));
-          const newQty = curQty.plus(1);
-          const rate = new Decimal(String(next[existingIdx].rate || 0));
-          next[existingIdx] = {
-            ...next[existingIdx],
-            quantity: newQty.toFixed(2),
-            amount: newQty.times(rate).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2),
-          };
-          return next;
-        } else {
-          // Check if first row is untouched empty row
-          if (prev.length === 1 && !prev[0].description.trim()) {
-            const nextLine = applyCatalogProductToDraftLine(prev[0], product);
-            return [
-              {
-                productId: product.id,
-                description: product.name,
-                hsnCode: product.hsn_code || '',
-                barcode: product.barcode || '',
-                quantity: 1,
-                unit: 'pcs',
-                rate: nextLine.rate,
-                rateUnit: 'pcs',
-                amount: nextLine.rate || '0.00',
-              },
-            ];
+  // Shared Barcode Resolution Handler (USB/BT Scanner, Manual Entry & Camera Scanner)
+  const handleBarcodeResolved = (product: ProductCatalogReference) => {
+    const normalizedLines = items.map((it) => ({
+      ...it,
+      quantity: String(it.quantity ?? ''),
+      rate: String(it.rate ?? ''),
+    }));
+    const res = upsertScannedProductLine(normalizedLines, product, () => ({
+      productId: null,
+      description: '',
+      hsnCode: '',
+      barcode: '',
+      quantity: '1',
+      unit: 'pcs',
+      rate: '',
+      rateUnit: 'pcs',
+      amount: '0.00',
+    }));
+    if (!res.error) {
+      setItems(
+        res.nextLines.map((line) => {
+          let amt = '0.00';
+          try {
+            const q = new Decimal(String(line.quantity || 0));
+            const r = new Decimal(String(line.rate || 0));
+            amt = q.times(r).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+          } catch {
+            amt = '0.00';
           }
-
-          // Append new item
-          const nextLine = applyCatalogProductToDraftLine({}, product);
-          return [
-            ...prev,
-            {
-              productId: product.id,
-              description: product.name,
-              hsnCode: product.hsn_code || '',
-              barcode: product.barcode || '',
-              quantity: 1,
-              unit: 'pcs',
-              rate: nextLine.rate,
-              rateUnit: 'pcs',
-              amount: nextLine.rate || '0.00',
-            },
-          ];
-        }
-      });
+          return {
+            ...line,
+            unit: line.unit || 'pcs',
+            rateUnit: line.rateUnit || 'pcs',
+            amount: amt,
+          };
+        })
+      );
       setError(null);
-    } catch (err: any) {
-      setError(err?.message || 'Error looking up barcode.');
     }
-  }, []);
-
-  // Hook hardware HID scanner
-  useHardwareBarcodeScanner({
-    onScan: handleBarcodeScanned,
-  });
+    return { action: res.action, error: res.error };
+  };
 
   // Calculate live financial summary with pure Decimal.js
   let subtotalDec = new Decimal(0);
@@ -762,14 +725,6 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => setIsScannerOpen(true)}
-              className="neu-btn-secondary text-xs px-3 py-1.5 font-bold inline-flex items-center gap-1.5"
-            >
-              <Scan className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
-              <span>Scan Barcode</span>
-            </button>
-            <button
-              type="button"
               onClick={handleAddItem}
               className="neu-btn-secondary text-xs px-3 py-1.5 font-bold inline-flex items-center gap-1.5"
             >
@@ -778,6 +733,11 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
             </button>
           </div>
         </div>
+
+        <BillingBarcodeControls
+          enableGlobalScanner={!previewPayload}
+          onProductResolved={handleBarcodeResolved}
+        />
 
         {/* 1. Mobile Phone Line Items Card Editor (sm:hidden) */}
         <div className="sm:hidden space-y-3">
@@ -1300,15 +1260,6 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
           </button>
         </div>
       </div>
-
-      {/* Barcode Camera Scanner Modal */}
-      <BarcodeScannerModal
-        isOpen={isScannerOpen}
-        onClose={() => setIsScannerOpen(false)}
-        onProductFound={(product) => {
-          handleBarcodeScanned(product.barcode || '');
-        }}
-      />
 
       {/* PDF Live Preview Modal */}
       {previewPayload && (

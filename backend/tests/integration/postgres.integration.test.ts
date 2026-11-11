@@ -13,6 +13,7 @@ import {
   GST_INVOICE_NUMBERING_CONFIG,
   NORMAL_BILL_NUMBERING_CONFIG,
   QUOTATION_NUMBERING_CONFIG,
+  SUPPLIER_PAYMENT_RECEIPT_NUMBERING_CONFIG,
 } from '../../src/modules/billing/numbering.js';
 import {
   acquireIdempotencyLock,
@@ -25,6 +26,8 @@ import { khataService } from '../../src/modules/khata/khata.service.js';
 import { quotationsService } from '../../src/modules/quotations/quotations.service.js';
 import { gstInvoicesService } from '../../src/modules/gstInvoices/gstInvoices.service.js';
 import { normalBillsService } from '../../src/modules/normalBills/normalBills.service.js';
+import { productsService } from '../../src/modules/products/products.service.js';
+import { suppliersService } from '../../src/modules/suppliers/suppliers.service.js';
 
 const { Pool } = pg;
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
@@ -49,6 +52,13 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     try {
       // 1. Drop public schema tables cleanly for test isolation
       await client.query(`
+        DROP TABLE IF EXISTS "supplier_payment_allocations" CASCADE;
+        DROP TABLE IF EXISTS "supplier_payments" CASCADE;
+        DROP SEQUENCE IF EXISTS "supplier_payment_receipt_seq" CASCADE;
+        DROP TABLE IF EXISTS "supplier_purchase_bill_history" CASCADE;
+        DROP TABLE IF EXISTS "supplier_purchase_bill_items" CASCADE;
+        DROP TABLE IF EXISTS "supplier_purchase_bills" CASCADE;
+        DROP TABLE IF EXISTS "suppliers" CASCADE;
         DROP TABLE IF EXISTS "quotation_items" CASCADE;
         DROP TABLE IF EXISTS "quotations" CASCADE;
         DROP TABLE IF EXISTS "quotation_settings" CASCADE;
@@ -95,6 +105,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '017_quotation_conversion_financial_fields.sql',
         '018_numbering_and_legacy_data_integrity.sql',
         '019_customer_tax_integrity_and_idempotency.sql',
+        '020_supplier_management.sql',
       ];
 
       await client.query(`
@@ -150,6 +161,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '017_quotation_conversion_financial_fields.sql',
       '018_numbering_and_legacy_data_integrity.sql',
       '019_customer_tax_integrity_and_idempotency.sql',
+      '020_supplier_management.sql',
     ]);
 
     const expectedTables = [
@@ -170,6 +182,12 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       'quotations',
       'quotation_items',
       'quotation_settings',
+      'suppliers',
+      'supplier_purchase_bills',
+      'supplier_purchase_bill_items',
+      'supplier_purchase_bill_history',
+      'supplier_payments',
+      'supplier_payment_allocations',
     ];
 
     const tablesRes = await pool.query(
@@ -1451,6 +1469,298 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
 
       const afterCountRes = await pool.query(`SELECT COUNT(*)::INT AS c FROM quotations`);
       expect(afterCountRes.rows[0].c).toBe(beforeCount);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  // 24. Clean Upgrade from 019 Schema to 020 Supplier Management & Barcode Non-Empty Hardening
+  it('24. Upgrades an existing 019 schema cleanly to 020 and normalizes empty/whitespace product barcodes', async () => {
+    const upgradeClient = await pool.connect();
+    try {
+      await upgradeClient.query('DROP SCHEMA IF EXISTS test_upgrade_019 CASCADE');
+      await upgradeClient.query('CREATE SCHEMA test_upgrade_019');
+      await upgradeClient.query('SET search_path TO test_upgrade_019, public');
+
+      const migrationsDir = path.resolve(__dirname, '../../migrations');
+      const baseMigrations = [
+        '001_auth_tables.sql',
+        '002_khata_transactions.sql',
+        '003_idempotency_and_hardening.sql',
+        '004_integer_quantity_and_money_constraints.sql',
+        '005_search_indexes_and_identity_constraints.sql',
+        '006_quantity_two_decimal_places.sql',
+        '007_quantity_strict_scale_and_allocation_integrity.sql',
+        '008_strict_quantity_scale.sql',
+        '009_product_images_and_offline_bills.sql',
+        '010_product_hsn_code.sql',
+        '011_gst_invoices.sql',
+        '012_normal_bills.sql',
+        '013_customer_address.sql',
+        '014_billing_quantity_and_sequences.sql',
+        '015_product_barcode.sql',
+        '016_quotations.sql',
+        '017_quotation_conversion_financial_fields.sql',
+        '018_numbering_and_legacy_data_integrity.sql',
+        '019_customer_tax_integrity_and_idempotency.sql',
+      ];
+      for (const file of baseMigrations) {
+        const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+        await upgradeClient.query(sql);
+      }
+
+      // Seed legacy product with whitespace-only barcode and valid leading-zero barcode before applying 020
+      const p1 = await upgradeClient.query(
+        `INSERT INTO products (name, buying_price, barcode) VALUES ('Legacy Blank Barcode', 100.00, '   ') RETURNING id`
+      );
+      const p2 = await upgradeClient.query(
+        `INSERT INTO products (name, buying_price, barcode) VALUES ('Legacy Valid Barcode', 150.00, '00890123') RETURNING id`
+      );
+
+      const sql020 = fs.readFileSync(path.join(migrationsDir, '020_supplier_management.sql'), 'utf8');
+      await upgradeClient.query(sql020);
+
+      const checkP1 = await upgradeClient.query('SELECT barcode FROM products WHERE id = $1', [p1.rows[0].id]);
+      const checkP2 = await upgradeClient.query('SELECT barcode FROM products WHERE id = $1', [p2.rows[0].id]);
+      expect(checkP1.rows[0].barcode).toBeNull();
+      expect(checkP2.rows[0].barcode).toBe('00890123');
+
+      await expect(
+        upgradeClient.query(`INSERT INTO products (name, buying_price, barcode) VALUES ('Empty Barcode', 50.00, '')`)
+      ).rejects.toThrow();
+    } finally {
+      await upgradeClient.query('SET search_path TO public');
+      await upgradeClient.query('DROP SCHEMA IF EXISTS test_upgrade_019 CASCADE');
+      upgradeClient.release();
+    }
+  });
+
+  // 25. End-to-End Supplier Management, Opt-In Buying Price, Cross-Supplier FK Guard & Barcode Overwrite Protection
+  it('25. Runs real suppliersService and productsService against PostgreSQL including purchase bills, payments, statements, archives & rollback safety', async () => {
+    vi.spyOn(appPool, 'connect').mockImplementation(() => pool.connect());
+    vi.spyOn(appPool, 'query').mockImplementation((...args: any[]) => (pool.query as any)(...args));
+
+    try {
+      // A. Product barcode creation, silent overwrite block, confirmed replacement, and DB non-empty check
+      const prod = await productsService.createProduct('Real PG SMPS 24V', '180.00', '8504', '008901234500');
+      expect(prod.barcode).toBe('008901234500');
+
+      await expect(productsService.updateBarcode(prod.id, '008909999900')).rejects.toMatchObject({
+        status: 409,
+        code: 'BARCODE_REPLACE_CONFIRMATION_REQUIRED',
+      });
+
+      const updatedBarcode = await productsService.updateBarcode(prod.id, '008909999900', {
+        confirmReplaceBarcode: true,
+      });
+      expect(updatedBarcode?.barcode).toBe('008909999900');
+
+      await expect(
+        pool.query(`UPDATE products SET barcode = '   ' WHERE id = $1`, [prod.id])
+      ).rejects.toThrow();
+
+      // B. Supplier CRUD & duplicate active prevention
+      const supA = await suppliersService.createSupplier({
+        name: 'Apex Electrical Distributors',
+        contactPerson: 'Ramesh Kumar',
+        phone: '09876500001',
+        state: 'Bihar',
+        gstin: '10ABGCA8624E1Z3',
+      });
+      expect(supA.id).toMatch(/^[0-9a-f-]{36}$/i);
+      expect(supA.phone).toBe('+919876500001');
+      expect(supA.stateCode).toBe('10');
+
+      await expect(
+        suppliersService.createSupplier({ name: '  apex electrical   distributors ' })
+      ).rejects.toMatchObject({ status: 409 });
+
+      const supB = await suppliersService.createSupplier({
+        name: 'Beta Components House',
+        phone: '9876500002',
+      });
+
+      // C. Purchase Bill creation: opt-in buying price default false preserves product master price
+      const billA1 = await suppliersService.createPurchaseBill({
+        supplierId: supA.id,
+        invoiceNumber: 'APEX-2026-001',
+        invoiceDate: '2026-04-02',
+        dueDate: '2026-04-15',
+        gstRate: '18',
+        items: [
+          {
+            productId: prod.id,
+            description: prod.name,
+            quantity: '2.50',
+            purchaseRate: '200.00',
+            updateProductBuyingPrice: false,
+          },
+        ],
+      });
+      // 2.50 * 200.00 = 500.00, 18% GST = 90.00, Grand Total = 590.00
+      expect(billA1.grandTotal).toBe('590.00');
+      expect(billA1.paymentStatus).toBe('unpaid');
+      expect(billA1.remainingAmount).toBe('590.00');
+
+      const prodAfterOptOut = await productsService.getProductById(prod.id);
+      expect(prodAfterOptOut?.buying_price).toBe('180.00');
+
+      // Opt-in buying price update explicitly updates catalog buying_price
+      const billA2 = await suppliersService.createPurchaseBill({
+        supplierId: supA.id,
+        invoiceNumber: 'APEX-2026-002',
+        invoiceDate: '2026-04-05',
+        items: [
+          {
+            productId: prod.id,
+            description: prod.name,
+            quantity: '1',
+            purchaseRate: '215.50',
+            updateProductBuyingPrice: true,
+          },
+        ],
+      });
+      expect(billA2.grandTotal).toBe('215.50');
+      const prodAfterOptIn = await productsService.getProductById(prod.id);
+      expect(prodAfterOptIn?.buying_price).toBe('215.50');
+
+      // DB check rejects >2 decimal quantity on supplier_purchase_bill_items
+      await expect(
+        pool.query(
+          `INSERT INTO supplier_purchase_bill_items (purchase_bill_id, item_index, description, quantity, purchase_rate, line_total)
+           VALUES ($1, 99, 'Invalid 3dp', 1.234, 100.00, 123.40)`,
+          [billA1.id]
+        )
+      ).rejects.toThrow();
+
+      // Purchase bill edit creates immutable version 2 audit snapshot
+      const editedA2 = await suppliersService.updatePurchaseBill(billA2.id, {
+        invoiceNumber: 'APEX-2026-002',
+        invoiceDate: '2026-04-05',
+        gstRate: '0',
+        discountAmount: '15.50',
+        items: [
+          {
+            productId: prod.id,
+            description: prod.name,
+            quantity: '1',
+            purchaseRate: '215.50',
+            updateProductBuyingPrice: false,
+          },
+        ],
+        reason: 'Vendor trade discount applied',
+      });
+      expect(editedA2.grandTotal).toBe('200.00');
+      expect(editedA2.version).toBe(2);
+      expect(editedA2.history.some((h) => h.action === 'edited' && h.version === 2)).toBe(true);
+
+      // D. Supplier Payments, atomic SUP-PAY numbering & cross-supplier allocation rejection
+      const payA1 = await suppliersService.createSupplierPayment({
+        supplierId: supA.id,
+        paymentDate: '2026-04-06',
+        amount: '500.00',
+        paymentMethod: 'upi',
+        transactionReference: 'UTR-APEX-1',
+        allocations: [{ purchaseBillId: billA1.id, amount: '300.00' }],
+      });
+      expect(payA1.receiptNumber).toMatch(/^SUP-PAY-\d{3,}$/);
+      expect(payA1.allocatedAmount).toBe('300.00');
+      expect(payA1.unallocatedAmount).toBe('200.00');
+
+      // Allocate remaining unallocated payment onto billA2
+      const allocatedPay = await suppliersService.allocateAdvancePayment(payA1.id, [
+        { purchaseBillId: billA2.id, amount: '200.00' },
+      ]);
+      expect(allocatedPay.allocatedAmount).toBe('500.00');
+      expect(allocatedPay.unallocatedAmount).toBe('0.00');
+
+      // Cross-supplier allocation rejected by both service layer AND PostgreSQL composite FK
+      await expect(
+        suppliersService.createSupplierPayment({
+          supplierId: supB.id,
+          paymentDate: '2026-04-06',
+          amount: '100.00',
+          paymentMethod: 'cash',
+          allocations: [{ purchaseBillId: billA1.id, amount: '100.00' }],
+        })
+      ).rejects.toThrow();
+
+      const payB = await suppliersService.createSupplierPayment({
+        supplierId: supB.id,
+        paymentDate: '2026-04-06',
+        amount: '100.00',
+        paymentMethod: 'cash',
+      });
+      await expect(
+        pool.query(
+          `INSERT INTO supplier_payment_allocations (supplier_id, supplier_payment_id, supplier_purchase_bill_id, allocated_amount)
+           VALUES ($1, $2, $3, 50.00)`,
+          [supB.id, payB.id, billA1.id]
+        )
+      ).rejects.toThrow();
+
+      // Parallel receipt numbering check
+      const allocConcurrent = await Promise.all(
+        Array.from({ length: 3 }, async () => {
+          const c = await pool.connect();
+          try {
+            await c.query('BEGIN');
+            const num = await allocateDocumentNumber(c, SUPPLIER_PAYMENT_RECEIPT_NUMBERING_CONFIG);
+            await c.query('COMMIT');
+            return num;
+          } finally {
+            c.release();
+          }
+        })
+      );
+      expect(new Set(allocConcurrent).size).toBe(3);
+
+      // E. Dashboard / Supplier Details / Statement Single Formula Consistency & 0.00 Opening Balance
+      const dashboard = await suppliersService.getDashboard();
+      const supADetails = await suppliersService.getSupplierById(supA.id);
+      const statementA = await suppliersService.getSupplierStatement(supA.id, {});
+
+      // supA purchases = 590.00 + 200.00 = 790.00; payments = 500.00; payable = 290.00
+      expect(supADetails.totalPurchases).toBe('790.00');
+      expect(supADetails.totalPayments).toBe('500.00');
+      expect(supADetails.outstandingPayable).toBe('290.00');
+      expect(statementA.openingBalance).toBe('0.00');
+      expect(statementA.closingBalance).toBe('290.00');
+      expect(dashboard.kpis.totalOutstandingPayable).toBe('290.00');
+
+      // History-safe delete block & archive statement access
+      await expect(suppliersService.deleteSupplier(supA.id)).rejects.toMatchObject({
+        status: 409,
+        code: 'SUPPLIER_HAS_FINANCIAL_HISTORY',
+      });
+
+      const archivedA = await suppliersService.archiveSupplier(supA.id);
+      expect(archivedA.archivedAt).not.toBeNull();
+
+      const archivedStatement = await suppliersService.getSupplierStatement(supA.id, {});
+      expect(archivedStatement.closingBalance).toBe('290.00');
+      expect(archivedStatement.entries).toHaveLength(3);
+
+      // Zero-history supplier can be deleted cleanly
+      const zeroHistorySup = await suppliersService.createSupplier({ name: 'Disposable Zero History Supplier' });
+      await suppliersService.deleteSupplier(zeroHistorySup.id);
+      await expect(suppliersService.getSupplierById(zeroHistorySup.id)).rejects.toMatchObject({ status: 404 });
+
+      // F. Transaction rollback safety on invalid bill item insert
+      const beforeBillCount = Number(
+        (await pool.query('SELECT COUNT(*)::int AS c FROM supplier_purchase_bills')).rows[0].c
+      );
+      await expect(
+        suppliersService.createPurchaseBill({
+          supplierId: supB.id,
+          invoiceNumber: 'RB-FAIL-1',
+          items: [{ productId: 99999999, description: 'Nonexistent', quantity: '1', purchaseRate: '100' }],
+        })
+      ).rejects.toThrow();
+      const afterBillCount = Number(
+        (await pool.query('SELECT COUNT(*)::int AS c FROM supplier_purchase_bills')).rows[0].c
+      );
+      expect(afterBillCount).toBe(beforeBillCount);
     } finally {
       vi.restoreAllMocks();
     }

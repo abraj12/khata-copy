@@ -198,7 +198,13 @@ export class ProductsService {
    */
   public async updateProduct(
     id: number,
-    data: { name?: string; buyingPrice?: string | number; hsnCode?: string | null; barcode?: string | null }
+    data: {
+      name?: string;
+      buyingPrice?: string | number;
+      hsnCode?: string | null;
+      barcode?: string | null;
+      confirmReplaceBarcode?: boolean;
+    }
   ): Promise<ProductRecord | null> {
     const existing = await this.getProductById(id);
     if (!existing || existing.archived_at) return null;
@@ -218,6 +224,19 @@ export class ProductsService {
     const newBarcode = data.barcode !== undefined
       ? this.normalizeBarcode(data.barcode)
       : (existing.barcode || null);
+
+    if (
+      existing.barcode &&
+      data.barcode !== undefined &&
+      newBarcode !== existing.barcode &&
+      !data.confirmReplaceBarcode
+    ) {
+      throw new AppError(
+        `Product "${existing.name}" already has barcode "${existing.barcode}". Confirm barcode replacement before changing it.`,
+        409,
+        'BARCODE_REPLACE_CONFIRMATION_REQUIRED'
+      );
+    }
 
     try {
       const result = await appPool.query(
@@ -242,8 +261,27 @@ export class ProductsService {
   /**
    * Specifically associates or removes a barcode from an existing active product
    */
-  public async updateBarcode(id: number, barcode: string | null): Promise<ProductRecord | null> {
+  public async updateBarcode(
+    id: number,
+    barcode: string | null,
+    options?: { confirmReplaceBarcode?: boolean }
+  ): Promise<ProductRecord | null> {
     const normalized = this.normalizeBarcode(barcode);
+
+    const existing = await this.getProductById(id);
+    if (
+      existing &&
+      !existing.archived_at &&
+      existing.barcode &&
+      existing.barcode !== normalized &&
+      !options?.confirmReplaceBarcode
+    ) {
+      throw new AppError(
+        `Product "${existing.name}" already has barcode "${existing.barcode}". Confirm barcode replacement before changing it.`,
+        409,
+        'BARCODE_REPLACE_CONFIRMATION_REQUIRED'
+      );
+    }
 
     try {
       const result = await appPool.query(

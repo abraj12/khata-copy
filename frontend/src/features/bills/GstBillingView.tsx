@@ -40,15 +40,19 @@ import {
 import { getBusinessDateISO } from '../../utils/businessDate.js';
 import {
   applyCatalogProductToDraftLine,
+  ProductCatalogReference,
+  upsertScannedProductLine,
   validateQuantityInput,
   validateSellingRateInput,
 } from '../../utils/lineItemDraft.js';
+import { BillingBarcodeControls } from '../barcode/BillingBarcodeControls.js';
 
 interface ProductItem {
   id: number;
   name: string;
   buying_price: string;
   hsn_code?: string | null;
+  barcode?: string | null;
 }
 
 interface CustomerItem {
@@ -66,6 +70,8 @@ interface FormLineItem {
   productId?: number | null;
   description: string;
   hsnCode: string;
+  barcode?: string;
+  buyingPriceReference?: string | null;
   quantity: string;
   unit: string;
   rate: string;
@@ -481,12 +487,33 @@ export const GstBillingView: React.FC = () => {
             productId: updated.productId,
             description: updated.description,
             hsnCode: updated.hsnCode,
+            barcode: updated.barcode,
+            buyingPriceReference: updated.buyingPriceReference,
             rate: updated.rate,
           };
         }
         return i;
       })
     );
+  };
+
+  const handleBarcodeResolved = (product: ProductCatalogReference) => {
+    const res = upsertScannedProductLine(items, product, () => ({
+      id: `item-${Date.now()}-${Math.random()}`,
+      productId: null,
+      description: '',
+      hsnCode: '',
+      barcode: '',
+      buyingPriceReference: null,
+      quantity: '1',
+      unit: 'pcs',
+      rate: '',
+      rateUnit: '',
+    }));
+    if (!res.error) {
+      setItems(res.nextLines);
+    }
+    return { action: res.action, error: res.error };
   };
 
   // Handle selecting an existing customer
@@ -1111,6 +1138,25 @@ export const GstBillingView: React.FC = () => {
                     <span>Add Item</span>
                   </button>
                 </div>
+
+                <BillingBarcodeControls
+                  enableGlobalScanner={
+                    activeSubTab === 'create' && !successRecord && !previewInvoice
+                  }
+                  onProductResolved={handleBarcodeResolved}
+                  onCatalogProductCreated={(created) => {
+                    setAvailableProducts((prev) => [
+                      {
+                        id: created.id,
+                        name: created.name,
+                        buying_price: created.buying_price,
+                        hsn_code: created.hsn_code ?? null,
+                        barcode: created.barcode ?? null,
+                      },
+                      ...prev,
+                    ]);
+                  }}
+                />
 
                 {/* Items Table Form */}
                 <div className="space-y-4">

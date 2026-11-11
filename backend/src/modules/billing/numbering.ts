@@ -2,10 +2,14 @@ import type { Pool, PoolClient } from 'pg';
 import { AppError } from '../../utils/errors.js';
 
 export interface NumberingConfig {
-  sequenceName: 'normal_bill_number_seq' | 'gst_invoice_number_seq' | 'quotation_number_seq';
-  tableName: 'normal_bills' | 'gst_invoices' | 'quotations';
-  columnName: 'bill_number' | 'invoice_number' | 'quotation_number';
-  lockKey: 1 | 2 | 3;
+  sequenceName:
+    | 'normal_bill_number_seq'
+    | 'gst_invoice_number_seq'
+    | 'quotation_number_seq'
+    | 'supplier_payment_receipt_seq';
+  tableName: 'normal_bills' | 'gst_invoices' | 'quotations' | 'supplier_payments';
+  columnName: 'bill_number' | 'invoice_number' | 'quotation_number' | 'receipt_number';
+  lockKey: 1 | 2 | 3 | 4;
   duplicateErrorCode?: string;
   format?: (value: bigint | number | string) => string;
   parseManual?: (value: string) => bigint | null;
@@ -52,6 +56,20 @@ export const QUOTATION_NUMBERING_CONFIG: NumberingConfig = {
     return match ? BigInt(match[1]) : null;
   },
   maxExtractPattern: '^QT-([0-9]+)$',
+};
+
+export const SUPPLIER_PAYMENT_RECEIPT_NUMBERING_CONFIG: NumberingConfig = {
+  sequenceName: 'supplier_payment_receipt_seq',
+  tableName: 'supplier_payments',
+  columnName: 'receipt_number',
+  lockKey: 4,
+  duplicateErrorCode: 'DUPLICATE_RECEIPT_NUMBER',
+  format: (value: bigint | number | string) => `SUP-PAY-${String(value).padStart(3, '0')}`,
+  parseManual: (value: string) => {
+    const match = /^SUP-PAY-(\d+)$/i.exec(value.trim());
+    return match ? BigInt(match[1]) : null;
+  },
+  maxExtractPattern: '^SUP-PAY-([0-9]+)$',
 };
 
 const LOCK_NAMESPACE = 18420;

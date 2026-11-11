@@ -10,9 +10,16 @@ import {
   AlertCircle,
   FileText,
   ChevronDown,
+  Building2,
 } from 'lucide-react';
 
-export type NavTab = 'khata' | 'products' | 'quotations' | 'gst-bill' | 'normal-bill';
+export type NavTab =
+  | 'khata'
+  | 'products'
+  | 'suppliers'
+  | 'quotations'
+  | 'gst-bill'
+  | 'normal-bill';
 
 interface NavbarProps {
   currentTab: NavTab;
@@ -150,6 +157,21 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             >
               <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               <span>Quotations</span>
+            </button>
+
+            {/* Suppliers Navigation Tab */}
+            <button
+              type="button"
+              onClick={() => onTabChange('suppliers')}
+              className={`inline-flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[44px] flex-1 sm:flex-initial ${
+                currentTab === 'suppliers'
+                  ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
+                  : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
+              }`}
+              aria-current={currentTab === 'suppliers' ? 'page' : undefined}
+            >
+              <Building2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <span>Suppliers</span>
             </button>
 
             {/* 4. Bill Dropdown Menu (Contains GST Bill & Normal Bill) */}

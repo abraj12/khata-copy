@@ -51,6 +51,7 @@ export const EXPECTED_MIGRATIONS = [
   '017_quotation_conversion_financial_fields.sql',
   '018_numbering_and_legacy_data_integrity.sql',
   '019_customer_tax_integrity_and_idempotency.sql',
+  '020_supplier_management.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [
@@ -71,6 +72,12 @@ export const EXPECTED_CORE_TABLES = [
   'quotations',
   'quotation_items',
   'quotation_settings',
+  'suppliers',
+  'supplier_purchase_bills',
+  'supplier_purchase_bill_items',
+  'supplier_purchase_bill_history',
+  'supplier_payments',
+  'supplier_payment_allocations',
 ];
 
 export interface ReadinessReport {
@@ -110,7 +117,7 @@ export async function checkDatabaseLiveness(): Promise<boolean> {
  * 1. Connectivity via application pool
  * 2. Presence of schema_migrations table
  * 3. Applied migration versions check
- * 4. Verification of all 9 core financial/auth tables
+ * 4. Verification of all core financial/auth tables
  */
 export async function checkDatabaseReadiness(): Promise<ReadinessReport> {
   const start = Date.now();

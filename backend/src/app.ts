@@ -16,6 +16,7 @@ import { offlineBillsRoutes } from './modules/offlineBills/offlineBills.routes.j
 import gstInvoicesRoutes from './modules/gstInvoices/gstInvoices.routes.js';
 import normalBillsRoutes from './modules/normalBills/normalBills.routes.js';
 import quotationsRoutes from './modules/quotations/quotations.routes.js';
+import { suppliersRoutes } from './modules/suppliers/suppliers.routes.js';
 
 export function createApp(options?: { useMemoryStoreInTest?: boolean; customStore?: session.Store }) {
   const app = express();
@@ -126,6 +127,7 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean; customStor
   app.use('/api/v1/gst-invoices', gstInvoicesRoutes);
   app.use('/api/v1/normal-bills', normalBillsRoutes);
   app.use('/api/v1/quotations', quotationsRoutes);
+  app.use('/api/v1/suppliers', suppliersRoutes);
 
   // 9. Centralized Error Handler
   app.use(errorHandler);

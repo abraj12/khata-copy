@@ -83,6 +83,7 @@ const updateProductSchema = z.object({
   buying_price: z.union([z.number(), z.string()]).optional(),
   hsn_code: z.string().trim().max(20, 'HSN code cannot exceed 20 characters').nullable().optional(),
   barcode: z.string().trim().max(64, 'Barcode cannot exceed 64 characters').nullable().optional(),
+  confirmReplaceBarcode: z.boolean().optional(),
 });
 
 const uploadIntentSchema = z.object({
@@ -125,6 +126,7 @@ router.get('/barcode/:barcode', async (req: Request, res: Response, next: NextFu
 
 const patchBarcodeSchema = z.object({
   barcode: z.string().trim().max(64, 'Barcode cannot exceed 64 characters').nullable(),
+  confirmReplaceBarcode: z.boolean().optional(),
 });
 
 /**
@@ -148,7 +150,9 @@ router.patch('/:id/barcode', async (req: Request, res: Response, next: NextFunct
       return;
     }
 
-    const updated = await productsService.updateBarcode(id, parsed.data.barcode ?? null);
+    const updated = await productsService.updateBarcode(id, parsed.data.barcode ?? null, {
+      confirmReplaceBarcode: parsed.data.confirmReplaceBarcode,
+    });
     if (!updated) {
       res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product not found or archived.' });
       return;
@@ -239,6 +243,7 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
       buyingPrice: validatedPrice,
       hsnCode: parsed.data.hsn_code,
       barcode: parsed.data.barcode,
+      confirmReplaceBarcode: parsed.data.confirmReplaceBarcode,
     });
 
     if (!updated) {

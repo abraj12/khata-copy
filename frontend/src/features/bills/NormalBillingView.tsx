@@ -45,15 +45,19 @@ import {
 import { getBusinessDateISO } from '../../utils/businessDate.js';
 import {
   applyCatalogProductToDraftLine,
+  ProductCatalogReference,
+  upsertScannedProductLine,
   validateQuantityInput,
   validateSellingRateInput,
 } from '../../utils/lineItemDraft.js';
+import { BillingBarcodeControls } from '../barcode/BillingBarcodeControls.js';
 
 interface ProductItem {
   id: number;
   name: string;
   hsn_code: string | null;
   buying_price: string;
+  barcode?: string | null;
 }
 
 interface CustomerItem {
@@ -70,6 +74,8 @@ interface FormLineItem {
   productId: number | null;
   description: string;
   hsnCode: string;
+  barcode?: string;
+  buyingPriceReference?: string | null;
   quantity: string;
   unit: string;
   rate: string;
@@ -402,12 +408,33 @@ export const NormalBillingView: React.FC = () => {
             productId: updated.productId,
             description: updated.description,
             hsnCode: updated.hsnCode,
+            barcode: updated.barcode,
+            buyingPriceReference: updated.buyingPriceReference,
             rate: updated.rate,
           };
         }
         return item;
       })
     );
+  };
+
+  const handleBarcodeResolved = (product: ProductCatalogReference) => {
+    const res = upsertScannedProductLine(items, product, () => ({
+      id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      productId: null,
+      description: '',
+      hsnCode: '',
+      barcode: '',
+      buyingPriceReference: null,
+      quantity: '1',
+      unit: 'pcs',
+      rate: '',
+      rateUnit: '',
+    }));
+    if (!res.error) {
+      setItems(res.nextLines);
+    }
+    return { action: res.action, error: res.error };
   };
 
   // Pure Decimal Math Calculations (No GST, strictly synchronized with backend Decimal.ROUND_HALF_UP)
@@ -1117,6 +1144,23 @@ export const NormalBillingView: React.FC = () => {
                 <span>Add Item</span>
               </button>
             </div>
+
+            <BillingBarcodeControls
+              enableGlobalScanner={activeTab === 'create' && !successRecord && !previewInvoice}
+              onProductResolved={handleBarcodeResolved}
+              onCatalogProductCreated={(created) => {
+                setAvailableProducts((prev) => [
+                  {
+                    id: created.id,
+                    name: created.name,
+                    hsn_code: created.hsn_code ?? null,
+                    buying_price: created.buying_price,
+                    barcode: created.barcode ?? null,
+                  },
+                  ...prev,
+                ]);
+              }}
+            />
 
             {/* Line Items List */}
             <div className="space-y-4">

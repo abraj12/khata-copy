@@ -40,13 +40,17 @@ export async function fetchProductByBarcode(rawBarcode: string): Promise<Product
  */
 export async function updateProductBarcode(
   productId: number,
-  barcode: string | null
+  barcode: string | null,
+  confirmReplaceBarcode = false
 ): Promise<ProductBarcodeRecord> {
   const res = await apiClient<{ success: boolean; data: ProductBarcodeRecord }>(
     `/api/v1/products/${productId}/barcode`,
     {
       method: 'PATCH',
-      body: JSON.stringify({ barcode: barcode && barcode.trim() ? barcode.trim() : null }),
+      body: JSON.stringify({
+        barcode: barcode && barcode.trim() ? barcode.trim() : null,
+        confirmReplaceBarcode,
+      }),
     }
   );
   return res.data?.data;

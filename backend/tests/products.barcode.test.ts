@@ -310,4 +310,92 @@ describe('Product Barcode Feature Test Suite', () => {
     const res = await request(app).get('/api/v1/products/barcode/8901234567890');
     expect(res.status).toBe(401);
   });
+
+  it('10. Rejects silent overwrite of existing product barcode without confirmReplaceBarcode (409)', async () => {
+    const existingProduct = {
+      id: 209,
+      name: 'Existing Barcoded Cable',
+      buying_price: '120.00',
+      hsn_code: '8544',
+      barcode: '8900000000111',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      archived_at: null,
+      image_object_key: null,
+      image_content_type: null,
+      image_size_bytes: null,
+      image_updated_at: null,
+    };
+
+    vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
+      const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
+      if (sqlText.includes('FROM products') && sqlText.includes('WHERE id = $1')) {
+        return { rows: [existingProduct], rowCount: 1 } as any;
+      }
+      return { rows: [], rowCount: 0 } as any;
+    });
+
+    const resBarcode = await request(app)
+      .patch('/api/v1/products/209/barcode')
+      .set('Cookie', authCookie)
+      .set('x-csrf-token', csrfToken)
+      .send({ barcode: '8900000000222' });
+
+    expect(resBarcode.status).toBe(409);
+    expect(resBarcode.body.code).toBe('BARCODE_REPLACE_CONFIRMATION_REQUIRED');
+
+    const resUpdate = await request(app)
+      .patch('/api/v1/products/209')
+      .set('Cookie', authCookie)
+      .set('x-csrf-token', csrfToken)
+      .send({ barcode: '8900000000222' });
+
+    expect(resUpdate.status).toBe(409);
+    expect(resUpdate.body.code).toBe('BARCODE_REPLACE_CONFIRMATION_REQUIRED');
+  });
+
+  it('11. Replaces existing product barcode when confirmReplaceBarcode is true', async () => {
+    const existingProduct = {
+      id: 210,
+      name: 'Replaceable Barcoded Cable',
+      buying_price: '150.00',
+      hsn_code: '8544',
+      barcode: '8900000000111',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      archived_at: null,
+      image_object_key: null,
+      image_content_type: null,
+      image_size_bytes: null,
+      image_updated_at: null,
+    };
+
+    const updatedProduct = {
+      ...existingProduct,
+      barcode: '8900000000222',
+    };
+
+    vi.spyOn(appPool, 'query').mockImplementation(async (sql: any, params?: any) => {
+      const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
+      if (sqlText.includes('FROM products') && sqlText.includes('WHERE id = $1')) {
+        return { rows: [existingProduct], rowCount: 1 } as any;
+      }
+      if (sqlText.includes('UPDATE products') && sqlText.includes('SET barcode = $1')) {
+        expect(params?.[0]).toBe('8900000000222');
+        expect(params?.[1]).toBe(210);
+        return { rows: [updatedProduct], rowCount: 1 } as any;
+      }
+      return { rows: [], rowCount: 0 } as any;
+    });
+
+    const res = await request(app)
+      .patch('/api/v1/products/210/barcode')
+      .set('Cookie', authCookie)
+      .set('x-csrf-token', csrfToken)
+      .send({ barcode: '8900000000222', confirmReplaceBarcode: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.barcode).toBe('8900000000222');
+  });
 });

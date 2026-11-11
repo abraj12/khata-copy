@@ -11,12 +11,16 @@ import { env, isR2Configured } from '../config/env.js';
 import { AppError } from '../utils/errors.js';
 
 export const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+export const ALLOWED_SUPPLIER_DOC_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
 
 export const MAX_PRODUCT_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
 export const MAX_OFFLINE_BILL_BYTES = 10 * 1024 * 1024; // 10 MB
+export const MAX_SUPPLIER_DOC_BYTES = 10 * 1024 * 1024; // 10 MB
+
+export type StorageFolder = 'products' | 'offline-bills' | 'supplier-bills';
 
 export interface UploadIntentOptions {
-  folder: 'products' | 'offline-bills';
+  folder: StorageFolder;
   referenceId: string | number;
   contentType: string;
   sizeBytes: number;
@@ -40,6 +44,18 @@ export interface VerifiedObjectResult {
  */
 export function validateImageMagicBytes(buffer: Uint8Array, declaredType: string): boolean {
   if (!buffer || buffer.length < 4) return false;
+
+  // PDF: %PDF-
+  if (declaredType === 'application/pdf') {
+    return (
+      buffer.length >= 5 &&
+      buffer[0] === 0x25 &&
+      buffer[1] === 0x50 &&
+      buffer[2] === 0x44 &&
+      buffer[3] === 0x46 &&
+      buffer[4] === 0x2d
+    );
+  }
 
   // JPEG: FF D8 FF
   if (declaredType === 'image/jpeg') {
@@ -140,12 +156,13 @@ export class StorageService {
 
     // Validate Content-Type
     const cleanContentType = contentType.toLowerCase().trim();
-    if (!ALLOWED_IMAGE_TYPES.has(cleanContentType)) {
-      throw new AppError(
-        `Unsupported image type "${contentType}". Only JPEG, PNG, and WebP are permitted.`,
-        400,
-        'INVALID_CONTENT_TYPE'
-      );
+    const allowedSet = folder === 'supplier-bills' ? ALLOWED_SUPPLIER_DOC_TYPES : ALLOWED_IMAGE_TYPES;
+    if (!allowedSet.has(cleanContentType)) {
+      const msg =
+        folder === 'supplier-bills'
+          ? `Unsupported file type "${contentType}". Only JPEG, PNG, WebP, and PDF are permitted.`
+          : `Unsupported image type "${contentType}". Only JPEG, PNG, and WebP are permitted.`;
+      throw new AppError(msg, 400, 'INVALID_CONTENT_TYPE');
     }
 
     // Validate size limit based on folder
@@ -156,8 +173,9 @@ export class StorageService {
       throw new AppError('File size must be greater than zero bytes.', 400, 'INVALID_FILE_SIZE');
     }
     if (sizeBytes > maxBytes) {
+      const sizeLabel = folder === 'supplier-bills' ? 'File' : 'Image';
       throw new AppError(
-        `Image size exceeds maximum allowed limit of ${maxMb}MB.`,
+        `${sizeLabel} size exceeds maximum allowed limit of ${maxMb}MB.`,
         400,
         'FILE_TOO_LARGE'
       );
@@ -167,6 +185,7 @@ export class StorageService {
     let ext = 'jpg';
     if (cleanContentType === 'image/png') ext = 'png';
     else if (cleanContentType === 'image/webp') ext = 'webp';
+    else if (cleanContentType === 'application/pdf') ext = 'pdf';
 
     // Server-controlled random object key to prevent directory traversal
     const randomId = crypto.randomUUID();
@@ -193,7 +212,7 @@ export class StorageService {
    */
   public async verifyObject(
     objectKey: string,
-    expectedFolder: 'products' | 'offline-bills',
+    expectedFolder: StorageFolder,
     expectedReferenceId?: string | number
   ): Promise<VerifiedObjectResult> {
     this.assertConfigured();
@@ -232,9 +251,10 @@ export class StorageService {
         );
       }
 
-      if (!ALLOWED_IMAGE_TYPES.has(contentType)) {
+      const allowedSet = expectedFolder === 'supplier-bills' ? ALLOWED_SUPPLIER_DOC_TYPES : ALLOWED_IMAGE_TYPES;
+      if (!allowedSet.has(contentType)) {
         throw new AppError(
-          `Uploaded object Content-Type "${contentType}" is not an accepted image format.`,
+          `Uploaded object Content-Type "${contentType}" is not an accepted file format.`,
           400,
           'INVALID_CONTENT_TYPE'
         );
@@ -375,7 +395,7 @@ export class StorageService {
   public async validateAndUploadBuffer(options: {
     buffer: Buffer;
     mimeType: string;
-    folder: 'products' | 'offline-bills';
+    folder: StorageFolder;
     referenceId: string | number;
   }): Promise<{ objectKey: string; contentType: string; sizeBytes: number }> {
     this.assertConfigured();
@@ -384,12 +404,13 @@ export class StorageService {
     const cleanMime = mimeType.toLowerCase().trim();
 
     // Validate MIME type
-    if (!ALLOWED_IMAGE_TYPES.has(cleanMime)) {
-      throw new AppError(
-        `Unsupported image type "${mimeType}". Only JPEG, PNG, and WebP are permitted.`,
-        400,
-        'INVALID_CONTENT_TYPE'
-      );
+    const allowedSet = folder === 'supplier-bills' ? ALLOWED_SUPPLIER_DOC_TYPES : ALLOWED_IMAGE_TYPES;
+    if (!allowedSet.has(cleanMime)) {
+      const msg =
+        folder === 'supplier-bills'
+          ? `Unsupported file type "${mimeType}". Only JPEG, PNG, WebP, and PDF are permitted.`
+          : `Unsupported image type "${mimeType}". Only JPEG, PNG, and WebP are permitted.`;
+      throw new AppError(msg, 400, 'INVALID_CONTENT_TYPE');
     }
 
     // Validate size limit
@@ -400,7 +421,7 @@ export class StorageService {
     }
     if (buffer.length > maxBytes) {
       throw new AppError(
-        `Image size exceeds maximum allowed limit of ${maxMb}MB.`,
+        `File size exceeds maximum allowed limit of ${maxMb}MB.`,
         400,
         'FILE_TOO_LARGE'
       );
@@ -409,7 +430,7 @@ export class StorageService {
     // Validate magic bytes (file signature) to prevent content-type spoofing
     if (!validateImageMagicBytes(buffer, cleanMime)) {
       throw new AppError(
-        'File contents do not match a valid JPEG, PNG, or WebP image signature.',
+        'File contents do not match an accepted file signature.',
         400,
         'INVALID_IMAGE_SIGNATURE'
       );
@@ -419,6 +440,7 @@ export class StorageService {
     let ext = 'jpg';
     if (cleanMime === 'image/png') ext = 'png';
     else if (cleanMime === 'image/webp') ext = 'webp';
+    else if (cleanMime === 'application/pdf') ext = 'pdf';
     const randomId = crypto.randomUUID();
     const objectKey = `${folder}/${referenceId}/${randomId}.${ext}`;
 

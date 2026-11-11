@@ -71,6 +71,7 @@ export const ProductsView: React.FC = () => {
   // Barcode states
   const [newBarcode, setNewBarcode] = useState('');
   const [editBarcode, setEditBarcode] = useState('');
+  const [confirmReplaceBarcode, setConfirmReplaceBarcode] = useState(false);
   const [isScanningGlobal, setIsScanningGlobal] = useState(false);
   const [isScanningForCreate, setIsScanningForCreate] = useState(false);
   const [isScanningForEdit, setIsScanningForEdit] = useState(false);
@@ -337,6 +338,7 @@ export const ProductsView: React.FC = () => {
     setEditName(product.name);
     setEditHsn(product.hsn_code || '');
     setEditBarcode(product.barcode || '');
+    setConfirmReplaceBarcode(false);
     setEditPrice(safeDecimal(product.buying_price).toFixed(2));
     setEditImageFile(null);
     setEditImagePreview(null);
@@ -412,6 +414,15 @@ export const ProductsView: React.FC = () => {
       return;
     }
 
+    const nextBarcode = editBarcode.trim() || null;
+    const existingBarcode = editingProduct.barcode ? editingProduct.barcode.trim() : null;
+    if (existingBarcode && existingBarcode !== nextBarcode && !confirmReplaceBarcode) {
+      setEditError(
+        `This product already has barcode "${existingBarcode}". Check the confirmation box below before replacing or clearing it.`
+      );
+      return;
+    }
+
     setEditError(null);
     setIsSubmittingEdit(true);
 
@@ -422,7 +433,8 @@ export const ProductsView: React.FC = () => {
           name: editName.trim(),
           buying_price: safeDecimal(editPrice).toFixed(2),
           hsn_code: editHsn.trim() || null,
-          barcode: editBarcode.trim() || null,
+          barcode: nextBarcode,
+          confirmReplaceBarcode: Boolean(confirmReplaceBarcode),
         }),
       });
 
@@ -1088,6 +1100,21 @@ export const ProductsView: React.FC = () => {
                     <span>Scan</span>
                   </button>
                 </div>
+                {editingProduct?.barcode &&
+                  (editBarcode.trim() || null) !== editingProduct.barcode.trim() && (
+                    <label className="mt-2 flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={confirmReplaceBarcode}
+                        onChange={(e) => setConfirmReplaceBarcode(e.target.checked)}
+                        className="mt-0.5 rounded border-amber-500 text-amber-600 focus:ring-amber-500"
+                      />
+                      <span>
+                        Confirm replacing existing barcode{' '}
+                        <span className="font-mono font-bold">{editingProduct.barcode}</span>
+                      </span>
+                    </label>
+                  )}
               </div>
 
               {/* Product Photograph Management in Edit */}

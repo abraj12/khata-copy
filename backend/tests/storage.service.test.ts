@@ -135,6 +135,22 @@ describe('Cloudflare R2 Storage Service & Image Validation Suite', () => {
       expect(result.objectKey).toMatch(/^offline-bills\/temp\/[a-f0-9-]+\.png$/);
       expect(result.uploadUrl).toBeDefined();
     });
+
+    it('accepts application/pdf magic bytes and generates supplier-bills object key', async () => {
+      const validPdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]); // %PDF-1.4
+      expect(validateImageMagicBytes(validPdf, 'application/pdf')).toBe(true);
+      expect(validateImageMagicBytes(new TextEncoder().encode('<script>'), 'application/pdf')).toBe(false);
+
+      const result = await storageService.getUploadIntent({
+        folder: 'supplier-bills',
+        referenceId: 99,
+        contentType: 'application/pdf',
+        sizeBytes: 256 * 1024,
+      });
+
+      expect(result.objectKey).toMatch(/^supplier-bills\/99\/[a-f0-9-]+\.pdf$/);
+      expect(result.uploadUrl).toBeDefined();
+    });
   });
 
   describe('3. Object Verification & Spoofed Header Protection', () => {

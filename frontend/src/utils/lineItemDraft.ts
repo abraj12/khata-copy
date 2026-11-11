@@ -1,3 +1,4 @@
+import Decimal from 'decimal.js';
 import { parseStrictDecimal } from '../lib/formatters.js';
 
 export interface ProductCatalogReference {
@@ -85,4 +86,109 @@ export function validateSellingRateInput(value: unknown, fieldLabel = 'Rate'): s
   } catch (err) {
     return (err as Error).message;
   }
+}
+
+export interface DraftLineBase {
+  productId?: number | null;
+  description: string;
+  hsnCode?: string | null;
+  barcode?: string | null;
+  quantity: string;
+  rate: string;
+  buyingPriceReference?: string | null;
+}
+
+export type BarcodeUpsertAction = 'incremented' | 'filled_empty' | 'added';
+
+/**
+ * Finds and increments quantity (+1) for an already-present product/barcode line,
+ * or fills the first blank placeholder row, or appends a new draft line.
+ * Never copies `buying_price` into customer-facing selling `rate`.
+ */
+export function upsertScannedProductLine<T extends DraftLineBase>(
+  lines: T[],
+  product: ProductCatalogReference,
+  createEmptyLine: () => T
+): {
+  nextLines: T[];
+  action: BarcodeUpsertAction;
+  targetIndex: number;
+  error: string | null;
+} {
+  const cleanBarcode = product.barcode ? String(product.barcode).trim() : '';
+
+  const existingIdx = lines.findIndex((line) => {
+    if (line.productId && Number(line.productId) === Number(product.id)) {
+      return true;
+    }
+    if (cleanBarcode && line.barcode && String(line.barcode).trim() === cleanBarcode) {
+      return true;
+    }
+    return false;
+  });
+
+  if (existingIdx >= 0) {
+    const existing = lines[existingIdx];
+    let currentQty = new Decimal(0);
+    try {
+      const trimmedQty = String(existing.quantity || '').trim();
+      currentQty = trimmedQty ? new Decimal(trimmedQty) : new Decimal(0);
+    } catch {
+      currentQty = new Decimal(0);
+    }
+    const nextQty = currentQty.plus(1).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    if (nextQty.greaterThan(1000000)) {
+      return {
+        nextLines: lines,
+        action: 'incremented',
+        targetIndex: existingIdx,
+        error: `Quantity for "${product.name}" cannot exceed 1,000,000.`,
+      };
+    }
+
+    const formattedQty = nextQty.decimalPlaces() === 0 ? nextQty.toFixed(0) : nextQty.toString();
+    const nextLines = lines.map((line, idx) =>
+      idx === existingIdx
+        ? {
+            ...line,
+            quantity: formattedQty,
+            barcode: cleanBarcode || line.barcode || '',
+            buyingPriceReference:
+              product.buying_price !== undefined && product.buying_price !== null
+                ? String(product.buying_price)
+                : line.buyingPriceReference ?? null,
+          }
+        : line
+    );
+
+    return { nextLines, action: 'incremented', targetIndex: existingIdx, error: null };
+  }
+
+  const emptyIdx = lines.findIndex(
+    (line) =>
+      !line.productId &&
+      !String(line.description || '').trim() &&
+      !String(line.rate || '').trim() &&
+      !String(line.barcode || '').trim()
+  );
+
+  if (emptyIdx >= 0) {
+    const filled = {
+      ...applyCatalogProductToDraftLine(lines[emptyIdx], product),
+      quantity: '1',
+    };
+    const nextLines = lines.map((line, idx) => (idx === emptyIdx ? filled : line));
+    return { nextLines, action: 'filled_empty', targetIndex: emptyIdx, error: null };
+  }
+
+  const created = {
+    ...applyCatalogProductToDraftLine(createEmptyLine(), product),
+    quantity: '1',
+  };
+  return {
+    nextLines: [...lines, created],
+    action: 'added',
+    targetIndex: lines.length,
+    error: null,
+  };
 }
