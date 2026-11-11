@@ -91,7 +91,8 @@ export class ProductsService {
     if (opts.search && opts.search.trim()) {
       const cleanSearch = escapeLike(opts.search.trim());
       params.push(`%${cleanSearch}%`);
-      sql += ` AND (name ILIKE $${params.length} OR (hsn_code IS NOT NULL AND hsn_code ILIKE $${params.length}) OR (barcode IS NOT NULL AND barcode ILIKE $${params.length}))`;
+      const pIdx = params.length;
+      sql += ` AND (name ILIKE $${pIdx} ESCAPE '\\' OR (hsn_code IS NOT NULL AND hsn_code ILIKE $${pIdx} ESCAPE '\\') OR (barcode IS NOT NULL AND barcode ILIKE $${pIdx} ESCAPE '\\'))`;
     }
 
     sql += ` ORDER BY LOWER(name) ASC, name ASC, id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;

@@ -535,32 +535,45 @@ export class QuotationsService {
 
       const quotationRecord: QuotationRecord = insertRes.rows[0];
 
-      // Insert line items
-      const itemRecords: QuotationItemRecord[] = [];
-      for (let i = 0; i < calc.items.length; i++) {
-        const it = calc.items[i];
-        const itemRes = await client.query(
-          `INSERT INTO quotation_items (
-            quotation_id, product_id, item_index, description,
-            hsn_code, barcode, quantity, unit, rate, rate_unit, amount, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-          RETURNING *`,
-          [
-            quotationRecord.id,
-            it.productId || null,
-            i,
-            it.description.trim(),
-            it.hsnCode?.trim() || null,
-            it.barcode?.trim() || null,
-            it.quantity,
-            it.unit?.trim() || null,
-            it.rate,
-            it.rateUnit?.trim() || null,
-            it.amount,
-          ]
-        );
-        itemRecords.push(itemRes.rows[0]);
-      }
+      // Batch insert line items
+      const itemRecords: QuotationItemRecord[] =
+        calc.items.length > 0
+          ? (
+              await client.query(
+                `INSERT INTO quotation_items (
+                  quotation_id, product_id, item_index, description,
+                  hsn_code, barcode, quantity, unit, rate, rate_unit, amount, created_at
+                )
+                SELECT u.*, NOW() FROM UNNEST(
+                  $1::bigint[],
+                  $2::bigint[],
+                  $3::int[],
+                  $4::text[],
+                  $5::text[],
+                  $6::text[],
+                  $7::numeric[],
+                  $8::text[],
+                  $9::numeric[],
+                  $10::text[],
+                  $11::numeric[]
+                ) AS u
+                RETURNING *`,
+                [
+                  calc.items.map(() => quotationRecord.id),
+                  calc.items.map((it) => it.productId || null),
+                  calc.items.map((_, idx) => idx),
+                  calc.items.map((it) => it.description.trim()),
+                  calc.items.map((it) => it.hsnCode?.trim() || null),
+                  calc.items.map((it) => it.barcode?.trim() || null),
+                  calc.items.map((it) => it.quantity),
+                  calc.items.map((it) => it.unit?.trim() || null),
+                  calc.items.map((it) => it.rate),
+                  calc.items.map((it) => it.rateUnit?.trim() || null),
+                  calc.items.map((it) => it.amount),
+                ]
+              )
+            ).rows
+          : [];
 
       await client.query('COMMIT');
       return { ...quotationRecord, items: itemRecords };
@@ -630,11 +643,12 @@ export class QuotationsService {
 
     if (query.search && query.search.trim()) {
       const term = `%${escapeLike(query.search.trim())}%`;
+      const sIdx = params.length + 1;
       conditions.push(`(
-        quotation_number ILIKE $${params.length + 1} OR
-        customer_name ILIKE $${params.length + 1} OR
-        project_title ILIKE $${params.length + 1} OR
-        subject ILIKE $${params.length + 1}
+        quotation_number ILIKE $${sIdx} ESCAPE '\\' OR
+        customer_name ILIKE $${sIdx} ESCAPE '\\' OR
+        project_title ILIKE $${sIdx} ESCAPE '\\' OR
+        subject ILIKE $${sIdx} ESCAPE '\\'
       )`);
       params.push(term);
     }

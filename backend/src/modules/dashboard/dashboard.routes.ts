@@ -4,6 +4,7 @@ import { dashboardService } from './dashboard.service.js';
 import {
   createExpenseSchema,
   dashboardOverviewQuerySchema,
+  expenseHistoryQuerySchema,
   expenseIdParamSchema,
   listExpensesQuerySchema,
   updateExpenseSchema,
@@ -59,6 +60,31 @@ router.get('/expenses', async (req: Request, res: Response, next: NextFunction) 
 
     const data = await dashboardService.listExpenses(parsed.data);
     res.json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/v1/dashboard/expenses/:id/history
+ * Returns read-only immutable audit history events for an operating expense.
+ */
+router.get('/expenses/:id/history', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const idCheck = expenseIdParamSchema.safeParse(req.params.id);
+    if (!idCheck.success) {
+      sendValidationError(res, idCheck.error.errors[0]?.message || 'Invalid expense ID.');
+      return;
+    }
+
+    const queryCheck = expenseHistoryQuerySchema.safeParse(req.query);
+    if (!queryCheck.success) {
+      sendValidationError(res, queryCheck.error.errors[0]?.message || 'Invalid history query.');
+      return;
+    }
+
+    const history = await dashboardService.getExpenseHistory(idCheck.data, queryCheck.data);
+    res.json({ success: true, data: history });
   } catch (err) {
     next(err);
   }

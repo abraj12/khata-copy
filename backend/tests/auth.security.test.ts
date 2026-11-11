@@ -87,6 +87,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '022_supplier_operational_hardening.sql' },
             { version: '023_supplier_audit_truncate_guard.sql' },
             { version: '024_home_dashboard_profitability.sql' },
+            { version: '025_performance_reporting_hardening.sql' },
             {
             version: '011_gst_invoices.sql',
           },
@@ -94,7 +95,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             version: '012_normal_bills.sql',
           },
           ],
-          rowCount: 24,
+          rowCount: 25,
         } as any;
       }
       return { rows: [], rowCount: 0 } as any;

@@ -9,7 +9,11 @@ import { authApi } from '../src/features/auth/authApi.js';
 import { ThemeAccessibilityProvider } from '../src/context/ThemeAccessibilityContext.js';
 import { HomeDashboard } from '../src/features/dashboard/HomeDashboard.js';
 import * as dashboardApi from '../src/features/dashboard/dashboardApi.js';
-import type { DashboardOverviewData, PaginatedExpensesResult } from '../src/features/dashboard/dashboard.types.js';
+import type {
+  DashboardOverviewData,
+  ExpenseHistoryResult,
+  PaginatedExpensesResult,
+} from '../src/features/dashboard/dashboard.types.js';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -419,5 +423,327 @@ describe('Release #024: Home Dashboard Navigation, Profitability & Expenses UI S
     });
 
     expect(container.querySelector('[data-testid="home-dashboard"]')).not.toBeNull();
+  });
+
+  it('6. Resolves all 10 business-date presets cleanly including Yesterday, Last Month, This FY & Previous FY across Jan-Mar / Apr-Dec boundaries', () => {
+    // Mid-year date (Nov 11, 2026 -> FY 2026-27)
+    expect(dashboardApi.resolveHomeDateRange('yesterday', '', '', '2026-11-11')).toEqual({
+      fromDate: '2026-11-10',
+      toDate: '2026-11-10',
+    });
+    expect(dashboardApi.resolveHomeDateRange('last_month', '', '', '2026-11-11')).toEqual({
+      fromDate: '2026-10-01',
+      toDate: '2026-10-31',
+    });
+    expect(dashboardApi.resolveHomeDateRange('this_fy', '', '', '2026-11-11')).toEqual({
+      fromDate: '2026-04-01',
+      toDate: '2026-11-11',
+    });
+    expect(dashboardApi.resolveHomeDateRange('previous_fy', '', '', '2026-11-11')).toEqual({
+      fromDate: '2025-04-01',
+      toDate: '2026-03-31',
+    });
+
+    // Jan-Mar date (Feb 15, 2026 -> FY 2025-26) and Jan 1 -> Dec previous month
+    expect(dashboardApi.resolveHomeDateRange('last_month', '', '', '2026-01-01')).toEqual({
+      fromDate: '2025-12-01',
+      toDate: '2025-12-31',
+    });
+    // March 15 in leap year 2024 -> Feb has 29 days
+    expect(dashboardApi.resolveHomeDateRange('last_month', '', '', '2024-03-15')).toEqual({
+      fromDate: '2024-02-01',
+      toDate: '2024-02-29',
+    });
+    expect(dashboardApi.resolveHomeDateRange('this_fy', '', '', '2026-02-15')).toEqual({
+      fromDate: '2025-04-01',
+      toDate: '2026-02-15',
+    });
+    expect(dashboardApi.resolveHomeDateRange('previous_fy', '', '', '2026-02-15')).toEqual({
+      fromDate: '2024-04-01',
+      toDate: '2025-03-31',
+    });
+  });
+
+  it('7. Aborts slow in-flight overview requests when applying an invalid custom date range so stale data cannot overwrite the error', async () => {
+    let resolveSlowPreset!: (v: DashboardOverviewData) => void;
+    let capturedAbortSignal: AbortSignal | undefined;
+
+    vi.spyOn(dashboardApi, 'fetchDashboardOverview')
+      .mockResolvedValueOnce(buildSampleOverview())
+      .mockImplementationOnce((_params, signal) => {
+        capturedAbortSignal = signal;
+        return new Promise((resolve) => {
+          resolveSlowPreset = resolve;
+        });
+      });
+    vi.spyOn(dashboardApi, 'fetchDashboardExpenses').mockResolvedValue(buildExpensesResult());
+
+    await act(async () => {
+      root.render(<HomeDashboard onNavigate={() => {}} />);
+    });
+
+    const todayBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Today'
+    )!;
+    const customBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Custom'
+    )!;
+
+    await act(async () => {
+      todayBtn.click();
+    });
+    expect(capturedAbortSignal?.aborted).toBe(false);
+
+    await act(async () => {
+      customBtn.click();
+    });
+
+    const fromInput = container.querySelector('input[aria-label="Custom From Date"]') as HTMLInputElement;
+    const toInput = container.querySelector('input[aria-label="Custom To Date"]') as HTMLInputElement;
+    const applyBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Apply Range'
+    )!;
+
+    await act(async () => {
+      setInputValue(fromInput, '2026-11-20');
+      setInputValue(toInput, '2026-11-10');
+    });
+    await act(async () => {
+      applyBtn.click();
+    });
+
+    expect(capturedAbortSignal?.aborted).toBe(true);
+    expect(container.textContent).toContain('End date cannot be earlier than start date.');
+
+    // Even if an un-aborted slow promise resolves late, stale payload must be ignored
+    await act(async () => {
+      resolveSlowPreset(
+        buildSampleOverview({
+          sales: { ...buildSampleOverview().sales, totalSalesRevenue: '77777.00' },
+        })
+      );
+    });
+    expect(container.querySelector('[data-testid="kpi-sales-revenue-value"]')?.textContent).not.toContain(
+      '₹77,777.00'
+    );
+    expect(container.textContent).toContain('End date cannot be earlier than start date.');
+  });
+
+  it('8. Labels Partial vs Complete Operating Results, Live Balance KPIs, and 6-Month All-Time Trend clearly', async () => {
+    vi.spyOn(dashboardApi, 'fetchDashboardOverview')
+      .mockResolvedValueOnce(
+        buildSampleOverview({
+          salesTrend: {
+            granularity: 'month',
+            effectiveFromDate: '2026-06-01',
+            effectiveToDate: '2026-11-11',
+            isSixMonthWindow: true,
+            points: buildSampleOverview().salesTrend.points,
+          },
+        })
+      )
+      .mockResolvedValueOnce(
+        buildSampleOverview({
+          profitability: {
+            ...buildSampleOverview().profitability,
+            hasIncompleteCostData: false,
+            costCoveragePercent: '100.00',
+            uncostedSalesRevenue: '0.00',
+          },
+        })
+      );
+    vi.spyOn(dashboardApi, 'fetchDashboardExpenses').mockResolvedValue(buildExpensesResult());
+
+    await act(async () => {
+      root.render(<HomeDashboard onNavigate={() => {}} />);
+    });
+
+    expect(container.textContent).toContain('Partial Est. Net Operating Result');
+    expect(container.textContent).toContain('Khata Receivable (Live)');
+    expect(container.textContent).toContain('Supplier Payable (Live)');
+    expect(container.textContent).toContain('trailing 6-month monthly window (2026-06-01 to 2026-11-11)');
+    expect(container.textContent).toContain('KPI totals above still reflect All Time');
+
+    const refreshBtn = container.querySelector('button[aria-label="Refresh dashboard metrics"]') as HTMLButtonElement;
+    await act(async () => {
+      refreshBtn.click();
+    });
+
+    expect(container.textContent).not.toContain('Partial Est. Net Operating Result');
+    expect(container.textContent).toContain('Est. Net Operating Result');
+  });
+
+  it('9. Renders supplier reversal, bill cancellation, and expense void badges in Recent Activity feed', async () => {
+    vi.spyOn(dashboardApi, 'fetchDashboardOverview').mockResolvedValue(
+      buildSampleOverview({
+        recentActivity: [
+          {
+            type: 'supplier_payment_reversal',
+            reference: 'REV-PAY-01',
+            party: 'Sharma Metals',
+            amount: '500.00',
+            date: '2026-11-11',
+            status: 'reversed',
+            occurredAt: '2026-11-11T12:00:00.000Z',
+            targetTab: 'suppliers',
+          },
+          {
+            type: 'supplier_allocation_reversal',
+            reference: 'REV-ALLOC-02',
+            party: 'Sharma Metals',
+            amount: '250.00',
+            date: '2026-11-11',
+            status: 'reversed',
+            occurredAt: '2026-11-11T11:30:00.000Z',
+            targetTab: 'suppliers',
+          },
+          {
+            type: 'supplier_bill_cancellation',
+            reference: 'SB-CANCEL-03',
+            party: 'Sharma Metals',
+            amount: '1200.00',
+            date: '2026-11-11',
+            status: 'cancelled',
+            occurredAt: '2026-11-11T11:00:00.000Z',
+            targetTab: 'suppliers',
+          },
+          {
+            type: 'expense_void',
+            reference: 'Office Tea',
+            party: 'Shop Operating Expense',
+            amount: '150.00',
+            date: '2026-11-11',
+            status: 'voided',
+            occurredAt: '2026-11-11T10:00:00.000Z',
+            targetTab: 'home',
+          },
+        ],
+      })
+    );
+    vi.spyOn(dashboardApi, 'fetchDashboardExpenses').mockResolvedValue(buildExpensesResult());
+
+    await act(async () => {
+      root.render(<HomeDashboard onNavigate={() => {}} />);
+    });
+
+    expect(container.textContent).toContain('Payment Reversal');
+    expect(container.textContent).toContain('Allocation Reversal');
+    expect(container.textContent).toContain('Bill Cancelled');
+    expect(container.textContent).toContain('Expense Voided');
+  });
+
+  it('10. Opens read-only Expense Audit History modal and displays created/updated/voided diff timeline', async () => {
+    vi.spyOn(dashboardApi, 'fetchDashboardOverview').mockResolvedValue(buildSampleOverview());
+    vi.spyOn(dashboardApi, 'fetchDashboardExpenses').mockResolvedValue(buildExpensesResult());
+
+    const historySample: ExpenseHistoryResult = {
+      expense: buildExpensesResult().items[0],
+      events: [
+        {
+          id: 2,
+          expenseId: buildExpensesResult().items[0].id,
+          action: 'updated',
+          reason: 'Rent revision',
+          previousData: { amount: '400.00', title: 'Shop Rent' },
+          newData: { amount: '450.00', title: 'Shop Rent Nov' },
+          createdAt: '2026-11-11T09:00:00.000Z',
+        },
+        {
+          id: 1,
+          expenseId: buildExpensesResult().items[0].id,
+          action: 'created',
+          reason: null,
+          previousData: null,
+          newData: { amount: '400.00', title: 'Shop Rent', expense_date: '2026-11-11', category: 'rent' },
+          createdAt: '2026-11-11T08:00:00.000Z',
+        },
+      ],
+    };
+    const historySpy = vi
+      .spyOn(dashboardApi, 'fetchDashboardExpenseHistory')
+      .mockResolvedValue(historySample);
+
+    await act(async () => {
+      root.render(<HomeDashboard onNavigate={() => {}} />);
+    });
+
+    const historyBtn = container.querySelector('button[aria-label*="View history for Shop Rent Nov"]') as HTMLButtonElement;
+    expect(historyBtn).not.toBeNull();
+
+    await act(async () => {
+      historyBtn.click();
+    });
+
+    expect(historySpy).toHaveBeenCalledWith('11111111-1111-4111-8111-111111111111', 50, expect.any(AbortSignal));
+    expect(container.textContent).toContain('Expense Audit History');
+    expect(container.textContent).toContain('Reason: Rent revision');
+    expect(container.textContent).toContain('Amount: 400.00 → 450.00');
+    expect(container.textContent).toContain('Title: Shop Rent → Shop Rent Nov');
+
+    const closeBtn = container.querySelector('button[aria-label="Close history modal"]') as HTMLButtonElement;
+    await act(async () => {
+      closeBtn.click();
+    });
+    expect(container.textContent).not.toContain('Expense Audit History');
+  });
+
+  it('11. Renders Home eagerly and transitions lazily loaded feature routes via React.Suspense cleanly', async () => {
+    vi.spyOn(authApi, 'me').mockResolvedValue({
+      authenticated: true,
+      owner: { phone: '9876543210', role: 'OWNER' },
+      csrfToken: 'csrf-123',
+    } as any);
+    vi.spyOn(dashboardApi, 'fetchDashboardOverview').mockResolvedValue(buildSampleOverview());
+    vi.spyOn(dashboardApi, 'fetchDashboardExpenses').mockResolvedValue(buildExpensesResult());
+
+    await act(async () => {
+      root.render(
+        <ThemeAccessibilityProvider>
+          <AuthProvider>
+            <KhataDashboard />
+          </AuthProvider>
+        </ThemeAccessibilityProvider>
+      );
+    });
+
+    // Home renders without Suspense fallback
+    expect(container.querySelector('[data-testid="home-dashboard"]')).not.toBeNull();
+    expect(container.textContent).not.toContain('Loading module...');
+
+    // Mock fetch cleanly so lazy-loaded ProductsView settles inside act(...) without network socket errors
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: [],
+          total: 0,
+          activeCount: 0,
+          archivedCount: 0,
+          hasMore: false,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    );
+
+    // Switch to lazy Products route and verify Suspense boundary transitions cleanly
+    await act(async () => {
+      window.history.pushState(null, '', '/products');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    expect(container.querySelector('[data-testid="home-dashboard"]')).toBeNull();
+
+    // Poll cleanly inside act() so lazy chunk load + child fetch effects settle without React act warnings
+    for (let i = 0; i < 40; i++) {
+      if (!container.textContent?.includes('Loading module...')) break;
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+    }
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(container.textContent).not.toContain('Loading module...');
   });
 });

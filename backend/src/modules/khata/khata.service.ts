@@ -902,17 +902,21 @@ export class KhataService {
 
       let serverComputedTotal = new Decimal(0);
 
-      for (const parsedItem of parsedItems) {
-        const prodRes = await client.query(
-          'SELECT id, name, buying_price, archived_at FROM products WHERE id = $1',
-          [parsedItem.prodId]
-        );
+      const uniqueProductIds = Array.from(new Set(parsedItems.map((item) => item.prodId)));
+      const prodRes = await client.query(
+        'SELECT id, name, buying_price, archived_at FROM products WHERE id = ANY($1::bigint[])',
+        [uniqueProductIds]
+      );
+      const productMap = new Map<number, { id: number; name: string; buying_price: string; archived_at: unknown }>();
+      for (const row of prodRes.rows) {
+        productMap.set(Number(row.id), row);
+      }
 
-        if (prodRes.rows.length === 0) {
+      for (const parsedItem of parsedItems) {
+        const product = productMap.get(parsedItem.prodId);
+        if (!product) {
           throw new AppError(`Product with ID ${parsedItem.prodId} does not exist.`, 404, 'PRODUCT_NOT_FOUND');
         }
-
-        const product = prodRes.rows[0];
         if (product.archived_at) {
           throw new AppError(
             `Product "${product.name}" is archived and cannot be selected for new Udhar.`,
@@ -950,20 +954,20 @@ export class KhataService {
       );
       const transactionId = parseInt(txRes.rows[0].id, 10);
 
-      // 4. Insert udhar_items snapshots
-      for (const item of verifiedItems) {
+      // 4. Batch insert udhar_items snapshots
+      if (verifiedItems.length > 0) {
         await client.query(
           `INSERT INTO udhar_items
             (transaction_id, product_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+           SELECT * FROM UNNEST($1::bigint[], $2::bigint[], $3::text[], $4::numeric[], $5::numeric[], $6::numeric[], $7::numeric[])`,
           [
-            transactionId,
-            item.productId,
-            item.nameSnapshot,
-            item.buyingPriceSnapshot,
-            item.quantity,
-            item.sellingPrice,
-            item.lineTotal,
+            verifiedItems.map(() => transactionId),
+            verifiedItems.map((item) => item.productId),
+            verifiedItems.map((item) => item.nameSnapshot),
+            verifiedItems.map((item) => item.buyingPriceSnapshot),
+            verifiedItems.map((item) => item.quantity),
+            verifiedItems.map((item) => item.sellingPrice),
+            verifiedItems.map((item) => item.lineTotal),
           ]
         );
       }

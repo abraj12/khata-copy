@@ -10,18 +10,58 @@ pg.types.setTypeParser(20, (val: string) => (val === null ? null : parseInt(val,
 export const appPool = new Pool({
   connectionString: env.DATABASE_URL_POOLED,
   ssl: env.NODE_ENV === 'test' ? false : true, // Enforce TLS verification without disabling certificate checks
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
+  max: env.DB_POOL_MAX,
+  idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT_MS,
+  connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT_MS,
+  query_timeout: env.DB_QUERY_TIMEOUT_MS,
+  keepAlive: true,
 });
 
 // Admin / migration pool (direct endpoint)
 export const directPool = new Pool({
   connectionString: env.DATABASE_URL,
   ssl: env.NODE_ENV === 'test' ? false : true,
-  max: 2,
-  connectionTimeoutMillis: 5000,
+  max: env.DB_DIRECT_POOL_MAX,
+  connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT_MS,
+  keepAlive: true,
 });
+
+export interface DatabasePoolStats {
+  totalCount: number;
+  idleCount: number;
+  waitingCount: number;
+  max: number;
+}
+
+/**
+ * Returns numeric-only pool utilization metrics without exposing connection URIs or credentials.
+ */
+export function getDatabasePoolStats(): DatabasePoolStats {
+  return {
+    totalCount: appPool.totalCount,
+    idleCount: appPool.idleCount,
+    waitingCount: appPool.waitingCount,
+    max: env.DB_POOL_MAX,
+  };
+}
+
+/**
+ * Times an operation and logs safe latency/pool diagnostics when slow, without SQL params or PII.
+ */
+export async function measureDbOperation<T>(operationName: string, fn: () => Promise<T>): Promise<T> {
+  const start = performance.now();
+  try {
+    return await fn();
+  } finally {
+    const durationMs = Math.round(performance.now() - start);
+    if (durationMs >= env.DB_SLOW_QUERY_MS) {
+      const stats = getDatabasePoolStats();
+      console.warn(
+        `[DB SLOW OPERATION] op=${operationName} durationMs=${durationMs} totalPool=${stats.totalCount} idlePool=${stats.idleCount} waiting=${stats.waitingCount}`
+      );
+    }
+  }
+}
 
 appPool.on('error', (err) => {
   console.error('[DB ERROR] Unexpected error on idle client in application pool:', err.message);
@@ -56,6 +96,7 @@ export const EXPECTED_MIGRATIONS = [
   '022_supplier_operational_hardening.sql',
   '023_supplier_audit_truncate_guard.sql',
   '024_home_dashboard_profitability.sql',
+  '025_performance_reporting_hardening.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [

@@ -345,36 +345,48 @@ export class GstInvoicesService {
 
     const createdInvoice: GstInvoiceRecord = invoiceRes.rows[0];
 
-    // 7. Capture historical buying-price snapshots for linked products and insert line items
+    // 7. Capture historical buying-price snapshots for linked products and batch insert line items
     const productCostMap = await resolveProductCostSnapshots(client, computedItems);
-    const insertedItems: GstInvoiceItemRecord[] = [];
-    for (let i = 0; i < computedItems.length; i++) {
-      const itm = computedItems[i];
-      const costRateSnapshot = itm.productId
-        ? productCostMap.get(Number(itm.productId)) ?? null
-        : null;
-      const itemRes = await client.query(
-        `INSERT INTO gst_invoice_items (
-          invoice_id, product_id, item_index, description, hsn_code,
-          quantity, unit, rate, rate_unit, amount, cost_rate_snapshot
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        RETURNING *`,
-        [
-          createdInvoice.id,
-          itm.productId || null,
-          i + 1,
-          itm.description.trim(),
-          itm.hsnCode || null,
-          itm.quantity,
-          itm.unit || null,
-          itm.rate,
-          itm.rateUnit || null,
-          itm.amount,
-          costRateSnapshot,
-        ]
-      );
-      insertedItems.push(itemRes.rows[0]);
-    }
+    const insertedItems: GstInvoiceItemRecord[] =
+      computedItems.length > 0
+        ? (
+            await client.query(
+              `INSERT INTO gst_invoice_items (
+                invoice_id, product_id, item_index, description, hsn_code,
+                quantity, unit, rate, rate_unit, amount, cost_rate_snapshot
+              )
+              SELECT * FROM UNNEST(
+                $1::bigint[],
+                $2::bigint[],
+                $3::int[],
+                $4::text[],
+                $5::text[],
+                $6::numeric[],
+                $7::text[],
+                $8::numeric[],
+                $9::text[],
+                $10::numeric[],
+                $11::numeric[]
+              )
+              RETURNING *`,
+              [
+                computedItems.map(() => createdInvoice.id),
+                computedItems.map((itm) => itm.productId || null),
+                computedItems.map((_, idx) => idx + 1),
+                computedItems.map((itm) => itm.description.trim()),
+                computedItems.map((itm) => itm.hsnCode || null),
+                computedItems.map((itm) => itm.quantity),
+                computedItems.map((itm) => itm.unit || null),
+                computedItems.map((itm) => itm.rate),
+                computedItems.map((itm) => itm.rateUnit || null),
+                computedItems.map((itm) => itm.amount),
+                computedItems.map((itm) =>
+                  itm.productId ? productCostMap.get(Number(itm.productId)) ?? null : null
+                ),
+              ]
+            )
+          ).rows
+        : [];
 
     createdInvoice.items = insertedItems;
     return createdInvoice;

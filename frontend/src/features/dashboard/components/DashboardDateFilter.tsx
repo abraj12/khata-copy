@@ -16,9 +16,13 @@ export interface DashboardDateFilterProps {
 
 const PRESET_OPTIONS: Array<{ id: DashboardDatePreset; label: string }> = [
   { id: 'today', label: 'Today' },
+  { id: 'yesterday', label: 'Yesterday' },
   { id: 'last_7_days', label: 'Last 7 Days' },
-  { id: 'this_month', label: 'This Month' },
   { id: 'last_30_days', label: 'Last 30 Days' },
+  { id: 'this_month', label: 'This Month' },
+  { id: 'last_month', label: 'Last Month' },
+  { id: 'this_fy', label: 'This FY' },
+  { id: 'previous_fy', label: 'Previous FY' },
   { id: 'all_time', label: 'All Time' },
   { id: 'custom', label: 'Custom' },
 ];

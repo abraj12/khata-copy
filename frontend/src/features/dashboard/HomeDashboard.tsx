@@ -17,7 +17,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import { formatCurrency, safeDecimal } from '../../lib/formatters.js';
-import { getBusinessDateISO } from '../../utils/businessDate.js';
+import { getBusinessDateISO, isValidBusinessDate } from '../../utils/businessDate.js';
 import type {
   DashboardDatePreset,
   DashboardOverviewData,
@@ -67,6 +67,24 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
     targetFrom: string = customFrom,
     targetTo: string = customTo
   ) => {
+    // Always abort slower in-flight overview fetches and advance the request token BEFORE
+    // returning early on invalid custom dates so stale responses cannot overwrite the error.
+    abortRef.current?.abort();
+    const currentReqId = ++requestIdRef.current;
+
+    if (targetPreset === 'custom') {
+      const trimmedFrom = targetFrom.trim();
+      const trimmedTo = targetTo.trim();
+      if (
+        (trimmedFrom && !isValidBusinessDate(trimmedFrom)) ||
+        (trimmedTo && !isValidBusinessDate(trimmedTo))
+      ) {
+        setError('Please enter valid YYYY-MM-DD dates for the custom range.');
+        setLoading(false);
+        return;
+      }
+    }
+
     const range = resolveHomeDateRange(targetPreset, targetFrom, targetTo);
     if (range.fromDate && range.toDate && range.toDate < range.fromDate) {
       setError('End date cannot be earlier than start date.');
@@ -74,11 +92,8 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
       return;
     }
 
-    abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-
-    const currentReqId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
 
@@ -227,7 +242,6 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
         onCustomFromChange={setCustomFrom}
         onCustomToChange={setCustomTo}
         onApplyCustom={() => void loadOverview('custom', customFrom, customTo)}
-        disabled={loading}
       />
 
       {/* Error Banner with Retry */}
@@ -281,7 +295,11 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
 
             <DashboardMetricCard
               testId="kpi-net-operating"
-              title="Est. Net Operating Result"
+              title={
+                data.profitability.hasIncompleteCostData
+                  ? 'Partial Est. Net Operating Result'
+                  : 'Est. Net Operating Result'
+              }
               value={formatCurrency(data.profitability.estimatedNetOperatingResult)}
               subtitle={`Gross ${formatCurrency(data.profitability.estimatedGrossProfit)} − Exp ${formatCurrency(data.profitability.operatingExpenses)}`}
               badgeText={`${data.profitability.costCoveragePercent}% costed`}
@@ -291,9 +309,9 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
 
             <DashboardMetricCard
               testId="kpi-khata-receivable"
-              title="Khata Receivable"
+              title="Khata Receivable (Live)"
               value={formatCurrency(data.customersKhata.totalOutstandingReceivable)}
-              subtitle={`${data.customersKhata.customersWithOutstanding} customer(s) due • Live balance`}
+              subtitle={`${data.customersKhata.customersWithOutstanding} customer(s) owing • All-time live balance`}
               tone="warning"
               icon={<BookOpen className="w-4 h-4" />}
               onClick={() => onNavigate('khata')}
@@ -302,9 +320,9 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
 
             <DashboardMetricCard
               testId="kpi-supplier-payable"
-              title="Supplier Payable"
+              title="Supplier Payable (Live)"
               value={formatCurrency(data.suppliers.totalOutstandingPayable)}
-              subtitle={`Advance credit: ${formatCurrency(data.suppliers.totalAdvanceCredit)}`}
+              subtitle={`Advance: ${formatCurrency(data.suppliers.totalAdvanceCredit)} • All-time live balance`}
               tone="danger"
               icon={<Building2 className="w-4 h-4" />}
               onClick={() => onNavigate('suppliers')}
@@ -327,6 +345,9 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
           {/* Sales Trend */}
           <DashboardSalesTrend
             granularity={data.salesTrend.granularity}
+            effectiveFromDate={data.salesTrend.effectiveFromDate}
+            effectiveToDate={data.salesTrend.effectiveToDate}
+            isSixMonthWindow={data.salesTrend.isSixMonthWindow}
             points={data.salesTrend.points}
           />
 

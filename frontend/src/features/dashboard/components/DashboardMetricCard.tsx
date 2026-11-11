@@ -29,7 +29,7 @@ const TONE_ICON_BG_CLASS: Record<NonNullable<DashboardMetricCardProps['tone']>, 
   danger: 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/25',
 };
 
-export const DashboardMetricCard: React.FC<DashboardMetricCardProps> = ({
+export const DashboardMetricCard: React.FC<DashboardMetricCardProps> = React.memo(({
   title,
   value,
   subtitle,
@@ -106,4 +106,4 @@ export const DashboardMetricCard: React.FC<DashboardMetricCardProps> = ({
       {body}
     </div>
   );
-};
+});

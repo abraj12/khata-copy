@@ -354,47 +354,59 @@ export class NormalBillsService {
 
     const billRecord: NormalBillRecord = billRes.rows[0];
 
-    // 6. Capture historical buying-price snapshots for linked products and insert line items
+    // 6. Capture historical buying-price snapshots for linked products and batch insert line items
     const productCostMap = await resolveProductCostSnapshots(client, computedItems);
-    const insertedItems: NormalBillItemRecord[] = [];
-    for (let i = 0; i < computedItems.length; i++) {
-      const item = computedItems[i];
-      const costRateSnapshot = item.productId
-        ? productCostMap.get(Number(item.productId)) ?? null
-        : null;
-      const itemRes = await client.query(
-        `
-        INSERT INTO normal_bill_items (
-          bill_id,
-          product_id,
-          item_index,
-          description,
-          hsn_code,
-          quantity,
-          unit,
-          rate,
-          rate_unit,
-          amount,
-          cost_rate_snapshot
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        RETURNING *;
-      `,
-        [
-          billRecord.id,
-          item.productId || null,
-          i + 1,
-          item.description.trim(),
-          item.hsnCode || null,
-          item.quantity,
-          item.unit || null,
-          item.rate,
-          item.rateUnit || null,
-          item.amount,
-          costRateSnapshot,
-        ]
-      );
-      insertedItems.push(itemRes.rows[0]);
-    }
+    const insertedItems: NormalBillItemRecord[] =
+      computedItems.length > 0
+        ? (
+            await client.query(
+              `
+              INSERT INTO normal_bill_items (
+                bill_id,
+                product_id,
+                item_index,
+                description,
+                hsn_code,
+                quantity,
+                unit,
+                rate,
+                rate_unit,
+                amount,
+                cost_rate_snapshot
+              )
+              SELECT * FROM UNNEST(
+                $1::bigint[],
+                $2::bigint[],
+                $3::int[],
+                $4::text[],
+                $5::text[],
+                $6::numeric[],
+                $7::text[],
+                $8::numeric[],
+                $9::text[],
+                $10::numeric[],
+                $11::numeric[]
+              )
+              RETURNING *;
+              `,
+              [
+                computedItems.map(() => billRecord.id),
+                computedItems.map((item) => item.productId || null),
+                computedItems.map((_, idx) => idx + 1),
+                computedItems.map((item) => item.description.trim()),
+                computedItems.map((item) => item.hsnCode || null),
+                computedItems.map((item) => item.quantity),
+                computedItems.map((item) => item.unit || null),
+                computedItems.map((item) => item.rate),
+                computedItems.map((item) => item.rateUnit || null),
+                computedItems.map((item) => item.amount),
+                computedItems.map((item) =>
+                  item.productId ? productCostMap.get(Number(item.productId)) ?? null : null
+                ),
+              ]
+            )
+          ).rows
+        : [];
 
     billRecord.items = insertedItems;
     return billRecord;

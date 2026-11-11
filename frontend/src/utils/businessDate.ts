@@ -68,3 +68,71 @@ export function addBusinessCalendarDays(
   const sd = String(shifted.getUTCDate()).padStart(2, '0');
   return `${sy}-${sm}-${sd}`;
 }
+
+function getAnchorBusinessDate(
+  baseDateISO?: string,
+  timeZone: string = getDefaultBusinessTimeZone()
+): string {
+  return baseDateISO && isValidBusinessDate(baseDateISO)
+    ? baseDateISO.trim()
+    : getBusinessDateISO(timeZone);
+}
+
+/**
+ * Returns full calendar-month start and end ISO dates shifted by `monthsDelta` relative
+ * to the configured business date (safe across year boundaries and leap-year Feb).
+ */
+export function getShiftedBusinessMonthRange(
+  monthsDelta: number,
+  baseDateISO?: string,
+  timeZone: string = getDefaultBusinessTimeZone()
+): { fromDate: string; toDate: string } {
+  const anchor = getAnchorBusinessDate(baseDateISO, timeZone);
+  const [y, m] = anchor.split('-').map(Number);
+  const totalMonths = y * 12 + (m - 1) + Math.trunc(monthsDelta);
+  const targetYear = Math.floor(totalMonths / 12);
+  const targetMonth = ((totalMonths % 12) + 12) % 12 + 1;
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+  const ym = `${targetYear}-${String(targetMonth).padStart(2, '0')}`;
+  return {
+    fromDate: `${ym}-01`,
+    toDate: `${ym}-${String(lastDay).padStart(2, '0')}`,
+  };
+}
+
+export function getPreviousBusinessMonthRange(
+  baseDateISO?: string,
+  timeZone: string = getDefaultBusinessTimeZone()
+): { fromDate: string; toDate: string } {
+  return getShiftedBusinessMonthRange(-1, baseDateISO, timeZone);
+}
+
+/**
+ * Computes Indian Financial Year bounds (April 1 to March 31) in business timezone.
+ * - For fyOffset = 0 ("This FY"): Apr 1 of current FY through anchor business date.
+ * - For fyOffset = -1 ("Previous FY"): Apr 1 to Mar 31 of the immediately preceding FY.
+ */
+export function getIndianFinancialYearRange(
+  fyOffset = 0,
+  baseDateISO?: string,
+  timeZone: string = getDefaultBusinessTimeZone()
+): { fromDate: string; toDate: string } {
+  const anchor = getAnchorBusinessDate(baseDateISO, timeZone);
+  const [year, month] = anchor.split('-').map(Number);
+  const currentFyStartYear = month >= 4 ? year : year - 1;
+  const targetStartYear = currentFyStartYear + Math.trunc(fyOffset);
+  const fromDate = `${targetStartYear}-04-01`;
+  const fyEndDate = `${targetStartYear + 1}-03-31`;
+
+  if (fyOffset === 0) {
+    return {
+      fromDate,
+      toDate: anchor < fyEndDate ? anchor : fyEndDate,
+    };
+  }
+
+  return {
+    fromDate,
+    toDate: fyEndDate,
+  };
+}

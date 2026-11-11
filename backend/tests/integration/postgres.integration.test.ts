@@ -116,6 +116,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '022_supplier_operational_hardening.sql',
         '023_supplier_audit_truncate_guard.sql',
         '024_home_dashboard_profitability.sql',
+        '025_performance_reporting_hardening.sql',
       ];
 
       await client.query(`
@@ -176,6 +177,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '022_supplier_operational_hardening.sql',
       '023_supplier_audit_truncate_guard.sql',
       '024_home_dashboard_profitability.sql',
+      '025_performance_reporting_hardening.sql',
     ]);
 
     const expectedTables = [
@@ -3158,6 +3160,238 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       expect(p1.totalActiveAmount).toBe('300.00');
       const seenExpIds = new Set([...p1.items.map((x) => x.id), ...p2.items.map((x) => x.id)]);
       expect(seenExpIds.size).toBe(10);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('32. Release #025: 024->025 upgrade idempotency, All-Time Overview (08P01 guard), Proportional Discounts, Mid-Month Trend Clipping, IST Boundaries, Reversal Activity, Expense History & Batched Writes', async () => {
+    vi.spyOn(appPool, 'connect').mockImplementation(() => pool.connect());
+    vi.spyOn(appPool, 'query').mockImplementation((...args: any[]) => (pool.query as any)(...args));
+
+    try {
+      // 1. Re-apply migration 025 idempotently and verify targeted indexes + triggers remain intact
+      const sql025 = fs.readFileSync(
+        path.resolve(__dirname, '../../migrations/025_performance_reporting_hardening.sql'),
+        'utf-8'
+      );
+      await expect(pool.query(sql025)).resolves.toBeTruthy();
+
+      const idxRes = await pool.query(
+        `
+        SELECT indexname
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND indexname = ANY($1::text[])
+        ORDER BY indexname ASC
+        `,
+        [[
+          'idx_business_expense_events_voided_created',
+          'idx_business_expenses_status_date_created',
+          'idx_payments_received_at',
+          'idx_products_active_lower_name',
+          'idx_supplier_alloc_rev_created_at',
+          'idx_supplier_payment_reversals_reversed_at',
+          'idx_supplier_bill_cancellations_cancelled_at',
+        ]]
+      );
+      expect(idxRes.rows).toHaveLength(7);
+
+      // 2. All-time getOverview({}) executes cleanly on real PostgreSQL without 08P01 bind error
+      const allTimeOverview = await dashboardService.getOverview({});
+      expect(allTimeOverview.dateRange).toEqual({ fromDate: null, toDate: null });
+      expect(allTimeOverview.salesTrend.granularity).toBe('month');
+      expect(allTimeOverview.salesTrend.isSixMonthWindow).toBe(true);
+
+      // 3. IST (Asia/Kolkata UTC+05:30) timestamp boundary check for Customer Payments
+      const prodA = await productsService.createProduct('R25 Proportional Steel', '40.00', '7214');
+      const prodB = await productsService.createProduct('R25 Proportional Bolt', '10.00', '7318');
+      const custIst = await khataService.createCustomer({
+        name: 'Release 025 IST Boundary Customer',
+        phone: '9876500250',
+      });
+      const istUdhar = await khataService.createTransaction({
+        customer: { id: custIst.id, name: custIst.name },
+        items: [{ productId: prodA.id, quantity: '5', sellingPrice: '100.00' }],
+        note: 'R25 opening udhar for IST payment check',
+      });
+      await pool.query(`UPDATE udhar_transactions SET transaction_date = '2026-12-08' WHERE id = $1`, [
+        istUdhar.transactionId,
+      ]);
+      await khataService.recordPayment(custIst.id, '111.00', 'IST Dec 9 23:45 payment');
+      await khataService.recordPayment(custIst.id, '222.00', 'IST Dec 10 00:15 payment');
+      await pool.query(
+        `UPDATE payments SET received_at = '2026-12-09T18:15:00.000Z' WHERE customer_id = $1 AND amount = 111.00`,
+        [custIst.id]
+      );
+      await pool.query(
+        `UPDATE payments SET received_at = '2026-12-09T18:45:00.000Z' WHERE customer_id = $1 AND amount = 222.00`,
+        [custIst.id]
+      );
+
+      const dec10IstOverview = await dashboardService.getOverview({
+        fromDate: '2026-12-10',
+        toDate: '2026-12-10',
+      });
+      expect(dec10IstOverview.customersKhata.paymentsReceived).toBe('222.00');
+      expect(dec10IstOverview.customersKhata.paymentCount).toBe(1);
+
+      // 4. Discounted bill with manual line: proportional net-of-discount top-product revenue
+
+      // Gross lines = 60 + 30 + 10 (manual) = 100.00; Discount = 20.00 -> Net Bill Total = 80.00
+      // Product A net share = 48.00, Product B net share = 24.00, manual item = 8.00 (excluded from topProducts)
+      await normalBillsService.createBill({
+        billNumber: 'R25-DISC-001',
+        billDate: '2026-12-15',
+        customerId: custIst.id,
+        customerName: custIst.name,
+        discountType: 'fixed',
+        discountValue: '20.00',
+        discountAmount: '20.00',
+        items: [
+          { productId: prodA.id, description: prodA.name, quantity: 1, rate: 60 },
+          { productId: prodB.id, description: prodB.name, quantity: 1, rate: 30 },
+          { description: 'Manual Fitting Charge', quantity: 1, rate: 10 },
+        ],
+      });
+
+      const dec15Overview = await dashboardService.getOverview({
+        fromDate: '2026-12-15',
+        toDate: '2026-12-15',
+      });
+      expect(dec15Overview.sales.totalSalesRevenue).toBe('80.00');
+      const prodATop = dec15Overview.products.topProducts.find((p) => p.productId === prodA.id);
+      const prodBTop = dec15Overview.products.topProducts.find((p) => p.productId === prodB.id);
+      expect(prodATop?.totalSalesAmount).toBe('48.00');
+      expect(prodBTop?.totalSalesAmount).toBe('24.00');
+
+      // 5. Mid-month clipping on >45 day window (2026-10-20 to 2026-12-15) excludes earlier 2026-10-10 bill
+      await normalBillsService.createBill({
+        billNumber: 'R25-EARLY-OCT',
+        billDate: '2026-10-10',
+        customerName: 'Early Oct Walkin',
+        items: [{ productId: prodA.id, description: prodA.name, quantity: 2, rate: 100 }],
+      });
+
+      const multiMonthOverview = await dashboardService.getOverview({
+        fromDate: '2026-10-20',
+        toDate: '2026-12-15',
+      });
+      expect(multiMonthOverview.salesTrend.granularity).toBe('month');
+      expect(multiMonthOverview.salesTrend.isSixMonthWindow).toBe(false);
+      const octBucket = multiMonthOverview.salesTrend.points.find((p) => p.bucket === '2026-10');
+      const decBucket = multiMonthOverview.salesTrend.points.find((p) => p.bucket === '2026-12');
+      expect(octBucket?.totalSalesRevenue).toBe('0.00');
+      expect(new Decimal(decBucket?.totalSalesRevenue || '0').greaterThanOrEqualTo('80')).toBe(true);
+
+      // 6. Batched Khata UNNEST & Supplier UNNEST price sync (incl. duplicate productId in one purchase bill)
+      const batchedKhata = await khataService.createTransaction({
+        customer: { id: custIst.id, name: custIst.name },
+        items: [
+          { productId: prodA.id, quantity: '2', sellingPrice: '75.00' },
+          { productId: prodB.id, quantity: '3', sellingPrice: '20.00' },
+        ],
+        note: 'R25 batched udhar test',
+      });
+      const udharRowsRes = await pool.query(
+        'SELECT product_id, buying_price_snapshot FROM udhar_items WHERE transaction_id = $1 ORDER BY id ASC',
+        [batchedKhata.transactionId]
+      );
+      expect(udharRowsRes.rows.map((r) => ({ id: r.product_id, cost: r.buying_price_snapshot }))).toEqual([
+        { id: prodA.id, cost: '40.00' },
+        { id: prodB.id, cost: '10.00' },
+      ]);
+
+      const sup25 = await suppliersService.createSupplier({
+        name: 'Release 025 Steel Suppliers',
+        phone: '9811100250',
+      });
+      const cancelBill = await suppliersService.createPurchaseBill({
+        supplierId: sup25.id,
+        invoiceNumber: 'R25-SB-CANCEL',
+        invoiceDate: '2026-12-20',
+        items: [
+          {
+            productId: prodA.id,
+            description: prodA.name,
+            quantity: '2',
+            purchaseRate: '42.00',
+            updateProductBuyingPrice: true,
+          },
+          {
+            productId: prodA.id,
+            description: prodA.name,
+            quantity: '1',
+            purchaseRate: '45.00',
+            updateProductBuyingPrice: true,
+          },
+        ],
+      });
+      const syncedProdA = await pool.query('SELECT buying_price FROM products WHERE id = $1', [prodA.id]);
+      expect(syncedProdA.rows[0].buying_price).toBe('45.00');
+
+      const keepBill = await suppliersService.createPurchaseBill({
+        supplierId: sup25.id,
+        invoiceNumber: 'R25-SB-KEEP',
+        invoiceDate: '2026-12-20',
+        items: [{ description: 'Angle Iron', quantity: '1', purchaseRate: '500.00' }],
+      });
+      const supPayAlloc = await suppliersService.createSupplierPayment({
+        supplierId: sup25.id,
+        paymentDate: '2026-12-20',
+        amount: '300.00',
+        paymentMethod: 'upi',
+        transactionReference: 'UTR-R25-ALLOC',
+        allocations: [{ purchaseBillId: keepBill.id, amount: '200.00' }],
+      });
+      const supPayReverse = await suppliersService.createSupplierPayment({
+        supplierId: sup25.id,
+        paymentDate: '2026-12-20',
+        amount: '150.00',
+        paymentMethod: 'cash',
+      });
+
+      const allocId = supPayAlloc.allocations[0].allocationId;
+      await suppliersService.reversePaymentAllocation(supPayAlloc.id, allocId, {
+        amount: '100.00',
+        reason: 'R25 partial alloc adjustment',
+      });
+      await suppliersService.reverseSupplierPayment(supPayReverse.id, 'R25 bounced cheque');
+      await suppliersService.cancelPurchaseBill(cancelBill.id, 'R25 duplicate invoice');
+
+      // 7. Read-only Expense Audit History (getExpenseHistory) + Recent Activity Reversal/Void Feed
+      const exp25 = await dashboardService.createExpense({
+        expenseDate: '2026-12-20',
+        category: 'transport',
+        title: 'Tempo Freight R25',
+        amount: '350.00',
+        paymentMethod: 'cash',
+      });
+      await dashboardService.updateExpense(exp25.id, {
+        expenseDate: '2026-12-20',
+        category: 'transport',
+        title: 'Tempo Freight R25 Updated',
+        amount: '380.00',
+        paymentMethod: 'upi',
+        reason: 'Toll included',
+      });
+      await dashboardService.voidExpense(exp25.id, 'R25 duplicate expense voucher');
+
+      const hist = await dashboardService.getExpenseHistory(exp25.id, { limit: 10 });
+      expect(hist.expense.status).toBe('voided');
+      expect(hist.events.map((e) => e.action)).toEqual(['voided', 'updated', 'created']);
+      expect(hist.events[0].reason).toBe('R25 duplicate expense voucher');
+
+      const todayBusinessDate = allTimeOverview.businessDate;
+      const todayOverview = await dashboardService.getOverview({
+        fromDate: todayBusinessDate,
+        toDate: todayBusinessDate,
+      });
+      const activityTypes = new Set(todayOverview.recentActivity.map((a) => a.type));
+      expect(activityTypes.has('supplier_payment_reversal')).toBe(true);
+      expect(activityTypes.has('supplier_allocation_reversal')).toBe(true);
+      expect(activityTypes.has('supplier_bill_cancellation')).toBe(true);
+      expect(activityTypes.has('expense_void')).toBe(true);
     } finally {
       vi.restoreAllMocks();
     }

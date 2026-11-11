@@ -38,8 +38,24 @@ const TYPE_META: Record<DashboardActivityType, { label: string; badgeClass: stri
     label: 'Supplier Payment',
     badgeClass: 'bg-teal-500/10 text-teal-700 dark:text-teal-300 border-teal-500/30',
   },
+  supplier_payment_reversal: {
+    label: 'Payment Reversal',
+    badgeClass: 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30',
+  },
+  supplier_allocation_reversal: {
+    label: 'Allocation Reversal',
+    badgeClass: 'bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-500/30',
+  },
+  supplier_bill_cancellation: {
+    label: 'Bill Cancelled',
+    badgeClass: 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30',
+  },
   expense: {
     label: 'Expense',
+    badgeClass: 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30',
+  },
+  expense_void: {
+    label: 'Expense Voided',
     badgeClass: 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30',
   },
   quotation: {
@@ -48,7 +64,7 @@ const TYPE_META: Record<DashboardActivityType, { label: string; badgeClass: stri
   },
 };
 
-export const DashboardActivityFeed: React.FC<DashboardActivityFeedProps> = ({
+export const DashboardActivityFeed: React.FC<DashboardActivityFeedProps> = React.memo(({
   items,
   onNavigate,
 }) => {
@@ -65,7 +81,10 @@ export const DashboardActivityFeed: React.FC<DashboardActivityFeedProps> = ({
       ) : (
         <div className="divide-y divide-[var(--khata-border)]/70 rounded-xl border border-[var(--khata-border)] overflow-hidden bg-[var(--khata-surface-inset)]/50">
           {items.map((item, idx) => {
-            const meta = TYPE_META[item.type];
+            const meta = TYPE_META[item.type] ?? {
+              label: item.type,
+              badgeClass: 'bg-slate-500/10 text-[var(--khata-text)] border-[var(--khata-border)]',
+            };
             const isVoidedOrCancelled =
               item.status === 'voided' || item.status === 'cancelled' || item.status === 'reversed';
 
@@ -126,4 +145,4 @@ export const DashboardActivityFeed: React.FC<DashboardActivityFeedProps> = ({
       )}
     </DashboardSection>
   );
-};
+});

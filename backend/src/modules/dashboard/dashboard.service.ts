@@ -3,16 +3,19 @@ import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
 import { env } from '../../config/env.js';
 import { getBusinessDateISO } from '../../utils/businessDate.js';
+import { buildBusinessTimestampRangeFilter } from '../../utils/sqlDateRange.js';
 import { AppError } from '../../utils/errors.js';
 import { escapeLike, validateMoneyInput } from '../../utils/validation.js';
 import {
   CreateExpenseInput,
   DashboardOverviewQuery,
   ExpenseCategory,
+  ExpenseHistoryQuery,
   ExpensePaymentMethod,
   ListExpensesQuery,
   UpdateExpenseInput,
   createExpenseSchema,
+  expenseHistoryQuerySchema,
   expenseIdParamSchema,
   listExpensesQuerySchema,
   updateExpenseSchema,
@@ -128,7 +131,11 @@ export type DashboardActivityType =
   | 'khata_payment'
   | 'supplier_bill'
   | 'supplier_payment'
+  | 'supplier_payment_reversal'
+  | 'supplier_allocation_reversal'
+  | 'supplier_bill_cancellation'
   | 'expense'
+  | 'expense_void'
   | 'quotation';
 
 export type DashboardTargetTab =
@@ -167,6 +174,9 @@ export interface DashboardOverviewData {
   quotations: DashboardQuotationsSummary;
   salesTrend: {
     granularity: 'day' | 'month';
+    effectiveFromDate: string;
+    effectiveToDate: string;
+    isSixMonthWindow: boolean;
     points: DashboardTrendPoint[];
   };
   recentActivity: DashboardActivityItem[];
@@ -197,6 +207,21 @@ export interface PaginatedExpensesResult {
   offset: number;
   hasMore: boolean;
   nextOffset: number | null;
+}
+
+export interface BusinessExpenseEventRecord {
+  id: number;
+  expenseId: string;
+  action: 'created' | 'updated' | 'voided';
+  reason: string | null;
+  previousData: Record<string, unknown> | null;
+  newData: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ExpenseHistoryResult {
+  expense: BusinessExpenseRecord;
+  events: BusinessExpenseEventRecord[];
 }
 
 function toFixedMoney(value: unknown): string {
@@ -255,18 +280,35 @@ function resolveTrendWindow(
   fromDate: string | undefined,
   toDate: string | undefined,
   todayIso: string
-): { granularity: 'day' | 'month'; startIso: string; endIso: string } {
+): {
+  granularity: 'day' | 'month';
+  startIso: string;
+  endIso: string;
+  effectiveFromDate: string;
+  effectiveToDate: string;
+  isSixMonthWindow: boolean;
+} {
   if (fromDate && toDate) {
     const startMs = Date.parse(`${fromDate}T00:00:00Z`);
     const endMs = Date.parse(`${toDate}T00:00:00Z`);
     const daysSpan = Math.floor((endMs - startMs) / 86_400_000) + 1;
     if (daysSpan <= 45) {
-      return { granularity: 'day', startIso: fromDate, endIso: toDate };
+      return {
+        granularity: 'day',
+        startIso: fromDate,
+        endIso: toDate,
+        effectiveFromDate: fromDate,
+        effectiveToDate: toDate,
+        isSixMonthWindow: false,
+      };
     }
     return {
       granularity: 'month',
       startIso: `${fromDate.slice(0, 7)}-01`,
       endIso: `${toDate.slice(0, 7)}-01`,
+      effectiveFromDate: fromDate,
+      effectiveToDate: toDate,
+      isSixMonthWindow: false,
     };
   }
 
@@ -276,28 +318,48 @@ function resolveTrendWindow(
     const endMs = Date.parse(`${effectiveEnd}T00:00:00Z`);
     const daysSpan = Math.floor((endMs - startMs) / 86_400_000) + 1;
     if (daysSpan <= 45) {
-      return { granularity: 'day', startIso: fromDate, endIso: effectiveEnd };
+      return {
+        granularity: 'day',
+        startIso: fromDate,
+        endIso: effectiveEnd,
+        effectiveFromDate: fromDate,
+        effectiveToDate: effectiveEnd,
+        isSixMonthWindow: false,
+      };
     }
     return {
       granularity: 'month',
       startIso: `${fromDate.slice(0, 7)}-01`,
       endIso: `${effectiveEnd.slice(0, 7)}-01`,
+      effectiveFromDate: fromDate,
+      effectiveToDate: effectiveEnd,
+      isSixMonthWindow: false,
     };
   }
 
   if (toDate) {
+    const start30 = shiftUtcDays(toDate, -29);
     return {
       granularity: 'day',
-      startIso: shiftUtcDays(toDate, -29),
+      startIso: start30,
       endIso: toDate,
+      effectiveFromDate: start30,
+      effectiveToDate: toDate,
+      isSixMonthWindow: false,
     };
   }
 
   // All-time default: 6-month trend ending with the current business month
+  const startMonth = shiftUtcMonthsStart(todayIso, -5);
+  const endMonth = `${todayIso.slice(0, 7)}-01`;
+  const monthEndInclusive = shiftUtcDays(shiftUtcMonthsStart(endMonth, 1), -1);
   return {
     granularity: 'month',
-    startIso: shiftUtcMonthsStart(todayIso, -5),
-    endIso: `${todayIso.slice(0, 7)}-01`,
+    startIso: startMonth,
+    endIso: endMonth,
+    effectiveFromDate: startMonth,
+    effectiveToDate: monthEndInclusive,
+    isSixMonthWindow: true,
   };
 }
 
@@ -572,7 +634,7 @@ export class DashboardService {
         totalSalesRevenueDec.greaterThan(0) && uncostedSalesRevenueDec.greaterThan(0);
 
       // 4. Customers & Khata (live receivables + period-filtered credit & payment flow)
-      const newCustFilter = buildDateFilter(`(created_at AT TIME ZONE $1)::date`, fromDate, toDate, 2);
+      const newCustFilter = buildBusinessTimestampRangeFilter('created_at', fromDate, toDate, timeZone, 1);
       const custPosRes = await client.query(
         `
         WITH customer_udhar AS (
@@ -602,7 +664,7 @@ export class DashboardService {
           (SELECT COALESCE(SUM(outstanding), 0)::numeric FROM per_customer) AS total_outstanding_receivable,
           (SELECT COUNT(*)::bigint FROM customers WHERE ${newCustFilter.clause}) AS new_customers_count
         `,
-        [timeZone, ...newCustFilter.params]
+        newCustFilter.params
       );
 
       const khataUdharFilter = buildDateFilter('transaction_date', fromDate, toDate);
@@ -615,7 +677,7 @@ export class DashboardService {
         khataUdharFilter.params
       );
 
-      const khataPayFilter = buildDateFilter(`(received_at AT TIME ZONE $1)::date`, fromDate, toDate, 2);
+      const khataPayFilter = buildBusinessTimestampRangeFilter('received_at', fromDate, toDate, timeZone, 1);
       const khataPayRes = await client.query(
         `
         SELECT
@@ -624,7 +686,7 @@ export class DashboardService {
         FROM payments
         WHERE ${khataPayFilter.clause}
         `,
-        [timeZone, ...khataPayFilter.params]
+        khataPayFilter.params
       );
 
       const custRow = custPosRes.rows[0] || {};
@@ -649,32 +711,106 @@ export class DashboardService {
       );
       const topProductsRes = await client.query(
         `
-        WITH combined_lines AS (
+        WITH nb_scored AS (
           SELECT
+            nbi.id,
             nbi.product_id,
             nbi.quantity,
             nbi.amount,
-            ('nb:' || nb.id::text) AS doc_key
+            nb.id AS bill_id,
+            nb.total_amount AS doc_net_total,
+            SUM(nbi.amount) OVER (PARTITION BY nbi.bill_id) AS doc_subtotal,
+            ROW_NUMBER() OVER (
+              PARTITION BY nbi.bill_id
+              ORDER BY CASE WHEN nbi.amount > 0 THEN 0 ELSE 1 END, nbi.item_index DESC, nbi.id DESC
+            ) AS adj_rn
           FROM normal_bill_items nbi
           INNER JOIN normal_bills nb ON nb.id = nbi.bill_id
-          WHERE nbi.product_id IS NOT NULL
-            AND ${topNbFilter.clause}
-          UNION ALL
+          WHERE ${topNbFilter.clause}
+        ),
+        nb_weighted AS (
           SELECT
+            id,
+            product_id,
+            quantity,
+            bill_id,
+            doc_net_total,
+            adj_rn,
+            CASE
+              WHEN doc_subtotal > 0 THEN ROUND((doc_net_total * amount) / doc_subtotal, 2)
+              WHEN adj_rn = 1 THEN ROUND(doc_net_total, 2)
+              ELSE 0::numeric(14, 2)
+            END AS base_alloc
+          FROM nb_scored
+        ),
+        nb_final AS (
+          SELECT
+            product_id,
+            quantity,
+            (
+              base_alloc + CASE
+                WHEN adj_rn = 1 THEN (doc_net_total - SUM(base_alloc) OVER (PARTITION BY bill_id))
+                ELSE 0::numeric
+              END
+            ) AS allocated_net_amount,
+            ('nb:' || bill_id::text) AS doc_key
+          FROM nb_weighted
+        ),
+        gi_scored AS (
+          SELECT
+            gii.id,
             gii.product_id,
             gii.quantity,
             gii.amount,
-            ('gi:' || gi.id::text) AS doc_key
+            gi.id AS invoice_id,
+            gi.taxable_amount AS doc_net_total,
+            SUM(gii.amount) OVER (PARTITION BY gii.invoice_id) AS doc_subtotal,
+            ROW_NUMBER() OVER (
+              PARTITION BY gii.invoice_id
+              ORDER BY CASE WHEN gii.amount > 0 THEN 0 ELSE 1 END, gii.item_index DESC, gii.id DESC
+            ) AS adj_rn
           FROM gst_invoice_items gii
           INNER JOIN gst_invoices gi ON gi.id = gii.invoice_id
-          WHERE gii.product_id IS NOT NULL
-            AND ${topGiFilter.clause}
+          WHERE ${topGiFilter.clause}
+        ),
+        gi_weighted AS (
+          SELECT
+            id,
+            product_id,
+            quantity,
+            invoice_id,
+            doc_net_total,
+            adj_rn,
+            CASE
+              WHEN doc_subtotal > 0 THEN ROUND((doc_net_total * amount) / doc_subtotal, 2)
+              WHEN adj_rn = 1 THEN ROUND(doc_net_total, 2)
+              ELSE 0::numeric(14, 2)
+            END AS base_alloc
+          FROM gi_scored
+        ),
+        gi_final AS (
+          SELECT
+            product_id,
+            quantity,
+            (
+              base_alloc + CASE
+                WHEN adj_rn = 1 THEN (doc_net_total - SUM(base_alloc) OVER (PARTITION BY invoice_id))
+                ELSE 0::numeric
+              END
+            ) AS allocated_net_amount,
+            ('gi:' || invoice_id::text) AS doc_key
+          FROM gi_weighted
+        ),
+        combined_lines AS (
+          SELECT product_id, quantity, allocated_net_amount, doc_key FROM nb_final WHERE product_id IS NOT NULL
+          UNION ALL
+          SELECT product_id, quantity, allocated_net_amount, doc_key FROM gi_final WHERE product_id IS NOT NULL
         ),
         aggregated AS (
           SELECT
             product_id,
             COALESCE(SUM(quantity), 0)::numeric AS total_quantity_sold,
-            COALESCE(SUM(amount), 0)::numeric AS total_sales_amount,
+            COALESCE(SUM(allocated_net_amount), 0)::numeric AS total_sales_amount,
             COUNT(DISTINCT doc_key)::bigint AS bill_count
           FROM combined_lines
           GROUP BY product_id
@@ -781,14 +917,14 @@ export class DashboardService {
         supPayFilter.params
       );
 
-      const supRevFilter = buildDateFilter(`(reversed_at AT TIME ZONE $1)::date`, fromDate, toDate, 2);
+      const supRevFilter = buildBusinessTimestampRangeFilter('reversed_at', fromDate, toDate, timeZone, 1);
       const supRevRes = await client.query(
         `
         SELECT COALESCE(SUM(original_amount), 0)::numeric AS total_payments_reversed
         FROM supplier_payment_reversals
         WHERE ${supRevFilter.clause}
         `,
-        [timeZone, ...supRevFilter.params]
+        supRevFilter.params
       );
 
       const supPosRow = supPosRes.rows[0] || {};
@@ -842,11 +978,6 @@ export class DashboardService {
 
       // 8. Sales & Expense Trend series (daily for <= 45 days, monthly otherwise)
       const trendWin = resolveTrendWindow(fromDate, toDate, businessDate);
-      const trendRangeEndInclusive =
-        trendWin.granularity === 'day'
-          ? trendWin.endIso
-          : shiftUtcDays(shiftUtcMonthsStart(trendWin.endIso, 1), -1);
-
       const trendSql =
         trendWin.granularity === 'day'
           ? `
@@ -895,7 +1026,7 @@ export class DashboardService {
           nb AS (
             SELECT date_trunc('month', bill_date)::date AS bucket_month, COUNT(*)::bigint AS cnt, COALESCE(SUM(total_amount), 0)::numeric AS sales
             FROM normal_bills
-            WHERE bill_date >= $1::date AND bill_date <= $3::date
+            WHERE bill_date >= $3::date AND bill_date <= $4::date
             GROUP BY 1
           ),
           gi AS (
@@ -905,13 +1036,13 @@ export class DashboardService {
               COALESCE(SUM(taxable_amount), 0)::numeric AS taxable_sales,
               COALESCE(SUM(tax_amount), 0)::numeric AS gst_collected
             FROM gst_invoices
-            WHERE invoice_date >= $1::date AND invoice_date <= $3::date
+            WHERE invoice_date >= $3::date AND invoice_date <= $4::date
             GROUP BY 1
           ),
           ex AS (
             SELECT date_trunc('month', expense_date)::date AS bucket_month, COALESCE(SUM(amount), 0)::numeric AS total_exp
             FROM business_expenses
-            WHERE status = 'active' AND expense_date >= $1::date AND expense_date <= $3::date
+            WHERE status = 'active' AND expense_date >= $3::date AND expense_date <= $4::date
             GROUP BY 1
           )
           SELECT
@@ -931,7 +1062,7 @@ export class DashboardService {
       const trendParams =
         trendWin.granularity === 'day'
           ? [trendWin.startIso, trendWin.endIso]
-          : [trendWin.startIso, trendWin.endIso, trendRangeEndInclusive];
+          : [trendWin.startIso, trendWin.endIso, trendWin.effectiveFromDate, trendWin.effectiveToDate];
 
       const trendRes = await client.query(trendSql, trendParams);
       const trendPoints: DashboardTrendPoint[] = trendRes.rows.map((r) => {
@@ -970,6 +1101,13 @@ export class DashboardService {
         const conds: string[] = [];
         if (fromIdx !== null) conds.push(`${col} >= $${fromIdx}::date`);
         if (toIdx !== null) conds.push(`${col} <= $${toIdx}::date`);
+        return conds.length > 0 ? conds.join(' AND ') : 'TRUE';
+      };
+
+      const bindSharedTimestampDate = (col: string): string => {
+        const conds: string[] = [];
+        if (fromIdx !== null) conds.push(`${col} >= ($${fromIdx}::date::timestamp AT TIME ZONE $1)`);
+        if (toIdx !== null) conds.push(`${col} < (($${toIdx}::date + 1)::timestamp AT TIME ZONE $1)`);
         return conds.length > 0 ? conds.join(' AND ') : 'TRUE';
       };
 
@@ -1046,7 +1184,7 @@ export class DashboardService {
               'khata'::text AS target_tab
             FROM payments p
             INNER JOIN customers c ON c.id = p.customer_id
-            WHERE ${bindSharedDate('(p.received_at AT TIME ZONE $1)::date')}
+            WHERE ${bindSharedTimestampDate('p.received_at')}
             ORDER BY p.received_at DESC, p.id DESC
             LIMIT 12
           )
@@ -1087,6 +1225,59 @@ export class DashboardService {
           UNION ALL
           (
             SELECT
+              'supplier_payment_reversal'::text AS type,
+              spr.reversal_number AS reference,
+              s.name AS party,
+              spr.original_amount AS amount,
+              (spr.reversed_at AT TIME ZONE $1)::date AS event_date,
+              'reversed'::text AS status,
+              spr.reversed_at AS occurred_at,
+              'suppliers'::text AS target_tab
+            FROM supplier_payment_reversals spr
+            INNER JOIN suppliers s ON s.id = spr.supplier_id
+            WHERE ${bindSharedTimestampDate('spr.reversed_at')}
+            ORDER BY spr.reversed_at DESC, spr.id DESC
+            LIMIT 12
+          )
+          UNION ALL
+          (
+            SELECT
+              'supplier_allocation_reversal'::text AS type,
+              (sp.receipt_number || ' -> ' || spb.invoice_number) AS reference,
+              s.name AS party,
+              spar.reversed_amount AS amount,
+              (spar.created_at AT TIME ZONE $1)::date AS event_date,
+              'reversed'::text AS status,
+              spar.created_at AS occurred_at,
+              'suppliers'::text AS target_tab
+            FROM supplier_payment_allocation_reversals spar
+            INNER JOIN supplier_payments sp ON sp.id = spar.payment_id
+            INNER JOIN supplier_purchase_bills spb ON spb.id = spar.purchase_bill_id
+            INNER JOIN suppliers s ON s.id = spar.supplier_id
+            WHERE ${bindSharedTimestampDate('spar.created_at')}
+            ORDER BY spar.created_at DESC, spar.id DESC
+            LIMIT 12
+          )
+          UNION ALL
+          (
+            SELECT
+              'supplier_bill_cancellation'::text AS type,
+              spbc.invoice_number AS reference,
+              s.name AS party,
+              spbc.original_grand_total AS amount,
+              (spbc.cancelled_at AT TIME ZONE $1)::date AS event_date,
+              'cancelled'::text AS status,
+              spbc.cancelled_at AS occurred_at,
+              'suppliers'::text AS target_tab
+            FROM supplier_purchase_bill_cancellations spbc
+            INNER JOIN suppliers s ON s.id = spbc.supplier_id
+            WHERE ${bindSharedTimestampDate('spbc.cancelled_at')}
+            ORDER BY spbc.cancelled_at DESC, spbc.id DESC
+            LIMIT 12
+          )
+          UNION ALL
+          (
+            SELECT
               'expense'::text AS type,
               be.title AS reference,
               COALESCE(be.vendor_name, INITCAP(be.category)) AS party,
@@ -1098,6 +1289,23 @@ export class DashboardService {
             FROM business_expenses be
             WHERE ${bindSharedDate('be.expense_date')}
             ORDER BY be.created_at DESC, be.id DESC
+            LIMIT 12
+          )
+          UNION ALL
+          (
+            SELECT
+              'expense_void'::text AS type,
+              be.title AS reference,
+              COALESCE(be.vendor_name, INITCAP(be.category)) AS party,
+              be.amount AS amount,
+              (bee.created_at AT TIME ZONE $1)::date AS event_date,
+              'voided'::text AS status,
+              bee.created_at AS occurred_at,
+              'home'::text AS target_tab
+            FROM business_expense_events bee
+            INNER JOIN business_expenses be ON be.id = bee.expense_id
+            WHERE bee.action = 'voided' AND ${bindSharedTimestampDate('bee.created_at')}
+            ORDER BY bee.created_at DESC, bee.id DESC
             LIMIT 12
           )
           UNION ALL
@@ -1219,6 +1427,9 @@ export class DashboardService {
         },
         salesTrend: {
           granularity: trendWin.granularity,
+          effectiveFromDate: trendWin.effectiveFromDate,
+          effectiveToDate: trendWin.effectiveToDate,
+          isSixMonthWindow: trendWin.isSixMonthWindow,
           points: trendPoints,
         },
         recentActivity,
@@ -1274,32 +1485,56 @@ export class DashboardService {
 
     const whereClause = conditions.length > 0 ? conditions.join(' AND ') : 'TRUE';
 
-    const countRes = await appPool.query(
+    const limitIdx = params.length + 1;
+    const offsetIdx = params.length + 2;
+    const listRes = await appPool.query(
       `
+      WITH summary AS (
+        SELECT
+          COUNT(*)::bigint AS total,
+          COALESCE(SUM(amount) FILTER (WHERE status = 'active'), 0)::numeric AS total_active_amount
+        FROM business_expenses
+        WHERE ${whereClause}
+      ),
+      paged AS (
+        SELECT
+          ${EXPENSE_RETURNING_COLS},
+          ROW_NUMBER() OVER (ORDER BY expense_date DESC, created_at DESC, id DESC) AS _rn
+        FROM business_expenses
+        WHERE ${whereClause}
+        ORDER BY expense_date DESC, created_at DESC, id DESC
+        LIMIT $${limitIdx} OFFSET $${offsetIdx}
+      )
       SELECT
-        COUNT(*)::bigint AS total,
-        COALESCE(SUM(amount) FILTER (WHERE status = 'active'), 0)::numeric AS total_active_amount
-      FROM business_expenses
-      WHERE ${whereClause}
-      `,
-      params
-    );
-
-    const total = Number(countRes.rows[0]?.total || 0);
-    const totalActiveAmount = toFixedMoney(countRes.rows[0]?.total_active_amount);
-
-    const rowsRes = await appPool.query(
-      `
-      SELECT ${EXPENSE_RETURNING_COLS}
-      FROM business_expenses
-      WHERE ${whereClause}
-      ORDER BY expense_date DESC, created_at DESC, id DESC
-      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+        s.total,
+        s.total_active_amount,
+        p.id,
+        p.expense_date,
+        p.category,
+        p.title,
+        p.vendor_name,
+        p.amount,
+        p.payment_method,
+        p.reference_number,
+        p.notes,
+        p.status,
+        p.voided_at,
+        p.void_reason,
+        p.created_at,
+        p.updated_at
+      FROM summary s
+      LEFT JOIN paged p ON TRUE
+      ORDER BY p._rn ASC NULLS LAST
       `,
       [...params, query.limit, query.offset]
     );
 
-    const items = rowsRes.rows.map(mapExpenseRow);
+    const firstRow = listRes.rows[0] || {};
+    const total = Number(firstRow.total || 0);
+    const totalActiveAmount = toFixedMoney(firstRow.total_active_amount);
+    const items = listRes.rows
+      .filter((row) => row.id !== null && row.id !== undefined)
+      .map(mapExpenseRow);
     const hasMore = query.offset + items.length < total;
     const nextOffset = hasMore ? query.offset + items.length : null;
 
@@ -1312,6 +1547,88 @@ export class DashboardService {
       hasMore,
       nextOffset,
     };
+  }
+
+  /**
+   * Returns read-only immutable audit events for an operating expense inside a consistent snapshot.
+   */
+  public async getExpenseHistory(
+    id: string,
+    rawQuery: Partial<ExpenseHistoryQuery> = {}
+  ): Promise<ExpenseHistoryResult> {
+    const idCheck = expenseIdParamSchema.safeParse(id);
+    if (!idCheck.success) {
+      throw new AppError(idCheck.error.errors[0]?.message || 'Invalid expense ID.', 400, 'VALIDATION_ERROR');
+    }
+
+    const queryCheck = expenseHistoryQuerySchema.safeParse(rawQuery);
+    if (!queryCheck.success) {
+      throw new AppError(queryCheck.error.errors[0]?.message || 'Invalid history query.', 400, 'VALIDATION_ERROR');
+    }
+
+    const limit = queryCheck.data.limit;
+    const client = await appPool.connect();
+    let inTx = false;
+
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      inTx = true;
+
+      const expRes = await client.query(
+        `
+        SELECT ${EXPENSE_RETURNING_COLS}
+        FROM business_expenses
+        WHERE id = $1::uuid
+        `,
+        [idCheck.data]
+      );
+
+      if (expRes.rowCount === 0) {
+        throw new AppError('Expense record not found.', 404, 'EXPENSE_NOT_FOUND');
+      }
+
+      const expense = mapExpenseRow(expRes.rows[0]);
+
+      const eventsRes = await client.query(
+        `
+        SELECT
+          id,
+          expense_id,
+          action,
+          reason,
+          previous_data,
+          new_data,
+          created_at
+        FROM business_expense_events
+        WHERE expense_id = $1::uuid
+        ORDER BY id DESC
+        LIMIT $2
+        `,
+        [idCheck.data, limit]
+      );
+
+      const events: BusinessExpenseEventRecord[] = eventsRes.rows.map((row) => ({
+        id: Number(row.id),
+        expenseId: String(row.expense_id),
+        action: row.action as 'created' | 'updated' | 'voided',
+        reason: row.reason ?? null,
+        previousData: (row.previous_data as Record<string, unknown> | null) ?? null,
+        newData: (row.new_data as Record<string, unknown>) || {},
+        createdAt: new Date(row.created_at).toISOString(),
+      }));
+
+      await client.query('COMMIT');
+      inTx = false;
+
+      return { expense, events };
+    } catch (err) {
+      if (inTx) {
+        await client.query('ROLLBACK').catch(() => undefined);
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   /**

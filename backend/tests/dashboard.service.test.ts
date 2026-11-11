@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { env } from '../src/config/env.js';
-import { appPool } from '../src/config/database.js';
+import { EXPECTED_MIGRATIONS, appPool, getDatabasePoolStats } from '../src/config/database.js';
 import { dashboardService } from '../src/modules/dashboard/dashboard.service.js';
 import { resolveProductCostSnapshots } from '../src/modules/billing/costSnapshot.js';
 import {
@@ -423,8 +423,30 @@ describe('Release #024: Home Dashboard, Profitability Analytics & Operating Expe
     vi.spyOn(appPool, 'query').mockImplementation(async (sql: any, params?: any[]) => {
       const text = typeof sql === 'string' ? sql : sql?.text || '';
       executed.push({ sql: text, params: params || [] });
-      if (text.includes('AS total_active_amount')) {
-        return { rows: [{ total: '1', total_active_amount: '850.00' }], rowCount: 1 } as any;
+      if (text.includes('WITH summary AS')) {
+        return {
+          rows: [
+            {
+              total: '1',
+              total_active_amount: '850.00',
+              id: SAMPLE_UUID,
+              expense_date: '2026-11-11',
+              category: 'electricity',
+              title: '100%_Power',
+              vendor_name: 'NBPDCL',
+              amount: '850.00',
+              payment_method: 'upi',
+              reference_number: 'UPI-123',
+              notes: null,
+              status: 'active',
+              voided_at: null,
+              void_reason: null,
+              created_at: '2026-11-11T09:00:00.000Z',
+              updated_at: '2026-11-11T09:00:00.000Z',
+            },
+          ],
+          rowCount: 1,
+        } as any;
       }
       return {
         rows: [
@@ -608,5 +630,256 @@ describe('Release #024: Home Dashboard, Profitability Analytics & Operating Expe
     const manualOnly = await resolveProductCostSnapshots(client, [{ productId: null }]);
     expect(manualOnly.size).toBe(0);
     expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('10. Expense history endpoint validates params, enforces auth/404, and returns read-only snapshot audit events', async () => {
+    const unauth = await request(app).get(`/api/v1/dashboard/expenses/${SAMPLE_UUID}/history`);
+    expect(unauth.status).toBe(401);
+
+    const badId = await request(app)
+      .get('/api/v1/dashboard/expenses/not-a-uuid/history')
+      .set('Cookie', authCookie);
+    expect(badId.status).toBe(400);
+
+    const badLimit = await request(app)
+      .get(`/api/v1/dashboard/expenses/${SAMPLE_UUID}/history?limit=101`)
+      .set('Cookie', authCookie);
+    expect(badLimit.status).toBe(400);
+
+    const executedSql: string[] = [];
+    let expenseFound = false;
+    const mockClient = {
+      query: vi.fn(async (sql: any) => {
+        const text = typeof sql === 'string' ? sql : sql?.text || '';
+        executedSql.push(text);
+        if (text.startsWith('BEGIN') || text === 'COMMIT' || text === 'ROLLBACK') {
+          return { rows: [], rowCount: 0 };
+        }
+        if (text.includes('FROM business_expenses')) {
+          if (!expenseFound) return { rows: [], rowCount: 0 };
+          return {
+            rows: [
+              {
+                id: SAMPLE_UUID,
+                expense_date: '2026-11-11',
+                category: 'rent',
+                title: 'Shop Rent',
+                vendor_name: 'Owner Landlord',
+                amount: '16000.00',
+                payment_method: 'bank_transfer',
+                reference_number: 'NEFT-99',
+                notes: 'Updated rent',
+                status: 'voided',
+                voided_at: '2026-11-11T10:30:00.000Z',
+                void_reason: 'Duplicate entry',
+                created_at: '2026-11-11T08:00:00.000Z',
+                updated_at: '2026-11-11T10:30:00.000Z',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        if (text.includes('FROM business_expense_events')) {
+          return {
+            rows: [
+              {
+                id: 2,
+                expense_id: SAMPLE_UUID,
+                action: 'voided',
+                reason: 'Duplicate entry',
+                previous_data: { amount: '16000.00', status: 'active' },
+                new_data: { amount: '16000.00', status: 'voided' },
+                created_at: '2026-11-11T10:30:00.000Z',
+              },
+              {
+                id: 1,
+                expense_id: SAMPLE_UUID,
+                action: 'created',
+                reason: null,
+                previous_data: null,
+                new_data: { amount: '15000.00', status: 'active' },
+                created_at: '2026-11-11T08:00:00.000Z',
+              },
+            ],
+            rowCount: 2,
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    vi.spyOn(appPool, 'connect').mockResolvedValue(mockClient as any);
+
+    const notFoundRes = await request(app)
+      .get(`/api/v1/dashboard/expenses/${SAMPLE_UUID}/history`)
+      .set('Cookie', authCookie);
+    expect(notFoundRes.status).toBe(404);
+
+    expenseFound = true;
+    const okRes = await request(app)
+      .get(`/api/v1/dashboard/expenses/${SAMPLE_UUID}/history?limit=25`)
+      .set('Cookie', authCookie);
+
+    expect(okRes.status).toBe(200);
+    expect(okRes.headers['cache-control']).toContain('no-store');
+    expect(executedSql).toContain('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    expect(executedSql).toContain('COMMIT');
+    expect(okRes.body.data.expense.status).toBe('voided');
+    expect(okRes.body.data.events).toHaveLength(2);
+    expect(okRes.body.data.events.map((e: any) => e.action)).toEqual(['voided', 'created']);
+  });
+
+  it('11. Executes parameter-clean SQL on All Time overview (08P01 guard) and sets 6-month trend metadata', async () => {
+    const { client, executedSql } = buildOverviewMockClient();
+    vi.spyOn(appPool, 'connect').mockResolvedValue(client as any);
+
+    const res = await request(app)
+      .get('/api/v1/dashboard/overview')
+      .set('Cookie', authCookie);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.dateRange).toEqual({ fromDate: null, toDate: null });
+    expect(res.body.data.salesTrend.granularity).toBe('month');
+    expect(res.body.data.salesTrend.isSixMonthWindow).toBe(true);
+    expect(res.body.data.salesTrend.effectiveFromDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(res.body.data.salesTrend.effectiveToDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+    // Ensure every parameterized query passes exact parameter count matching $N placeholders (prevents PG 08P01)
+    for (const stmt of executedSql) {
+      const matches = [...stmt.text.matchAll(/\$(\d+)/g)].map((m) => Number(m[1]));
+      const highestPlaceholder = matches.length > 0 ? Math.max(...matches) : 0;
+      const paramCount = stmt.params?.length ?? 0;
+      expect(paramCount).toBe(highestPlaceholder);
+    }
+  });
+
+  it('12. Clips monthly trend query strictly to mid-month custom endpoints when span > 45 days', async () => {
+    const { client, executedSql } = buildOverviewMockClient();
+    vi.spyOn(appPool, 'connect').mockResolvedValue(client as any);
+
+    const res = await request(app)
+      .get('/api/v1/dashboard/overview?fromDate=2026-09-15&toDate=2026-11-10')
+      .set('Cookie', authCookie);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.salesTrend.granularity).toBe('month');
+    expect(res.body.data.salesTrend.isSixMonthWindow).toBe(false);
+    expect(res.body.data.salesTrend.effectiveFromDate).toBe('2026-09-15');
+    expect(res.body.data.salesTrend.effectiveToDate).toBe('2026-11-10');
+
+    const trendQuery = executedSql.find((q) => q.text.includes('FROM series s'));
+    expect(trendQuery).toBeDefined();
+    expect(trendQuery!.text).toContain('bill_date >= $3::date AND bill_date <= $4::date');
+    expect(trendQuery!.params?.slice(0, 4)).toEqual([
+      '2026-09-01',
+      '2026-11-01',
+      '2026-09-15',
+      '2026-11-10',
+    ]);
+  });
+
+  it('13. Top-products SQL allocates bill discounts proportionally across all lines including manual items and excludes GST', async () => {
+    const { client, executedSql } = buildOverviewMockClient();
+    vi.spyOn(appPool, 'connect').mockResolvedValue(client as any);
+
+    const res = await request(app)
+      .get('/api/v1/dashboard/overview?fromDate=2026-11-01&toDate=2026-11-11')
+      .set('Cookie', authCookie);
+
+    expect(res.status).toBe(200);
+    const topSql = executedSql.find((q) => q.text.includes('nb_scored') && q.text.includes('gi_scored'));
+    expect(topSql).toBeDefined();
+    expect(topSql!.text).toContain('doc_subtotal');
+    expect(topSql!.text).toContain('adj_rn');
+    expect(topSql!.text).toContain('nbi.amount');
+    expect(topSql!.text).toContain('gi.taxable_amount');
+    expect(topSql!.text).not.toContain('gi.line_total');
+    expect(topSql!.text).not.toContain('gi.total_amount');
+  });
+
+  it('14. Maps supplier reversal, bill cancellation, expense void activity types and uses sargable timestamp bounds', async () => {
+    const { client, executedSql } = buildOverviewMockClient({
+      activity: [
+        {
+          type: 'supplier_payment_reversal',
+          reference: 'REV-PAY-001',
+          party: 'Apex Timber',
+          amount: '500.00',
+          event_date: '2026-11-11',
+          status: 'reversed',
+          occurred_at: '2026-11-11T12:00:00.000Z',
+          target_tab: 'suppliers',
+        },
+        {
+          type: 'supplier_allocation_reversal',
+          reference: 'REV-ALLOC-002',
+          party: 'Apex Timber',
+          amount: '250.00',
+          event_date: '2026-11-11',
+          status: 'reversed',
+          occurred_at: '2026-11-11T11:30:00.000Z',
+          target_tab: 'suppliers',
+        },
+        {
+          type: 'supplier_bill_cancellation',
+          reference: 'CANCEL-BILL-003',
+          party: 'Apex Timber',
+          amount: '1200.00',
+          event_date: '2026-11-11',
+          status: 'cancelled',
+          occurred_at: '2026-11-11T11:00:00.000Z',
+          target_tab: 'suppliers',
+        },
+        {
+          type: 'expense_void',
+          reference: 'Electricity Bill',
+          party: 'Shop Operating Expense',
+          amount: '900.00',
+          event_date: '2026-11-11',
+          status: 'voided',
+          occurred_at: '2026-11-11T10:00:00.000Z',
+          target_tab: 'home',
+        },
+      ],
+    });
+    vi.spyOn(appPool, 'connect').mockResolvedValue(client as any);
+
+    const res = await request(app)
+      .get('/api/v1/dashboard/overview?fromDate=2026-11-01&toDate=2026-11-11')
+      .set('Cookie', authCookie);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.recentActivity.map((a: any) => a.type)).toEqual([
+      'supplier_payment_reversal',
+      'supplier_allocation_reversal',
+      'supplier_bill_cancellation',
+      'expense_void',
+    ]);
+
+    const activitySql = executedSql.find((q) => q.text.includes('combined_activity'));
+    expect(activitySql).toBeDefined();
+    expect(activitySql!.text).toContain('AT TIME ZONE');
+    expect(activitySql!.text).toContain("'supplier_payment_reversal'");
+    expect(activitySql!.text).toContain("'supplier_allocation_reversal'");
+    expect(activitySql!.text).toContain("'supplier_bill_cancellation'");
+    expect(activitySql!.text).toContain("'expense_void'");
+
+    const khataPaySql = executedSql.find((q) => q.text.includes('AS payments_received'));
+    expect(khataPaySql!.text).toContain('received_at >=');
+    expect(khataPaySql!.text).not.toContain('(received_at AT TIME ZONE');
+  });
+
+  it('15. Tracks migration 025 in EXPECTED_MIGRATIONS and exposes bounded numeric-only DB pool stats', () => {
+    expect(EXPECTED_MIGRATIONS).toContain('025_performance_reporting_hardening.sql');
+    expect(env.DB_POOL_MAX).toBeGreaterThanOrEqual(2);
+    expect(env.DB_DIRECT_POOL_MAX).toBeGreaterThanOrEqual(1);
+    expect(env.DB_QUERY_TIMEOUT_MS).toBeGreaterThanOrEqual(5000);
+    expect(env.DB_SLOW_QUERY_MS).toBeGreaterThanOrEqual(25);
+
+    const stats = getDatabasePoolStats();
+    expect(typeof stats.totalCount).toBe('number');
+    expect(typeof stats.idleCount).toBe('number');
+    expect(typeof stats.waitingCount).toBe('number');
+    expect(stats.max).toBe(env.DB_POOL_MAX);
   });
 });

@@ -1,16 +1,45 @@
-import { useState, useEffect } from 'react';
+import { lazy, Suspense, useState, useEffect } from 'react';
+import { Loader2 } from 'lucide-react';
 import { AuthProvider } from './features/auth/AuthProvider.js';
 import { ProtectedRoute } from './components/ProtectedRoute.js';
 import { Navbar, NavTab } from './components/Navbar.js';
-import { KhataLedgerView } from './features/khata/KhataLedgerView.js';
-import { ProductsView } from './features/products/ProductsView.js';
-import { GstBillingView } from './features/bills/GstBillingView.js';
-import { NormalBillingView } from './features/bills/NormalBillingView.js';
-import { QuotationsView } from './features/quotations/QuotationsView.js';
-import { SuppliersModuleView } from './features/suppliers/SuppliersModuleView.js';
 import { HomeDashboard } from './features/dashboard/HomeDashboard.js';
 import { ThemeAccessibilityProvider } from './context/ThemeAccessibilityContext.js';
 import { AppearanceAccessibilityModal } from './components/AppearanceAccessibilityModal.js';
+
+const KhataLedgerView = lazy(() =>
+  import('./features/khata/KhataLedgerView.js').then((m) => ({ default: m.KhataLedgerView }))
+);
+const ProductsView = lazy(() =>
+  import('./features/products/ProductsView.js').then((m) => ({ default: m.ProductsView }))
+);
+const GstBillingView = lazy(() =>
+  import('./features/bills/GstBillingView.js').then((m) => ({ default: m.GstBillingView }))
+);
+const NormalBillingView = lazy(() =>
+  import('./features/bills/NormalBillingView.js').then((m) => ({ default: m.NormalBillingView }))
+);
+const QuotationsView = lazy(() =>
+  import('./features/quotations/QuotationsView.js').then((m) => ({ default: m.QuotationsView }))
+);
+const SuppliersModuleView = lazy(() =>
+  import('./features/suppliers/SuppliersModuleView.js').then((m) => ({
+    default: m.SuppliersModuleView,
+  }))
+);
+
+function ModuleLoadingFallback() {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="neu-card p-8 flex items-center justify-center gap-2.5 text-sm font-semibold text-[var(--khata-text-muted)]"
+    >
+      <Loader2 className="w-5 h-5 animate-spin text-[var(--khata-accent)]" aria-hidden="true" />
+      <span>Loading module...</span>
+    </div>
+  );
+}
 
 export function getInitialTab(): NavTab {
   if (typeof window !== 'undefined') {
@@ -84,12 +113,16 @@ export function KhataDashboard() {
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {currentTab === 'home' && <HomeDashboard onNavigate={handleTabChange} />}
-        {currentTab === 'khata' && <KhataLedgerView />}
-        {currentTab === 'products' && <ProductsView />}
-        {currentTab === 'gst-bill' && <GstBillingView />}
-        {currentTab === 'normal-bill' && <NormalBillingView />}
-        {currentTab === 'quotations' && <QuotationsView />}
-        {currentTab === 'suppliers' && <SuppliersModuleView />}
+        {currentTab !== 'home' && (
+          <Suspense fallback={<ModuleLoadingFallback />}>
+            {currentTab === 'khata' && <KhataLedgerView />}
+            {currentTab === 'products' && <ProductsView />}
+            {currentTab === 'gst-bill' && <GstBillingView />}
+            {currentTab === 'normal-bill' && <NormalBillingView />}
+            {currentTab === 'quotations' && <QuotationsView />}
+            {currentTab === 'suppliers' && <SuppliersModuleView />}
+          </Suspense>
+        )}
       </main>
 
       <footer

@@ -1,8 +1,10 @@
 import { PoolClient } from 'pg';
 import { Decimal } from 'decimal.js';
 import { appPool } from '../../config/database.js';
+import { env } from '../../config/env.js';
 import { AppError } from '../../utils/errors.js';
 import { getBusinessDateISO } from '../../utils/businessDate.js';
+import { buildBusinessTimestampRangeFilter } from '../../utils/sqlDateRange.js';
 import { resolveValidatedState, validateGstin, validateGstinForState } from '../../utils/indianTax.js';
 import { escapeLike, validateMoneyInput } from '../../utils/validation.js';
 import {
@@ -391,6 +393,97 @@ function rethrowConstraintError(err: unknown): never {
 }
 
 export class SuppliersService {
+  private async insertPurchaseBillItemsAndSyncPrices(
+    client: PoolClient,
+    billId: number,
+    rawItems: Array<{ productId?: number | null; description: string; updateProductBuyingPrice?: boolean }>,
+    calcItems: Array<{ quantity: string; purchaseRate: string; lineTotal: string }>
+  ): Promise<Array<Record<string, unknown>>> {
+    const snapshotItems: Array<Record<string, unknown>> = [];
+    const billIds: number[] = [];
+    const itemIndices: number[] = [];
+    const productIds: Array<number | null> = [];
+    const descriptions: string[] = [];
+    const quantities: string[] = [];
+    const purchaseRates: string[] = [];
+    const lineTotals: string[] = [];
+    const optInFlags: boolean[] = [];
+    const buyingPriceUpdates = new Map<number, string>();
+
+    for (let i = 0; i < rawItems.length; i += 1) {
+      const rawItem = rawItems[i];
+      const calcItem = calcItems[i];
+      const productId = rawItem.productId ?? null;
+      const optInUpdateBuyingPrice = Boolean(productId && rawItem.updateProductBuyingPrice === true);
+      const description = rawItem.description.trim();
+
+      billIds.push(billId);
+      itemIndices.push(i);
+      productIds.push(productId);
+      descriptions.push(description);
+      quantities.push(calcItem.quantity);
+      purchaseRates.push(calcItem.purchaseRate);
+      lineTotals.push(calcItem.lineTotal);
+      optInFlags.push(optInUpdateBuyingPrice);
+
+      if (optInUpdateBuyingPrice && productId) {
+        buyingPriceUpdates.set(productId, calcItem.purchaseRate);
+      }
+
+      snapshotItems.push({
+        itemIndex: i,
+        productId,
+        description,
+        quantity: calcItem.quantity,
+        purchaseRate: calcItem.purchaseRate,
+        lineTotal: calcItem.lineTotal,
+        updatedProductBuyingPrice: optInUpdateBuyingPrice,
+      });
+    }
+
+    if (billIds.length > 0) {
+      await client.query(
+        `INSERT INTO supplier_purchase_bill_items (
+          purchase_bill_id, item_index, product_id, description,
+          quantity, purchase_rate, line_total, updated_product_buying_price
+        )
+        SELECT * FROM UNNEST(
+          $1::bigint[],
+          $2::int[],
+          $3::bigint[],
+          $4::text[],
+          $5::numeric[],
+          $6::numeric[],
+          $7::numeric[],
+          $8::boolean[]
+        )`,
+        [
+          billIds,
+          itemIndices,
+          productIds,
+          descriptions,
+          quantities,
+          purchaseRates,
+          lineTotals,
+          optInFlags,
+        ]
+      );
+    }
+
+    if (buyingPriceUpdates.size > 0) {
+      const updateIds = Array.from(buyingPriceUpdates.keys());
+      const updateRates = updateIds.map((pid) => buyingPriceUpdates.get(pid)!);
+      await client.query(
+        `UPDATE products p
+         SET buying_price = u.rate, updated_at = NOW()
+         FROM UNNEST($1::bigint[], $2::numeric[]) AS u(id, rate)
+         WHERE p.id = u.id`,
+        [updateIds, updateRates]
+      );
+    }
+
+    return snapshotItems;
+  }
   private mapSupplierRow(row: Record<string, any>): SupplierRecord {
     const summary = computeSupplierAccountSummary({
       totalPurchases: row.total_purchases || '0',
@@ -584,17 +677,15 @@ export class SuppliersService {
       payConditions.push(`payment_date <= $${payParams.length}::date`);
     }
 
-    const revConditions: string[] = [];
-    const revParams: unknown[] = [];
-    if (fromDate) {
-      revParams.push(fromDate);
-      revConditions.push(`(reversed_at AT TIME ZONE 'Asia/Kolkata')::date >= $${revParams.length}::date`);
-    }
-    if (toDate) {
-      revParams.push(toDate);
-      revConditions.push(`(reversed_at AT TIME ZONE 'Asia/Kolkata')::date <= $${revParams.length}::date`);
-    }
-    const revWhere = revConditions.length > 0 ? revConditions.join(' AND ') : 'TRUE';
+    const supRevFilter = buildBusinessTimestampRangeFilter(
+      'reversed_at',
+      fromDate,
+      toDate,
+      env.BUSINESS_TIME_ZONE || 'Asia/Kolkata',
+      1
+    );
+    const revWhere = supRevFilter.clause;
+    const revParams = supRevFilter.params;
 
     const positionSql = `
       WITH bill_totals AS (
@@ -1625,47 +1716,12 @@ export class SuppliersService {
 
       const billId = Number(billInsertRes.rows[0].id);
 
-      const snapshotItems: Array<Record<string, unknown>> = [];
-      for (let i = 0; i < input.items.length; i += 1) {
-        const rawItem = input.items[i];
-        const calcItem = totals.items[i];
-        const productId = rawItem.productId ?? null;
-        const optInUpdateBuyingPrice = Boolean(productId && rawItem.updateProductBuyingPrice === true);
-
-        await client.query(
-          `INSERT INTO supplier_purchase_bill_items (
-            purchase_bill_id, item_index, product_id, description,
-            quantity, purchase_rate, line_total, updated_product_buying_price
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [
-            billId,
-            i,
-            productId,
-            rawItem.description.trim(),
-            calcItem.quantity,
-            calcItem.purchaseRate,
-            calcItem.lineTotal,
-            optInUpdateBuyingPrice,
-          ]
-        );
-
-        if (optInUpdateBuyingPrice && productId) {
-          await client.query(
-            `UPDATE products SET buying_price = $1, updated_at = NOW() WHERE id = $2`,
-            [calcItem.purchaseRate, productId]
-          );
-        }
-
-        snapshotItems.push({
-          itemIndex: i,
-          productId,
-          description: rawItem.description.trim(),
-          quantity: calcItem.quantity,
-          purchaseRate: calcItem.purchaseRate,
-          lineTotal: calcItem.lineTotal,
-          updatedProductBuyingPrice: optInUpdateBuyingPrice,
-        });
-      }
+      const snapshotItems = await this.insertPurchaseBillItemsAndSyncPrices(
+        client,
+        billId,
+        input.items,
+        totals.items
+      );
 
       await client.query(
         `INSERT INTO supplier_purchase_bill_history (
@@ -1835,47 +1891,12 @@ export class SuppliersService {
 
       await client.query('DELETE FROM supplier_purchase_bill_items WHERE purchase_bill_id = $1', [billId]);
 
-      const nextSnapshotItems: Array<Record<string, unknown>> = [];
-      for (let i = 0; i < input.items.length; i += 1) {
-        const rawItem = input.items[i];
-        const calcItem = totals.items[i];
-        const productId = rawItem.productId ?? null;
-        const optInUpdateBuyingPrice = Boolean(productId && rawItem.updateProductBuyingPrice === true);
-
-        await client.query(
-          `INSERT INTO supplier_purchase_bill_items (
-            purchase_bill_id, item_index, product_id, description,
-            quantity, purchase_rate, line_total, updated_product_buying_price
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [
-            billId,
-            i,
-            productId,
-            rawItem.description.trim(),
-            calcItem.quantity,
-            calcItem.purchaseRate,
-            calcItem.lineTotal,
-            optInUpdateBuyingPrice,
-          ]
-        );
-
-        if (optInUpdateBuyingPrice && productId) {
-          await client.query(
-            `UPDATE products SET buying_price = $1, updated_at = NOW() WHERE id = $2`,
-            [calcItem.purchaseRate, productId]
-          );
-        }
-
-        nextSnapshotItems.push({
-          itemIndex: i,
-          productId,
-          description: rawItem.description.trim(),
-          quantity: calcItem.quantity,
-          purchaseRate: calcItem.purchaseRate,
-          lineTotal: calcItem.lineTotal,
-          updatedProductBuyingPrice: optInUpdateBuyingPrice,
-        });
-      }
+      const nextSnapshotItems = await this.insertPurchaseBillItemsAndSyncPrices(
+        client,
+        billId,
+        input.items,
+        totals.items
+      );
 
       await client.query(
         `INSERT INTO supplier_purchase_bill_history (
@@ -3173,14 +3194,16 @@ export class SuppliersService {
       let priorReversals = '0.00';
       let priorCancellations = '0.00';
 
+      const timeZone = env.BUSINESS_TIME_ZONE || 'Asia/Kolkata';
+
       if (fromDate) {
         const priorRes = await client.query(
           `SELECT
             (SELECT COALESCE(SUM(grand_total), 0)::numeric FROM supplier_purchase_bills WHERE supplier_id = $1 AND status IN ('finalized', 'cancelled') AND invoice_date < $2::date) AS prior_purchases,
             (SELECT COALESCE(SUM(amount), 0)::numeric FROM supplier_payments WHERE supplier_id = $1 AND payment_date < $2::date) AS prior_payments,
-            (SELECT COALESCE(SUM(original_amount), 0)::numeric FROM supplier_payment_reversals WHERE supplier_id = $1 AND (reversed_at AT TIME ZONE 'Asia/Kolkata')::date < $2::date) AS prior_reversals,
-            (SELECT COALESCE(SUM(original_grand_total), 0)::numeric FROM supplier_purchase_bill_cancellations WHERE supplier_id = $1 AND (cancelled_at AT TIME ZONE 'Asia/Kolkata')::date < $2::date) AS prior_cancellations`,
-          [supplierId, fromDate]
+            (SELECT COALESCE(SUM(original_amount), 0)::numeric FROM supplier_payment_reversals WHERE supplier_id = $1 AND reversed_at < ($2::date::timestamp AT TIME ZONE $3)) AS prior_reversals,
+            (SELECT COALESCE(SUM(original_grand_total), 0)::numeric FROM supplier_purchase_bill_cancellations WHERE supplier_id = $1 AND cancelled_at < ($2::date::timestamp AT TIME ZONE $3)) AS prior_cancellations`,
+          [supplierId, fromDate, timeZone]
         );
         priorPurchases = toFixedMoney(priorRes.rows[0]?.prior_purchases || 0);
         priorPayments = toFixedMoney(priorRes.rows[0]?.prior_payments || 0);
@@ -3210,26 +3233,20 @@ export class SuppliersService {
         payConditions.push(`sp.payment_date <= $${payParams.length}::date`);
       }
 
+      const revParams: unknown[] = [supplierId, timeZone];
+      const revRange = buildBusinessTimestampRangeFilter('spr.reversed_at', fromDate, toDate, timeZone, 3, 2);
       const revConditions = [`spr.supplier_id = $1`];
-      const revParams: unknown[] = [supplierId];
-      if (fromDate) {
-        revParams.push(fromDate);
-        revConditions.push(`(spr.reversed_at AT TIME ZONE 'Asia/Kolkata')::date >= $${revParams.length}::date`);
-      }
-      if (toDate) {
-        revParams.push(toDate);
-        revConditions.push(`(spr.reversed_at AT TIME ZONE 'Asia/Kolkata')::date <= $${revParams.length}::date`);
+      if (revRange.params.length > 0) {
+        revParams.push(...revRange.params);
+        revConditions.push(revRange.clause);
       }
 
+      const cancelParams: unknown[] = [supplierId, timeZone];
+      const cancelRange = buildBusinessTimestampRangeFilter('spbc.cancelled_at', fromDate, toDate, timeZone, 3, 2);
       const cancelConditions = [`spbc.supplier_id = $1`];
-      const cancelParams: unknown[] = [supplierId];
-      if (fromDate) {
-        cancelParams.push(fromDate);
-        cancelConditions.push(`(spbc.cancelled_at AT TIME ZONE 'Asia/Kolkata')::date >= $${cancelParams.length}::date`);
-      }
-      if (toDate) {
-        cancelParams.push(toDate);
-        cancelConditions.push(`(spbc.cancelled_at AT TIME ZONE 'Asia/Kolkata')::date <= $${cancelParams.length}::date`);
+      if (cancelRange.params.length > 0) {
+        cancelParams.push(...cancelRange.params);
+        cancelConditions.push(cancelRange.clause);
       }
 
       // Execute sequentially on the single REPEATABLE READ transaction client
@@ -3300,7 +3317,7 @@ export class SuppliersService {
         `SELECT
           spr.id,
           spr.reversal_number,
-          TO_CHAR((spr.reversed_at AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS reversal_date,
+          TO_CHAR((spr.reversed_at AT TIME ZONE $2)::date, 'YYYY-MM-DD') AS reversal_date,
           spr.original_amount,
           spr.reason,
           sp.receipt_number AS original_receipt_number,
@@ -3317,7 +3334,7 @@ export class SuppliersService {
           spbc.id,
           spbc.purchase_bill_id,
           spbc.invoice_number,
-          TO_CHAR((spbc.cancelled_at AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS cancellation_date,
+          TO_CHAR((spbc.cancelled_at AT TIME ZONE $2)::date, 'YYYY-MM-DD') AS cancellation_date,
           spbc.original_grand_total,
           spbc.reason
         FROM supplier_purchase_bill_cancellations spbc

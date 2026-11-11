@@ -146,8 +146,16 @@ export const voidExpenseSchema = z.object({
     .max(500, 'Void reason must not exceed 500 characters.'),
 });
 
+export const expenseHistoryQuerySchema = z.object({
+  limit: z.preprocess(
+    (v) => (v === undefined || v === '' ? 50 : Number(v)),
+    z.number().int().min(1).max(100)
+  ),
+});
+
 export type DashboardOverviewQuery = z.infer<typeof dashboardOverviewQuerySchema>;
 export type ListExpensesQuery = z.infer<typeof listExpensesQuerySchema>;
 export type CreateExpenseInput = z.infer<typeof createExpenseSchema>;
 export type UpdateExpenseInput = z.infer<typeof updateExpenseSchema>;
 export type VoidExpenseInput = z.infer<typeof voidExpenseSchema>;
+export type ExpenseHistoryQuery = z.infer<typeof expenseHistoryQuerySchema>;

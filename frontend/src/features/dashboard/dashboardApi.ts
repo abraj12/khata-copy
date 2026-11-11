@@ -1,10 +1,16 @@
 import { apiClient } from '../../lib/apiClient.js';
-import { addBusinessCalendarDays, getBusinessDateISO } from '../../utils/businessDate.js';
+import {
+  addBusinessCalendarDays,
+  getBusinessDateISO,
+  getIndianFinancialYearRange,
+  getPreviousBusinessMonthRange,
+} from '../../utils/businessDate.js';
 import type {
   BusinessExpenseRecord,
   DashboardDatePreset,
   DashboardOverviewData,
   ExpenseCategory,
+  ExpenseHistoryResult,
   ExpensePaymentMethod,
   PaginatedExpensesResult,
   SaveExpensePayload,
@@ -49,9 +55,19 @@ export function resolveHomeDateRange(
   if (preset === 'today') {
     return { fromDate: todayISO, toDate: todayISO };
   }
+  if (preset === 'yesterday') {
+    const yesterdayISO = addBusinessCalendarDays(-1, todayISO);
+    return { fromDate: yesterdayISO, toDate: yesterdayISO };
+  }
   if (preset === 'last_7_days') {
     return {
       fromDate: addBusinessCalendarDays(-6, todayISO),
+      toDate: todayISO,
+    };
+  }
+  if (preset === 'last_30_days') {
+    return {
+      fromDate: addBusinessCalendarDays(-29, todayISO),
       toDate: todayISO,
     };
   }
@@ -61,11 +77,14 @@ export function resolveHomeDateRange(
       toDate: todayISO,
     };
   }
-  if (preset === 'last_30_days') {
-    return {
-      fromDate: addBusinessCalendarDays(-29, todayISO),
-      toDate: todayISO,
-    };
+  if (preset === 'last_month') {
+    return getPreviousBusinessMonthRange(todayISO);
+  }
+  if (preset === 'this_fy') {
+    return getIndianFinancialYearRange(0, todayISO);
+  }
+  if (preset === 'previous_fy') {
+    return getIndianFinancialYearRange(-1, todayISO);
   }
   if (preset === 'custom') {
     return {
@@ -159,6 +178,21 @@ export async function voidDashboardExpense(
     {
       method: 'POST',
       body: JSON.stringify({ reason }),
+    }
+  );
+  return data.data;
+}
+
+export async function fetchDashboardExpenseHistory(
+  id: string,
+  limit = 50,
+  signal?: AbortSignal
+): Promise<ExpenseHistoryResult> {
+  const { data } = await apiClient<{ success: boolean; data: ExpenseHistoryResult }>(
+    `/api/v1/dashboard/expenses/${encodeURIComponent(id)}/history?limit=${Math.max(1, Math.min(100, Math.trunc(limit)))}`,
+    {
+      method: 'GET',
+      signal,
     }
   );
   return data.data;

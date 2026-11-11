@@ -9,7 +9,7 @@ export interface DashboardProfitabilityProps {
   profitability: DashboardProfitabilitySummary;
 }
 
-export const DashboardProfitability: React.FC<DashboardProfitabilityProps> = ({
+export const DashboardProfitability: React.FC<DashboardProfitabilityProps> = React.memo(({
   sales,
   profitability,
 }) => {
@@ -131,7 +131,9 @@ export const DashboardProfitability: React.FC<DashboardProfitabilityProps> = ({
 
         <div className="p-3.5 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)]">
           <p className="text-[11px] font-bold uppercase text-[var(--khata-text-muted)]">
-            Est. Net Operating Result
+            {profitability.hasIncompleteCostData
+              ? 'Partial Est. Net Operating Result'
+              : 'Est. Net Operating Result'}
           </p>
           <p
             className={`text-lg font-black font-mono mt-1 ${
@@ -141,7 +143,13 @@ export const DashboardProfitability: React.FC<DashboardProfitabilityProps> = ({
             {formatCurrency(profitability.estimatedNetOperatingResult)}
           </p>
           <p className="text-[11px] text-[var(--khata-text-muted)] mt-1">
-            {isNetNegative ? 'Net operating loss' : 'Est. gross profit - expenses'}
+            {isNetNegative
+              ? profitability.hasIncompleteCostData
+                ? 'Partial operating loss (covered sales − exp)'
+                : 'Net operating loss'
+              : profitability.hasIncompleteCostData
+              ? 'Covered gross profit − expenses'
+              : 'Est. gross profit − expenses'}
           </p>
         </div>
       </div>
@@ -149,9 +157,9 @@ export const DashboardProfitability: React.FC<DashboardProfitabilityProps> = ({
       <p className="text-[11px] text-[var(--khata-text-muted)] flex items-center gap-1.5">
         <Info className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
         <span>
-          Accounting boundary: Supplier purchase payments settle supplier payables and are tracked separately from operating expenses so P&L is not double-counted.
+          Non-statutory operational estimate. Excludes GST collected, customer Khata credit/collections, supplier purchase payments (balance-sheet settlements), and non-converted quotations.
         </span>
       </p>
     </DashboardSection>
   );
-};
+});

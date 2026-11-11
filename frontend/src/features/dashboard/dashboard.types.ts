@@ -17,9 +17,13 @@ export type ExpensePaymentMethod =
 
 export type DashboardDatePreset =
   | 'today'
+  | 'yesterday'
   | 'last_7_days'
-  | 'this_month'
   | 'last_30_days'
+  | 'this_month'
+  | 'last_month'
+  | 'this_fy'
+  | 'previous_fy'
   | 'all_time'
   | 'custom';
 
@@ -138,7 +142,11 @@ export type DashboardActivityType =
   | 'khata_payment'
   | 'supplier_bill'
   | 'supplier_payment'
+  | 'supplier_payment_reversal'
+  | 'supplier_allocation_reversal'
+  | 'supplier_bill_cancellation'
   | 'expense'
+  | 'expense_void'
   | 'quotation';
 
 export interface DashboardActivityItem {
@@ -168,6 +176,9 @@ export interface DashboardOverviewData {
   quotations: DashboardQuotationsSummary;
   salesTrend: {
     granularity: 'day' | 'month';
+    effectiveFromDate?: string;
+    effectiveToDate?: string;
+    isSixMonthWindow?: boolean;
     points: DashboardTrendPoint[];
   };
   recentActivity: DashboardActivityItem[];
@@ -210,4 +221,19 @@ export interface SaveExpensePayload {
   referenceNumber?: string | null;
   notes?: string | null;
   reason?: string | null;
+}
+
+export interface BusinessExpenseEventRecord {
+  id: number;
+  expenseId: string;
+  action: 'created' | 'updated' | 'voided';
+  reason: string | null;
+  previousData: Record<string, unknown> | null;
+  newData: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ExpenseHistoryResult {
+  expense: BusinessExpenseRecord;
+  events: BusinessExpenseEventRecord[];
 }

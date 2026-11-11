@@ -4,6 +4,7 @@ import {
   Ban,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Edit3,
   Loader2,
   Plus,
@@ -13,15 +14,18 @@ import {
 } from 'lucide-react';
 import { formatCurrency } from '../../../lib/formatters.js';
 import type {
+  BusinessExpenseEventRecord,
   BusinessExpenseRecord,
   DashboardExpenseCategoryTotal,
   ExpenseCategory,
+  ExpenseHistoryResult,
   PaginatedExpensesResult,
   SaveExpensePayload,
 } from '../dashboard.types.js';
 import {
   EXPENSE_CATEGORY_OPTIONS,
   createDashboardExpense,
+  fetchDashboardExpenseHistory,
   fetchDashboardExpenses,
   formatExpenseCategoryLabel,
   formatExpenseMethodLabel,
@@ -65,7 +69,14 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
   const [voidError, setVoidError] = useState<string | null>(null);
   const [voiding, setVoiding] = useState(false);
 
+  const [historyTarget, setHistoryTarget] = useState<BusinessExpenseRecord | null>(null);
+  const [historyData, setHistoryData] = useState<ExpenseHistoryResult | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
   const reqIdRef = useRef(0);
+  const historyReqIdRef = useRef(0);
+  const historyAbortRef = useRef<AbortController | null>(null);
 
   // Debounce search text
   useEffect(() => {
@@ -124,6 +135,47 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
     void loadExpenses(controller.signal);
     return () => controller.abort();
   }, [debouncedSearch, categoryFilter, statusFilter, fromDate, toDate, offset]);
+
+  useEffect(() => {
+    return () => {
+      historyAbortRef.current?.abort();
+    };
+  }, []);
+
+  const openExpenseHistory = async (exp: BusinessExpenseRecord) => {
+    historyAbortRef.current?.abort();
+    const controller = new AbortController();
+    historyAbortRef.current = controller;
+    const reqId = ++historyReqIdRef.current;
+
+    setHistoryTarget(exp);
+    setHistoryData(null);
+    setHistoryError(null);
+    setHistoryLoading(true);
+
+    try {
+      const result = await fetchDashboardExpenseHistory(exp.id, 50, controller.signal);
+      if (reqId !== historyReqIdRef.current) return;
+      setHistoryData(result);
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'REQUEST_ABORTED') return;
+      if (reqId !== historyReqIdRef.current) return;
+      setHistoryError((err as Error).message || 'Unable to load expense history.');
+    } finally {
+      if (reqId === historyReqIdRef.current) {
+        setHistoryLoading(false);
+      }
+    }
+  };
+
+  const closeExpenseHistory = () => {
+    historyAbortRef.current?.abort();
+    historyReqIdRef.current += 1;
+    setHistoryTarget(null);
+    setHistoryData(null);
+    setHistoryError(null);
+    setHistoryLoading(false);
+  };
 
   const handleSaveExpense = async (payload: SaveExpensePayload, editingId?: string) => {
     if (editingId) {
@@ -325,6 +377,16 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
                         {formatCurrency(exp.amount)}
                       </span>
 
+                      <button
+                        type="button"
+                        onClick={() => void openExpenseHistory(exp)}
+                        aria-label={`View history for ${exp.title}`}
+                        className="neu-btn-secondary text-[11px] px-2.5 py-1.5 min-h-[32px] font-bold inline-flex items-center gap-1"
+                      >
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>History</span>
+                      </button>
+
                       {!isVoided && (
                         <>
                           <button
@@ -478,6 +540,149 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
           </div>
         </div>
       )}
+
+      {historyTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="expense-history-title"
+          onClick={closeExpenseHistory}
+        >
+          <div
+            className="neu-card w-full max-w-lg max-h-[85vh] overflow-y-auto p-5 sm:p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3
+                  id="expense-history-title"
+                  className="text-base font-extrabold text-[var(--khata-text)] truncate"
+                >
+                  Expense Audit History — {historyTarget.title}
+                </h3>
+                <p className="text-[11px] text-[var(--khata-text-muted)] mt-0.5">
+                  Read-only append-only event trail for {formatCurrency(historyTarget.amount)}.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeExpenseHistory}
+                aria-label="Close history modal"
+                className="neu-btn-secondary p-1.5 min-h-[32px]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {historyLoading ? (
+              <div className="py-8 flex items-center justify-center gap-2 text-xs text-[var(--khata-text-muted)]">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Loading audit history...</span>
+              </div>
+            ) : historyError ? (
+              <div
+                role="alert"
+                className="p-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-xs text-rose-600 dark:text-rose-400 font-semibold flex items-center justify-between gap-2"
+              >
+                <span>{historyError}</span>
+                <button
+                  type="button"
+                  onClick={() => void openExpenseHistory(historyTarget)}
+                  className="underline font-bold"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : !historyData || historyData.events.length === 0 ? (
+              <p className="text-xs text-[var(--khata-text-muted)] py-4 text-center">
+                No audit events recorded for this expense yet.
+              </p>
+            ) : (
+              <ol className="space-y-2.5">
+                {historyData.events.map((event) => {
+                  const changes = summarizeExpenseEventChanges(event);
+                  const badgeTone =
+                    event.action === 'voided'
+                      ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30'
+                      : event.action === 'updated'
+                      ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30'
+                      : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30';
+
+                  return (
+                    <li
+                      key={event.id}
+                      className="p-3 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] space-y-1.5 text-xs"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${badgeTone}`}
+                        >
+                          {event.action}
+                        </span>
+                        <span className="font-mono text-[11px] text-[var(--khata-text-muted)]">
+                          {new Date(event.createdAt).toLocaleString('en-IN')}
+                        </span>
+                      </div>
+
+                      {event.reason && (
+                        <p className="text-[11px] font-semibold text-[var(--khata-text)]">
+                          Reason: {event.reason}
+                        </p>
+                      )}
+
+                      {changes.length > 0 && (
+                        <ul className="space-y-0.5 text-[11px] text-[var(--khata-text-muted)]">
+                          {changes.map((line) => (
+                            <li key={line} className="font-mono break-words">
+                              {line}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+          </div>
+        </div>
+      )}
     </>
   );
 };
+
+const EXPENSE_AUDIT_FIELDS: Array<{ key: string; label: string }> = [
+  { key: 'expense_date', label: 'Date' },
+  { key: 'title', label: 'Title' },
+  { key: 'category', label: 'Category' },
+  { key: 'amount', label: 'Amount' },
+  { key: 'payment_method', label: 'Method' },
+  { key: 'vendor_name', label: 'Vendor' },
+  { key: 'reference_number', label: 'Ref' },
+  { key: 'notes', label: 'Notes' },
+];
+
+function summarizeExpenseEventChanges(event: BusinessExpenseEventRecord): string[] {
+  const prev = event.previousData || {};
+  const next = event.newData || {};
+
+  if (event.action === 'updated' && event.previousData) {
+    const diffs: string[] = [];
+    for (const field of EXPENSE_AUDIT_FIELDS) {
+      const oldVal = prev[field.key] ?? null;
+      const newVal = next[field.key] ?? null;
+      if (String(oldVal ?? '') !== String(newVal ?? '')) {
+        diffs.push(`${field.label}: ${oldVal ?? '—'} → ${newVal ?? '—'}`);
+      }
+    }
+    return diffs;
+  }
+
+  const lines: string[] = [];
+  if (next.title !== undefined) lines.push(`Title: ${String(next.title)}`);
+  if (next.amount !== undefined) lines.push(`Amount: ${formatCurrency(String(next.amount))}`);
+  if (next.expense_date !== undefined) lines.push(`Date: ${String(next.expense_date)}`);
+  if (next.category !== undefined) lines.push(`Category: ${String(next.category)}`);
+  return lines;
+}

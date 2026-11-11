@@ -177,6 +177,12 @@ class MockDatabaseState {
       return { rows: [row], rowCount: 1 };
     }
 
+    if (s.includes('FROM PRODUCTS') && s.includes('WHERE ID = ANY($1::BIGINT[])')) {
+      const idSet = new Set((Array.isArray(params[0]) ? params[0] : []).map((v) => String(v)));
+      const matched = this.products.filter((p) => idSet.has(p.id));
+      return { rows: matched, rowCount: matched.length };
+    }
+
     if (s.includes('FROM PRODUCTS') && s.includes('WHERE ID = $1')) {
       const prod = this.products.find((p) => p.id === params[0]?.toString());
       return { rows: prod ? [prod] : [], rowCount: prod ? 1 : 0 };
@@ -276,6 +282,31 @@ class MockDatabaseState {
     }
 
     if (s.startsWith('INSERT INTO UDHAR_ITEMS')) {
+      if (s.includes('UNNEST') && Array.isArray(params[0])) {
+        const txIds = params[0] as unknown[];
+        const prodIds = params[1] as unknown[];
+        const names = params[2] as string[];
+        const buyingPrices = params[3] as string[];
+        const qtys = params[4] as string[];
+        const sellPrices = params[5] as string[];
+        const lineTotals = params[6] as string[];
+        const inserted: UdharItemRow[] = [];
+        for (let i = 0; i < txIds.length; i += 1) {
+          const row: UdharItemRow = {
+            id: (this.nextId++).toString(),
+            transaction_id: String(txIds[i]),
+            product_id: String(prodIds[i]),
+            product_name_snapshot: names[i],
+            buying_price_snapshot: buyingPrices[i],
+            quantity: String(qtys[i]),
+            selling_price: String(sellPrices[i]),
+            line_total: String(lineTotals[i]),
+          };
+          this.udharItems.push(row);
+          inserted.push(row);
+        }
+        return { rows: inserted, rowCount: inserted.length };
+      }
       const id = (this.nextId++).toString();
       const row: UdharItemRow = {
         id,

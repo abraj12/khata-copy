@@ -36,6 +36,12 @@ const strictPositiveIntSchema = z
     return num;
   });
 
+const strictBoundedIntSchema = (min: number, max: number) =>
+  strictPositiveIntSchema.refine(
+    (num) => num >= min && num <= max,
+    `Expected integer between ${min} and ${max}`
+  );
+
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: strictPositiveIntSchema.default(5000),
@@ -52,7 +58,7 @@ export const envSchema = z.object({
     })
     .default('$argon2id$v=19$m=65536,t=3,p=4$dummyhashforinitializationonly00000000000000000'),
 
-  // Neon PostgreSQL
+  // Neon PostgreSQL & Bounded Connection Pool Tuning
   DATABASE_URL_POOLED: z
     .string()
     .url()
@@ -61,6 +67,12 @@ export const envSchema = z.object({
     .string()
     .url()
     .default('postgresql://neondb_owner:dummy@ep-shy-mud-94919289.us-east-2.aws.neon.tech/neondb?sslmode=require'),
+  DB_POOL_MAX: strictBoundedIntSchema(1, 50).default(10),
+  DB_DIRECT_POOL_MAX: strictBoundedIntSchema(1, 10).default(2),
+  DB_POOL_IDLE_TIMEOUT_MS: strictBoundedIntSchema(1000, 300000).default(30000),
+  DB_POOL_CONNECTION_TIMEOUT_MS: strictBoundedIntSchema(1000, 60000).default(5000),
+  DB_QUERY_TIMEOUT_MS: strictBoundedIntSchema(1000, 120000).default(30000),
+  DB_SLOW_QUERY_MS: strictBoundedIntSchema(10, 60000).default(250),
 
   // Neon Realtime (Optional while Realtime is explicitly deferred)
   NEON_REALTIME_URL: z.string().url().optional(),

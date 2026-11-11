@@ -6,11 +6,17 @@ import { DashboardSection } from './DashboardSection.js';
 
 export interface DashboardSalesTrendProps {
   granularity: 'day' | 'month';
+  effectiveFromDate?: string;
+  effectiveToDate?: string;
+  isSixMonthWindow?: boolean;
   points: DashboardTrendPoint[];
 }
 
-export const DashboardSalesTrend: React.FC<DashboardSalesTrendProps> = ({
+export const DashboardSalesTrend: React.FC<DashboardSalesTrendProps> = React.memo(({
   granularity,
+  effectiveFromDate,
+  effectiveToDate,
+  isSixMonthWindow = false,
   points,
 }) => {
   const maxVal = points.reduce((acc, point) => {
@@ -23,10 +29,16 @@ export const DashboardSalesTrend: React.FC<DashboardSalesTrendProps> = ({
     (p) => safeDecimal(p.totalSalesRevenue).greaterThan(0) || safeDecimal(p.expenses).greaterThan(0)
   );
 
+  const subtitle = isSixMonthWindow && effectiveFromDate && effectiveToDate
+    ? `Showing trailing 6-month monthly window (${effectiveFromDate} to ${effectiveToDate}) — KPI totals above still reflect All Time; excludes GST collected.`
+    : effectiveFromDate && effectiveToDate
+    ? `${granularity === 'day' ? 'Daily' : 'Monthly'} sales revenue vs operating expenses (${effectiveFromDate} to ${effectiveToDate}; excludes GST collected).`
+    : `${granularity === 'day' ? 'Daily' : 'Monthly'} sales revenue (Normal + GST Taxable, excluding GST collected) vs operating expenses.`;
+
   return (
     <DashboardSection
       title="Sales & Expense Trend"
-      subtitle={`${granularity === 'day' ? 'Daily' : 'Monthly'} sales revenue (Normal + GST Taxable, excluding GST collected) vs operating expenses.`}
+      subtitle={subtitle}
       icon={<BarChart3 className="w-4 h-4" />}
       rightSlot={
         <div className="flex flex-wrap items-center gap-3 text-[11px] font-bold text-[var(--khata-text-muted)]">
@@ -86,4 +98,4 @@ export const DashboardSalesTrend: React.FC<DashboardSalesTrendProps> = ({
       )}
     </DashboardSection>
   );
-};
+});
