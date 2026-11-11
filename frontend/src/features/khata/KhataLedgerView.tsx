@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
-import { apiClient } from '../../lib/apiClient.js';
+import { apiClient, ApiClientError } from '../../lib/apiClient.js';
 import {
   Users,
   CreditCard,
@@ -18,6 +18,8 @@ import {
   Trash2,
   Loader2,
   Tag,
+  UserPlus,
+  Pencil,
 } from 'lucide-react';
 import Decimal from 'decimal.js';
 import { formatCurrency, formatQuantity, safeDecimal, parseStrictDecimal } from '../../lib/formatters.js';
@@ -109,6 +111,7 @@ interface CustomerHistoryData {
     id: number;
     name: string;
     phone: string | null;
+    address?: string | null;
     state?: string | null;
     state_code?: string | null;
     totalUdhar: number | string;
@@ -164,6 +167,18 @@ export const KhataLedgerView: React.FC = () => {
   // Offline Bills Modal state
   const [isOfflineBillsOpen, setIsOfflineBillsOpen] = useState(false);
 
+  // Add Customer Modal state
+  const [isCreateCustomerOpen, setIsCreateCustomerOpen] = useState(false);
+  const [createCustName, setCreateCustName] = useState('');
+  const [createCustPhone, setCreateCustPhone] = useState('');
+  const [createCustAddress, setCreateCustAddress] = useState('');
+  const [createCustStateCode, setCreateCustStateCode] = useState('');
+  const [createCustError, setCreateCustError] = useState<string | null>(null);
+  const [duplicateCandidates, setDuplicateCandidates] = useState<
+    Array<{ id: number; name: string; phone?: string | null }>
+  >([]);
+  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
+
   // New Udhar Modal state
   const [isNewUdharOpen, setIsNewUdharOpen] = useState(false);
   const [udharIdempotencyKey, setUdharIdempotencyKey] = useState<string>('');
@@ -187,6 +202,13 @@ export const KhataLedgerView: React.FC = () => {
   const [customerHistory, setCustomerHistory] = useState<CustomerHistoryData | null>(null);
   const [detailStateCode, setDetailStateCode] = useState<string>('');
   const [isSavingCustomerState, setIsSavingCustomerState] = useState(false);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editProfileName, setEditProfileName] = useState('');
+  const [editProfilePhone, setEditProfilePhone] = useState('');
+  const [editProfileAddress, setEditProfileAddress] = useState('');
+  const [editProfileStateCode, setEditProfileStateCode] = useState('');
+  const [editProfileError, setEditProfileError] = useState<string | null>(null);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [expandedTxIds, setExpandedTxIds] = useState<Set<number>>(new Set());
 
@@ -373,6 +395,10 @@ export const KhataLedgerView: React.FC = () => {
       if (payload.customer && payload.customer.id === customerId) {
         setCustomerHistory(payload);
         setDetailStateCode(payload.customer.state_code || '');
+        setEditProfileName(payload.customer.name || '');
+        setEditProfilePhone(payload.customer.phone || '');
+        setEditProfileAddress(payload.customer.address || '');
+        setEditProfileStateCode(payload.customer.state_code || '');
       }
     } catch (err: unknown) {
       if ((err as Error)?.name === 'AbortError') return;
@@ -387,6 +413,8 @@ export const KhataLedgerView: React.FC = () => {
   const handleOpenCustomerDetail = (customerId: number) => {
     setActiveCustomerDetailId(customerId);
     setCustomerHistory(null); // Clear immediately so stale customer data is never rendered
+    setIsEditingProfile(false);
+    setEditProfileError(null);
     setPaymentAmount('');
     setPaymentNote('');
     setPaymentError(null);
@@ -417,6 +445,96 @@ export const KhataLedgerView: React.FC = () => {
       showNotification('error', (err as Error).message || 'Failed to update customer state.');
     } finally {
       setIsSavingCustomerState(false);
+    }
+  };
+
+  const handleOpenCreateCustomer = () => {
+    setCreateCustName('');
+    setCreateCustPhone('');
+    setCreateCustAddress('');
+    setCreateCustStateCode('');
+    setCreateCustError(null);
+    setDuplicateCandidates([]);
+    setIsCreateCustomerOpen(true);
+  };
+
+  const handleSubmitCreateCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedName = createCustName.trim();
+    if (!trimmedName) {
+      setCreateCustError('Customer name is required.');
+      return;
+    }
+
+    const matchedState = createCustStateCode ? getStateByCode(createCustStateCode) : undefined;
+    setIsCreatingCustomer(true);
+    setCreateCustError(null);
+    setDuplicateCandidates([]);
+    try {
+      await apiClient<{ success: boolean; customer: CustomerListItem }>('/api/v1/khata/customers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: trimmedName,
+          phone: createCustPhone.trim() || null,
+          address: createCustAddress.trim() || null,
+          state: matchedState ? matchedState.name : null,
+          stateCode: matchedState ? matchedState.code : null,
+        }),
+      });
+      setIsCreateCustomerOpen(false);
+      await Promise.all([fetchSummary(), fetchCustomers(debouncedSearch, 0, false)]);
+      showNotification('success', 'Customer created.');
+    } catch (err: unknown) {
+      if (err instanceof ApiClientError && err.payload && typeof err.payload === 'object') {
+        const payload = err.payload as {
+          message?: string;
+          candidates?: Array<{ id: number; name: string; phone?: string | null }>;
+        };
+        if (Array.isArray(payload.candidates)) {
+          setDuplicateCandidates(payload.candidates);
+        }
+        setCreateCustError(payload.message || err.message || 'Failed to create customer.');
+      } else {
+        setCreateCustError((err as Error).message || 'Failed to create customer.');
+      }
+    } finally {
+      setIsCreatingCustomer(false);
+    }
+  };
+
+  const handleSaveCustomerProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeCustomerDetailId || !customerHistory) return;
+    const trimmedName = editProfileName.trim();
+    if (!trimmedName) {
+      setEditProfileError('Customer name is required.');
+      return;
+    }
+
+    const matched = editProfileStateCode ? getStateByCode(editProfileStateCode) : undefined;
+    setIsSavingProfile(true);
+    setEditProfileError(null);
+    try {
+      await apiClient('/api/v1/khata/customers/' + activeCustomerDetailId, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: trimmedName,
+          phone: editProfilePhone.trim() || null,
+          address: editProfileAddress.trim() || null,
+          state: matched ? matched.name : null,
+          stateCode: matched ? matched.code : null,
+        }),
+      });
+      setIsEditingProfile(false);
+      await Promise.all([
+        fetchCustomerHistory(activeCustomerDetailId),
+        fetchCustomers(debouncedSearch, 0, false),
+      ]);
+      showNotification('success', 'Customer profile updated.');
+    } catch (err: unknown) {
+      setEditProfileError((err as Error).message || 'Failed to update customer profile.');
+    } finally {
+      setIsSavingProfile(false);
     }
   };
 
@@ -841,6 +959,15 @@ export const KhataLedgerView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          <button
+            type="button"
+            onClick={handleOpenCreateCustomer}
+            className="neu-btn-secondary text-xs sm:text-sm font-bold px-4 py-2.5 inline-flex items-center gap-2"
+            title="Create a new customer profile"
+          >
+            <UserPlus className="w-4 h-4 text-[var(--khata-accent)]" />
+            <span>Add Customer</span>
+          </button>
           <button
             type="button"
             onClick={() => setIsOfflineBillsOpen(true)}
@@ -1497,27 +1624,149 @@ export const KhataLedgerView: React.FC = () => {
                         {customerHistory.customer.phone}
                       </p>
                     )}
-                    <div className="flex flex-wrap items-center gap-2 mt-2">
-                      <label className="text-[11px] font-bold uppercase text-[var(--khata-text-muted)]">
-                        State:
-                      </label>
-                      <select
-                        value={detailStateCode}
-                        disabled={isSavingCustomerState}
-                        onChange={(e) => handleSaveCustomerState(e.target.value)}
-                        className="neu-input text-xs py-1 px-2.5 max-w-full sm:max-w-[240px]"
+                    {customerHistory.customer.address && (
+                      <p className="text-xs text-[var(--khata-text-muted)] mt-0.5 break-words">
+                        {customerHistory.customer.address}
+                      </p>
+                    )}
+                    {!isEditingProfile ? (
+                      <div className="flex flex-wrap items-center gap-2 mt-2">
+                        <label className="text-[11px] font-bold uppercase text-[var(--khata-text-muted)]">
+                          State:
+                        </label>
+                        <select
+                          value={detailStateCode}
+                          disabled={isSavingCustomerState}
+                          onChange={(e) => handleSaveCustomerState(e.target.value)}
+                          className="neu-input text-xs py-1 px-2.5 max-w-full sm:max-w-[240px]"
+                        >
+                          <option value="">Not specified (Clear state)</option>
+                          {INDIAN_STATES.map((s) => (
+                            <option key={s.code} value={s.code}>
+                              {s.code} – {s.name}
+                            </option>
+                          ))}
+                        </select>
+                        {isSavingCustomerState && (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--khata-accent)]" />
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditProfileName(customerHistory.customer.name || '');
+                            setEditProfilePhone(customerHistory.customer.phone || '');
+                            setEditProfileAddress(customerHistory.customer.address || '');
+                            setEditProfileStateCode(customerHistory.customer.state_code || '');
+                            setEditProfileError(null);
+                            setIsEditingProfile(true);
+                          }}
+                          className="neu-btn-secondary text-xs py-1 px-2.5 inline-flex items-center gap-1"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Edit Profile</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <form
+                        onSubmit={handleSaveCustomerProfile}
+                        className="mt-3 p-3 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-2.5"
                       >
-                        <option value="">Not specified (Clear state)</option>
-                        {INDIAN_STATES.map((s) => (
-                          <option key={s.code} value={s.code}>
-                            {s.code} – {s.name}
-                          </option>
-                        ))}
-                      </select>
-                      {isSavingCustomerState && (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--khata-accent)]" />
-                      )}
-                    </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label
+                              htmlFor="edit-customer-name"
+                              className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1"
+                            >
+                              Customer Name *
+                            </label>
+                            <input
+                              id="edit-customer-name"
+                              type="text"
+                              value={editProfileName}
+                              onChange={(e) => setEditProfileName(e.target.value)}
+                              className="neu-input w-full text-xs"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor="edit-customer-phone"
+                              className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1"
+                            >
+                              Phone Number
+                            </label>
+                            <input
+                              id="edit-customer-phone"
+                              type="text"
+                              value={editProfilePhone}
+                              onChange={(e) => setEditProfilePhone(e.target.value)}
+                              className="neu-input w-full text-xs"
+                              placeholder="Optional phone"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label
+                              htmlFor="edit-customer-address"
+                              className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1"
+                            >
+                              Address
+                            </label>
+                            <input
+                              id="edit-customer-address"
+                              type="text"
+                              value={editProfileAddress}
+                              onChange={(e) => setEditProfileAddress(e.target.value)}
+                              className="neu-input w-full text-xs"
+                              placeholder="Optional address"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor="edit-customer-state"
+                              className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1"
+                            >
+                              State
+                            </label>
+                            <select
+                              id="edit-customer-state"
+                              value={editProfileStateCode}
+                              onChange={(e) => setEditProfileStateCode(e.target.value)}
+                              className="neu-input w-full text-xs"
+                            >
+                              <option value="">Not specified</option>
+                              {INDIAN_STATES.map((s) => (
+                                <option key={s.code} value={s.code}>
+                                  {s.code} – {s.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                        {editProfileError && (
+                          <p className="text-xs text-rose-500 font-medium">{editProfileError}</p>
+                        )}
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingProfile(false)}
+                            disabled={isSavingProfile}
+                            className="neu-btn-secondary text-xs px-3 py-1.5"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={isSavingProfile}
+                            className="neu-btn-primary text-xs px-3 py-1.5 inline-flex items-center gap-1.5"
+                          >
+                            {isSavingProfile && <Loader2 className="w-3 h-3 animate-spin" />}
+                            <span>Save Profile</span>
+                          </button>
+                        </div>
+                      </form>
+                    )}
                   </div>
 
                   <button
@@ -1833,6 +2082,163 @@ export const KhataLedgerView: React.FC = () => {
               </>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Add Customer Modal */}
+      {isCreateCustomerOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="create-customer-title"
+        >
+          <form
+            onSubmit={handleSubmitCreateCustomer}
+            className="neu-card max-w-md w-full p-4 sm:p-6 my-4 max-h-[90vh] overflow-y-auto space-y-4"
+            style={{ background: 'var(--khata-surface)' }}
+          >
+            <div className="flex items-start justify-between gap-2 pb-3 border-b border-[var(--khata-border)]">
+              <div className="min-w-0">
+                <h3 id="create-customer-title" className="text-base sm:text-lg font-bold text-[var(--khata-text)]">
+                  Add New Customer
+                </h3>
+                <p className="text-xs text-[var(--khata-text-muted)] mt-0.5">
+                  Save a customer profile for Udhar ledger, bills, and quotations.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCreateCustomerOpen(false)}
+                className="p-2 rounded-xl text-[var(--khata-text-muted)] hover:text-[var(--khata-text)]"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {createCustError && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-500 space-y-2">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{createCustError}</span>
+                </div>
+                {duplicateCandidates.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {duplicateCandidates.map((cand) => (
+                      <button
+                        key={cand.id}
+                        type="button"
+                        onClick={() => {
+                          setIsCreateCustomerOpen(false);
+                          handleOpenCustomerDetail(cand.id);
+                        }}
+                        className="px-2 py-1 rounded bg-[var(--khata-surface)] border border-[var(--khata-border)] text-[var(--khata-text)] font-semibold hover:border-[var(--khata-accent)]"
+                      >
+                        Open {cand.name}
+                        {cand.phone ? ' (' + cand.phone + ')' : ''}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div>
+                <label
+                  htmlFor="new-khata-customer-name"
+                  className="block text-xs font-bold text-[var(--khata-text-muted)] mb-1"
+                >
+                  Customer Name *
+                </label>
+                <input
+                  id="new-khata-customer-name"
+                  type="text"
+                  value={createCustName}
+                  onChange={(e) => setCreateCustName(e.target.value)}
+                  placeholder="e.g. Bharat Hardware Store"
+                  className="neu-input w-full text-sm"
+                  required
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="new-khata-customer-phone"
+                  className="block text-xs font-bold text-[var(--khata-text-muted)] mb-1"
+                >
+                  Phone Number
+                </label>
+                <input
+                  id="new-khata-customer-phone"
+                  type="text"
+                  value={createCustPhone}
+                  onChange={(e) => setCreateCustPhone(e.target.value)}
+                  placeholder="Optional 10-digit mobile number"
+                  className="neu-input w-full text-sm"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="new-khata-customer-address"
+                  className="block text-xs font-bold text-[var(--khata-text-muted)] mb-1"
+                >
+                  Address
+                </label>
+                <textarea
+                  id="new-khata-customer-address"
+                  rows={2}
+                  value={createCustAddress}
+                  onChange={(e) => setCreateCustAddress(e.target.value)}
+                  placeholder="Optional street, city, or GST billing address"
+                  className="neu-input w-full text-sm resize-none"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="new-khata-customer-state"
+                  className="block text-xs font-bold text-[var(--khata-text-muted)] mb-1"
+                >
+                  State &amp; State Code
+                </label>
+                <select
+                  id="new-khata-customer-state"
+                  value={createCustStateCode}
+                  onChange={(e) => setCreateCustStateCode(e.target.value)}
+                  className="neu-input w-full text-sm"
+                >
+                  <option value="">Not specified</option>
+                  {INDIAN_STATES.map((s) => (
+                    <option key={s.code} value={s.code}>
+                      {s.code} – {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-[var(--khata-border)]">
+              <button
+                type="button"
+                onClick={() => setIsCreateCustomerOpen(false)}
+                disabled={isCreatingCustomer}
+                className="neu-btn-secondary text-xs px-4 py-2 font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isCreatingCustomer}
+                className="neu-btn-primary text-xs px-4 py-2 font-bold inline-flex items-center gap-1.5"
+              >
+                {isCreatingCustomer && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Save Customer</span>
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

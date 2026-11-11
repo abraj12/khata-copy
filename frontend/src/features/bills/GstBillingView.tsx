@@ -17,6 +17,7 @@ import {
   User,
   Package,
   Image as ImageIcon,
+  Info,
   X,
 } from 'lucide-react';
 import {
@@ -26,6 +27,7 @@ import {
   getNextInvoiceNumber,
   createGstInvoice,
   listGstInvoices,
+  getGstInvoiceById,
   downloadInvoicePdf,
   fetchInvoicePdfBlob,
   fetchDraftPdfBlob,
@@ -33,6 +35,9 @@ import {
   CreateGstInvoicePayload,
   GstInvoiceRecord,
 } from './gstInvoicesApi.js';
+import { CommercialDiscountSelector } from './CommercialDiscountSelector.js';
+import { BillRecordDetailModal } from './BillRecordDetailModal.js';
+import { useOptionalThemeAccessibility } from '../../context/ThemeAccessibilityContext.js';
 import { PdfImageExportModal } from '../../components/PdfImageExportModal.js';
 import { PdfDocumentPreviewModal } from '../../components/PdfDocumentPreviewModal.js';
 import { fetchQuotationSettings } from '../quotations/quotationApi.js';
@@ -50,6 +55,9 @@ import {
   validateSellingRateInput,
   decimalOrZero,
   validatePercentageDraftInput,
+  CommercialDiscountType,
+  calculateCommercialDiscount,
+  validateCommercialDiscountInput,
 } from '../../utils/lineItemDraft.js';
 import { BillingBarcodeControls } from '../barcode/BillingBarcodeControls.js';
 import { MAX_BILL_LINE_ITEMS } from '../../utils/billingLimits.js';
@@ -139,9 +147,15 @@ export const GstBillingView: React.FC = () => {
     []
   );
 
-  // GST rate setting
+  // GST rate & commercial discount settings
+  const themeContext = useOptionalThemeAccessibility();
   const [gstRate, setGstRate] = useState<number>(18);
+  const [discountType, setDiscountType] = useState<CommercialDiscountType>(null);
+  const [discountValue, setDiscountValue] = useState('0');
   const [notes, setNotes] = useState('');
+  const [detailRecord, setDetailRecord] = useState<GstInvoiceRecord | null>(null);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   // UI feedback & modals
   const [isLoadingNextNum, setIsLoadingNextNum] = useState(false);
@@ -327,7 +341,7 @@ export const GstBillingView: React.FC = () => {
   }, [stateCode, customerStateCode]);
 
   const calculations = useMemo(() => {
-    let taxableDec = new Decimal(0);
+    let subtotalDec = new Decimal(0);
 
     const computedItems = items.map((item) => {
       const q = decimalOrZero(item.quantity);
@@ -336,12 +350,15 @@ export const GstBillingView: React.FC = () => {
         q.isPositive() && r.isFinite() && !r.isNegative()
           ? q.times(r).toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
           : new Decimal(0);
-      taxableDec = taxableDec.plus(lineAmt);
+      subtotalDec = subtotalDec.plus(lineAmt);
       return {
         ...item,
         amount: lineAmt.toFixed(2),
       };
     });
+
+    const discount = calculateCommercialDiscount(subtotalDec, discountType, discountValue);
+    const taxableDec = discount.netSubtotalDec;
 
     const parsedGstRateDec = decimalOrZero(gstRate);
     const gstRateDec = parsedGstRateDec.isNegative()
@@ -373,6 +390,9 @@ export const GstBillingView: React.FC = () => {
     const words = numberWords(grandTotalDec.toFixed(2));
 
     return {
+      subtotalAmount: discount.subtotalDec.toFixed(2),
+      discountValue: discount.discountValueDec.toFixed(2),
+      discountAmount: discount.discountAmountDec.toFixed(2),
       taxableAmount: taxableDec.toFixed(2),
       cgstRate: cgstRateVal > 0 ? cgstRateVal : '',
       cgstAmount: cgstAmountDec.toFixed(2),
@@ -385,7 +405,7 @@ export const GstBillingView: React.FC = () => {
       amountInWords: words,
       computedItems,
     };
-  }, [items, gstRate, isIntraState]);
+  }, [items, gstRate, isIntraState, discountType, discountValue]);
 
   // Official draft preview uses canonical backend PDFKit renderer via openDraftPdfPreview
 
@@ -510,6 +530,8 @@ export const GstBillingView: React.FC = () => {
     }
     const gstErr = validatePercentageDraftInput(gstRate, 'GST Rate');
     if (gstErr) return gstErr;
+    const discountErr = validateCommercialDiscountInput(discountType, discountValue);
+    if (discountErr) return discountErr;
     for (let idx = 0; idx < items.length; idx++) {
       const itm = items[idx];
       if (!itm.description.trim()) {
@@ -552,6 +574,10 @@ export const GstBillingView: React.FC = () => {
         customerState: customerState.trim(),
         customerStateCode: customerStateCode.trim(),
         gstRate,
+        subtotalAmount: calculations.subtotalAmount,
+        discountType,
+        discountValue: discountType ? calculations.discountValue : '0',
+        discountAmount: calculations.discountAmount,
         items: items.map((i) => ({
           productId: i.productId ? Number(i.productId) : null,
           description: i.description.trim(),
@@ -565,6 +591,9 @@ export const GstBillingView: React.FC = () => {
       });
 
       setSuccessRecord(created);
+      if (themeContext?.workflowDefaults.autoOpenPreview) {
+        openRecordPdfPreview(created, false);
+      }
       // Auto-fetch next sequential invoice number from server for the next bill
       fetchNextNumber();
     } catch (err: any) {
@@ -598,7 +627,65 @@ export const GstBillingView: React.FC = () => {
         rateUnit: '',
       },
     ]);
+    setDiscountType(null);
+    setDiscountValue('0');
     setNotes('');
+    fetchNextNumber();
+  };
+
+  const handleInspectInvoice = async (id: number) => {
+    setDetailRecord(null);
+    setDetailError(null);
+    setIsLoadingDetail(true);
+    try {
+      const full = await getGstInvoiceById(id);
+      setDetailRecord(full);
+    } catch (err: any) {
+      setDetailError(err.message || 'Unable to load invoice details.');
+    } finally {
+      setIsLoadingDetail(false);
+    }
+  };
+
+  const handleDuplicateInvoice = (inv: GstInvoiceRecord) => {
+    idempotencyKeyRef.current = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+    setDetailRecord(null);
+    setSuccessRecord(null);
+    setIsManualInvoiceNumber(false);
+    setInvoiceDate(getBusinessDateISO());
+    setDateOfSupply(getBusinessDateISO());
+    setTransportationMode(inv.transportation_mode || '');
+    setVehicleNumber(inv.vehicle_number || '');
+    setPlaceOfSupply(inv.place_of_supply || inv.customer_state || '');
+    setCustomerId(inv.customer_id ?? null);
+    setCustomerName(inv.customer_name || '');
+    setCustomerAddress(inv.customer_address || '');
+    setCustomerGstin(inv.customer_gstin || '');
+    setCustomerState(inv.customer_state || '');
+    setCustomerStateCode(inv.customer_state_code || '');
+    const restoredRate = Number(inv.igst_rate || 0) > 0
+      ? Number(inv.igst_rate)
+      : Number(inv.cgst_rate || 0) + Number(inv.sgst_rate || 0);
+    if (Number.isFinite(restoredRate) && restoredRate >= 0) {
+      setGstRate(restoredRate);
+    }
+    setDiscountType(inv.discount_type ?? null);
+    setDiscountValue(inv.discount_value || '0');
+    setNotes(inv.notes || '');
+    const restoredItems: FormLineItem[] = (inv.items || []).map((itm, idx) => ({
+      id: 'dup-gst-' + Date.now() + '-' + idx,
+      productId: itm.product_id ?? null,
+      description: itm.description,
+      hsnCode: itm.hsn_code || '',
+      quantity: itm.quantity || '1',
+      unit: itm.unit || 'pcs',
+      rate: itm.rate || '',
+      rateUnit: itm.rate_unit || '',
+    }));
+    if (restoredItems.length > 0) {
+      commitItems(restoredItems);
+    }
+    setActiveSubTab('create');
     fetchNextNumber();
   };
 
@@ -618,6 +705,10 @@ export const GstBillingView: React.FC = () => {
     customerState: customerState.trim(),
     customerStateCode: customerStateCode.trim(),
     gstRate,
+    subtotalAmount: calculations.subtotalAmount,
+    discountType,
+    discountValue: discountType ? calculations.discountValue : '0',
+    discountAmount: calculations.discountAmount,
     items: items.map((i) => ({
       productId: i.productId ? Number(i.productId) : null,
       description: i.description.trim() || 'Item Description',
@@ -1383,8 +1474,36 @@ export const GstBillingView: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Commercial Discount Selector */}
+                <CommercialDiscountSelector
+                  discountType={discountType}
+                  discountValue={discountValue}
+                  discountAmountText={calculations.discountAmount}
+                  onChangeType={(nextType) => {
+                    setDiscountType(nextType);
+                    if (!nextType) setDiscountValue('0');
+                  }}
+                  onChangeValue={setDiscountValue}
+                />
+
                 {/* Financial Summary Card */}
                 <div className="p-3.5 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] space-y-2 text-xs">
+                  {Number(calculations.discountAmount) > 0 && (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[var(--khata-text-muted)]">
+                        <span>Items Subtotal:</span>
+                        <span className="font-mono font-bold text-[var(--khata-text)]">
+                          ₹{calculations.subtotalAmount}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-emerald-600 dark:text-emerald-400">
+                        <span>Commercial Discount:</span>
+                        <span className="font-mono font-bold">
+                          -₹{calculations.discountAmount}
+                        </span>
+                      </div>
+                    </>
+                  )}
                   <div className="flex flex-wrap items-center justify-between gap-2 text-[var(--khata-text-muted)]">
                     <span>T. Amt. Before Tax:</span>
                     <span className="font-mono font-bold text-[var(--khata-text)]">
@@ -1605,6 +1724,15 @@ export const GstBillingView: React.FC = () => {
                           <div className="flex flex-wrap items-center justify-end gap-1.5">
                             <button
                               type="button"
+                              onClick={() => void handleInspectInvoice(inv.id)}
+                              className="p-1.5 rounded-lg border border-[var(--khata-border)] hover:bg-[var(--khata-surface)] text-[var(--khata-text)] cursor-pointer"
+                              title="Inspect Invoice Details"
+                              aria-label={'Inspect details for invoice ' + inv.invoice_number}
+                            >
+                              <Info className="w-3.5 h-3.5 text-[var(--khata-text-muted)]" />
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => openRecordPdfPreview(inv, false)}
                               className="p-1.5 rounded-lg border border-[var(--khata-border)] hover:bg-[var(--khata-surface)] text-[var(--khata-text)] cursor-pointer"
                               title="Preview A4 Invoice"
@@ -1702,6 +1830,15 @@ export const GstBillingView: React.FC = () => {
                       </div>
 
                       <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => void handleInspectInvoice(inv.id)}
+                          className="neu-btn-secondary px-2.5 py-1.5 flex items-center gap-1 text-xs font-bold"
+                          title="Inspect Invoice Details"
+                        >
+                          <Info className="w-3.5 h-3.5 text-[var(--khata-text-muted)]" />
+                          <span>Details</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => openRecordPdfPreview(inv, false)}
@@ -1897,6 +2034,19 @@ export const GstBillingView: React.FC = () => {
           onClose={handleClosePreview}
         />
       )}
+
+      <BillRecordDetailModal
+        variant="gst"
+        record={detailRecord}
+        isLoading={isLoadingDetail}
+        error={detailError}
+        onClose={() => {
+          setDetailRecord(null);
+          setDetailError(null);
+        }}
+        onPreviewPdf={(inv) => openRecordPdfPreview(inv, false)}
+        onDuplicate={handleDuplicateInvoice}
+      />
 
       {imageExportTarget && (
         <PdfImageExportModal

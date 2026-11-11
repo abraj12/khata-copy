@@ -10,6 +10,8 @@ import { AuthProvider } from '../src/features/auth/AuthProvider.js';
 import { authApi } from '../src/features/auth/authApi.js';
 import { ThemeAccessibilityProvider } from '../src/context/ThemeAccessibilityContext.js';
 import * as appDataApi from '../src/lib/appDataApi.js';
+import { computeClampedPopoverGeometry } from '../src/utils/useViewportPopover.js';
+import App from '../src/App.js';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -235,5 +237,184 @@ describe('Mobile responsiveness: flex-wrap containers and bounded popovers', () 
 
     const optionBtn = picker?.querySelector('button');
     expect(hasFlexWrap(optionBtn)).toBe(true);
+  });
+
+  it('5. computeClampedPopoverGeometry keeps Notification & Bill popovers strictly within 280px–1280px viewports', () => {
+    // 280px extreme mobile width where Bell button is left/mid-bar (right edge at 180px)
+    const ultraNarrowBell = computeClampedPopoverGeometry(
+      { left: 140, right: 180, bottom: 52, width: 40, height: 38 },
+      384,
+      280,
+      640,
+      8
+    );
+    expect(ultraNarrowBell).not.toBeNull();
+    expect(ultraNarrowBell!.left).toBe(12);
+    expect(ultraNarrowBell!.width).toBe(256); // 280 - 24
+    expect(ultraNarrowBell!.left + ultraNarrowBell!.width).toBeLessThanOrEqual(280 - 12);
+
+    // 360px phone where Bill button is in column 1 (right edge at 110px)
+    const col1Bill = computeClampedPopoverGeometry(
+      { left: 12, right: 110, bottom: 102, width: 98, height: 40 },
+      208,
+      360,
+      740,
+      6
+    );
+    expect(col1Bill).not.toBeNull();
+    expect(col1Bill!.left).toBe(12);
+    expect(col1Bill!.width).toBe(208);
+    expect(col1Bill!.left + col1Bill!.width).toBeLessThanOrEqual(360 - 12);
+    expect(col1Bill!.top).toBe(108);
+
+    // 1280px desktop where Bell button sits at right: 1180
+    const desktopBell = computeClampedPopoverGeometry(
+      { left: 1140, right: 1180, bottom: 56, width: 40, height: 40 },
+      384,
+      1280,
+      800,
+      8
+    );
+    expect(desktopBell).not.toBeNull();
+    expect(desktopBell!.left).toBe(1180 - 384);
+    expect(desktopBell!.width).toBe(384);
+  });
+
+  it('6. Navbar Bill dropdown and NotificationCenterButton clamp to 360px mobile viewport and dismiss each other', async () => {
+    const origInnerWidth = window.innerWidth;
+    const origInnerHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 360 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 720 });
+
+    try {
+      vi.spyOn(authApi, 'me').mockResolvedValue({
+        authenticated: true,
+        owner: { phone: '9876543210', role: 'OWNER' },
+        csrfToken: 'csrf-popover-test',
+      } as any);
+      vi.spyOn(appDataApi, 'fetchNotificationsApi').mockResolvedValue({
+        success: true,
+        notifications: [],
+        unreadCount: 0,
+        source: 'default',
+      });
+
+      await act(async () => {
+        root.render(
+          <ThemeAccessibilityProvider>
+            <AuthProvider>
+              <Navbar currentTab="home" onTabChange={() => {}} onOpenAppearance={() => {}} />
+            </AuthProvider>
+          </ThemeAccessibilityProvider>
+        );
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const bellBtn = container.querySelector('button[title="Notifications"]') as HTMLButtonElement;
+      const billBtn = Array.from(container.querySelectorAll('nav button')).find((b) =>
+        b.textContent?.includes('Bill')
+      ) as HTMLButtonElement;
+      expect(bellBtn).toBeDefined();
+      expect(billBtn).toBeDefined();
+
+      // Simulate mobile placement where Bell sits left-of-Logout (~right: 240px)
+      bellBtn.getBoundingClientRect = () =>
+        ({ left: 200, right: 240, top: 12, bottom: 50, width: 40, height: 38, x: 200, y: 12, toJSON: () => ({}) }) as DOMRect;
+      // Simulate wrapped col-1 placement for Bill button (~right: 112px)
+      billBtn.getBoundingClientRect = () =>
+        ({ left: 12, right: 112, top: 64, bottom: 104, width: 100, height: 40, x: 12, y: 64, toJSON: () => ({}) }) as DOMRect;
+
+      // Open Notification popover first
+      await act(async () => {
+        bellBtn.click();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      const notifDialog = container.querySelector('[role="dialog"][aria-label="Business notifications"]') as HTMLElement | null;
+      expect(notifDialog).not.toBeNull();
+      expect(notifDialog!.style.position).toBe('fixed');
+      expect(notifDialog!.style.left).toBe('12px');
+      expect(notifDialog!.style.width).toBe('336px');
+
+      // Now open Bill dropdown — should automatically close Notifications popover and clamp inside viewport
+      await act(async () => {
+        billBtn.click();
+      });
+      expect(container.querySelector('[role="dialog"][aria-label="Business notifications"]')).toBeNull();
+      const billMenu = container.querySelector('[role="menu"]') as HTMLElement | null;
+      expect(billMenu).not.toBeNull();
+      expect(billMenu!.style.position).toBe('fixed');
+      expect(billMenu!.style.left).toBe('12px');
+      expect(billMenu!.style.width).toBe('208px');
+      expect(billMenu!.style.top).toBe('110px');
+
+      // Opening Notifications again closes Bill menu
+      await act(async () => {
+        bellBtn.click();
+      });
+      expect(container.querySelector('[role="menu"]')).toBeNull();
+      expect(container.querySelector('[role="dialog"][aria-label="Business notifications"]')).not.toBeNull();
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: origInnerWidth });
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: origInnerHeight });
+    }
+  });
+
+  it('7. App keeps Navbar wrapper sticky at top-0 while scrolling', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ success: true, expenses: [], pagination: { total: 0 } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+    );
+    try {
+      vi.spyOn(authApi, 'me').mockResolvedValue({
+        authenticated: true,
+        owner: { phone: '9876543210', role: 'OWNER' },
+        csrfToken: 'csrf-sticky-test',
+      } as any);
+      vi.spyOn(appDataApi, 'fetchNotificationsApi').mockResolvedValue({
+        success: true,
+        notifications: [],
+        unreadCount: 0,
+        source: 'default',
+      });
+      vi.spyOn(appDataApi, 'fetchPreferencesApi').mockResolvedValue({
+        success: true,
+        source: 'default',
+        preferences: {
+          preferenceKey: 'owner',
+          theme: {},
+          dashboardDefaults: { defaultDatePreset: 'all_time' },
+          printPreferences: { defaultPaperSize: 'A4', autoOpenPreview: true },
+          updatedAt: null,
+        },
+      });
+
+      await act(async () => {
+        root.render(<App />);
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const header = container.querySelector('header');
+      expect(header).not.toBeNull();
+      const stickyWrapper = header?.parentElement;
+      expect(stickyWrapper?.className).toContain('sticky');
+      expect(stickyWrapper?.className).toContain('top-0');
+      expect(stickyWrapper?.className).toContain('mhi-no-print');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

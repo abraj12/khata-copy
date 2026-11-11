@@ -1,4 +1,4 @@
-import { apiClient } from './apiClient.js';
+import { apiClient, ApiClientError } from './apiClient.js';
 
 export interface ServerThemePreferences {
   version?: number;
@@ -117,4 +117,54 @@ export async function sendTelemetryApi(payload: {
   } catch {
     // Best-effort non-blocking telemetry
   }
+}
+
+
+export interface SystemReadinessResponse {
+  status: 'ready' | 'unready';
+  services?: {
+    postgres?: string;
+    mongodb?: string;
+  };
+  message?: string;
+  timestamp?: string;
+}
+
+export interface RealtimeStatusResponse {
+  success: boolean;
+  data: {
+    enabled: boolean;
+    status: 'deferred' | 'active';
+    authoritativeSource: 'REST_API';
+    realtimeEndpoint: string | null;
+    notes: string;
+  };
+}
+
+export async function fetchHealthReadyApi(signal?: AbortSignal): Promise<SystemReadinessResponse> {
+  try {
+    const { data } = await apiClient<SystemReadinessResponse>('/api/v1/health/ready', {
+      method: 'GET',
+      signal,
+    });
+    return data;
+  } catch (err) {
+    if (err instanceof ApiClientError && err.status === 503 && err.payload && typeof err.payload === 'object') {
+      const p = err.payload as Partial<SystemReadinessResponse>;
+      return {
+        status: 'unready',
+        message: p.message || 'Database or read-model service is unready.',
+        timestamp: p.timestamp,
+      };
+    }
+    throw err;
+  }
+}
+
+export async function fetchRealtimeStatusApi(signal?: AbortSignal): Promise<RealtimeStatusResponse> {
+  const { data } = await apiClient<RealtimeStatusResponse>('/api/v1/realtime/status', {
+    method: 'GET',
+    signal,
+  });
+  return data;
 }

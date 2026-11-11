@@ -1281,13 +1281,13 @@ export const ProductsView: React.FC = () => {
       {/* Lightbox / Zoom View Modal */}
       {lightboxProduct && (
         <div
-          className="fixed inset-0 bg-black/85 backdrop-blur-md z-[60] flex flex-col items-center justify-center p-4 cursor-pointer"
+          className="fixed inset-0 bg-black/85 backdrop-blur-md z-[60] flex flex-col items-center justify-center p-4 cursor-pointer overflow-y-auto"
           role="dialog"
           aria-modal="true"
           onClick={() => setLightboxProduct(null)}
         >
           <div
-            className="w-full max-w-2xl flex items-center justify-between text-white pb-3 cursor-default"
+            className="w-full max-w-2xl flex flex-wrap items-center justify-between gap-2 text-white pb-3 cursor-default"
             onClick={(e) => e.stopPropagation()}
           >
             <div>

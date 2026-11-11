@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Image as ImageIcon,
   Check,
+  Info,
   X,
 } from 'lucide-react';
 import {
@@ -32,11 +33,15 @@ import {
   getNextNormalBillNumber,
   createNormalBill,
   listNormalBills,
+  getNormalBillById,
   downloadNormalBillPdf,
   fetchNormalBillPdfBlob,
   fetchNormalBillDraftPdfBlob,
   retryNormalBillPdf,
 } from './normalBillsApi.js';
+import { CommercialDiscountSelector } from './CommercialDiscountSelector.js';
+import { BillRecordDetailModal } from './BillRecordDetailModal.js';
+import { useOptionalThemeAccessibility } from '../../context/ThemeAccessibilityContext.js';
 import { PdfImageExportModal } from '../../components/PdfImageExportModal.js';
 import { PdfDocumentPreviewModal } from '../../components/PdfDocumentPreviewModal.js';
 import Decimal from 'decimal.js';
@@ -53,6 +58,9 @@ import {
   upsertScannedProductLine,
   validateQuantityInput,
   validateSellingRateInput,
+  CommercialDiscountType,
+  calculateCommercialDiscount,
+  validateCommercialDiscountInput,
 } from '../../utils/lineItemDraft.js';
 import { BillingBarcodeControls } from '../barcode/BillingBarcodeControls.js';
 import { MAX_BILL_LINE_ITEMS } from '../../utils/billingLimits.js';
@@ -144,7 +152,13 @@ export const NormalBillingView: React.FC = () => {
     []
   );
 
+  const themeContext = useOptionalThemeAccessibility();
+  const [discountType, setDiscountType] = useState<CommercialDiscountType>(null);
+  const [discountValue, setDiscountValue] = useState('0');
   const [notes, setNotes] = useState('');
+  const [detailRecord, setDetailRecord] = useState<NormalBillRecord | null>(null);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   // UI feedback & modals
   const [isLoadingNextNum, setIsLoadingNextNum] = useState(false);
@@ -477,17 +491,23 @@ export const NormalBillingView: React.FC = () => {
       };
     });
 
-    const totalAmount = totalAmountDec.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
-    const finalAmount = totalAmount;
+    const discount = calculateCommercialDiscount(totalAmountDec, discountType, discountValue);
+    const totalAmount = discount.subtotalDec.toNumber();
+    const discountAmount = discount.discountAmountDec.toNumber();
+    const finalAmount = discount.netSubtotalDec.toNumber();
 
     return {
       lineCalculations,
       totalQty: totalQtyDec.toNumber(),
       totalAmount,
+      subtotalFormatted: discount.subtotalDec.toFixed(2),
+      discountValueFormatted: discount.discountValueDec.toFixed(2),
+      discountAmount,
+      discountAmountFormatted: discount.discountAmountDec.toFixed(2),
       finalAmount,
-      amountInWords: numberWords(finalAmount),
+      amountInWords: numberWords(discount.netSubtotalDec.toFixed(2)),
     };
-  }, [items]);
+  }, [items, discountType, discountValue]);
 
   // Official draft preview uses canonical backend PDFKit renderer via openDraftPdfPreview
 
@@ -509,9 +529,11 @@ export const NormalBillingView: React.FC = () => {
       }
       const qtyErr = validateQuantityInput(itm.quantity, `Item #${i + 1} quantity`);
       if (qtyErr) return qtyErr;
-      const rateErr = validateSellingRateInput(itm.rate, `Item #${i + 1} rate`);
+      const rateErr = validateSellingRateInput(itm.rate, 'Item #' + (i + 1) + ' rate');
       if (rateErr) return rateErr;
     }
+    const discountErr = validateCommercialDiscountInput(discountType, discountValue);
+    if (discountErr) return discountErr;
     return null;
   };
 
@@ -530,6 +552,10 @@ export const NormalBillingView: React.FC = () => {
     customerPhone: customerPhone.trim() || null,
     customerState: customerState.trim() || null,
     customerStateCode: customerStateCode.trim() || null,
+    subtotalAmount: calculationSummary.subtotalFormatted,
+    discountType,
+    discountValue: discountType ? calculationSummary.discountValueFormatted : '0',
+    discountAmount: calculationSummary.discountAmountFormatted,
     items: items.map((item) => ({
       productId: item.productId ? Number(item.productId) : null,
       description: item.description.trim() || 'Item Description',
@@ -615,6 +641,10 @@ export const NormalBillingView: React.FC = () => {
         customerPhone: customerPhone.trim() || null,
         customerState: customerState.trim() || null,
         customerStateCode: customerStateCode.trim() || null,
+        subtotalAmount: calculationSummary.subtotalFormatted,
+        discountType,
+        discountValue: discountType ? calculationSummary.discountValueFormatted : '0',
+        discountAmount: calculationSummary.discountAmountFormatted,
         items: items.map((item) => ({
           productId: item.productId ? Number(item.productId) : null,
           description: item.description.trim(),
@@ -629,6 +659,9 @@ export const NormalBillingView: React.FC = () => {
 
       const saved = await createNormalBill(payload);
       setSuccessRecord(saved);
+      if (themeContext?.workflowDefaults.autoOpenPreview) {
+        openRecordPdfPreview(saved, false);
+      }
       // Auto-fetch next sequential bill number for next bill
       fetchNextNumber();
     } catch (err: any) {
@@ -666,10 +699,64 @@ export const NormalBillingView: React.FC = () => {
         rateUnit: '',
       },
     ]);
+    setDiscountType(null);
+    setDiscountValue('0');
     setNotes('');
     setErrorMessage(null);
     idempotencyKeyRef.current = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
     setSuccessRecord(null);
+    fetchNextNumber();
+  };
+
+  const handleInspectBill = async (id: number) => {
+    setDetailRecord(null);
+    setDetailError(null);
+    setIsLoadingDetail(true);
+    try {
+      const full = await getNormalBillById(id);
+      setDetailRecord(full);
+    } catch (err: any) {
+      setDetailError(err.message || 'Unable to load normal bill details.');
+    } finally {
+      setIsLoadingDetail(false);
+    }
+  };
+
+  const handleDuplicateBill = (bill: NormalBillRecord) => {
+    idempotencyKeyRef.current =
+      typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+    setDetailRecord(null);
+    setSuccessRecord(null);
+    setIsManualBillNumber(false);
+    const today = getTodayLocalDate();
+    setBillDate(today);
+    setDateOfSupply(today);
+    setTransportationMode(bill.transportation_mode || '');
+    setVehicleNumber(bill.vehicle_number || '');
+    setPlaceOfSupply(bill.place_of_supply || bill.customer_state || '');
+    setCustomerId(bill.customer_id ?? null);
+    setCustomerName(bill.customer_name || '');
+    setCustomerAddress(bill.customer_address || '');
+    setCustomerPhone(bill.customer_phone || '');
+    setCustomerState(bill.customer_state || '');
+    setCustomerStateCode(bill.customer_state_code || '');
+    setDiscountType(bill.discount_type ?? null);
+    setDiscountValue(bill.discount_value || '0');
+    setNotes(bill.notes || '');
+    const restoredItems: FormLineItem[] = (bill.items || []).map((itm, idx) => ({
+      id: 'dup-nb-' + Date.now() + '-' + idx,
+      productId: itm.product_id ?? null,
+      description: itm.description,
+      hsnCode: itm.hsn_code || '',
+      quantity: itm.quantity || '1',
+      unit: itm.unit || 'pcs',
+      rate: itm.rate || '',
+      rateUnit: itm.rate_unit || '',
+    }));
+    if (restoredItems.length > 0) {
+      commitItems(restoredItems);
+    }
+    setActiveTab('create');
     fetchNextNumber();
   };
 
@@ -1356,8 +1443,18 @@ export const NormalBillingView: React.FC = () => {
                 />
               </div>
 
-              {/* Right Column: Bill Totals Breakdown */}
+              {/* Right Column: Commercial Discount & Bill Totals Breakdown */}
               <div className="p-4 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-2.5">
+                <CommercialDiscountSelector
+                  discountType={discountType}
+                  discountValue={discountValue}
+                  discountAmountText={calculationSummary.discountAmountFormatted}
+                  onChangeType={(nextType) => {
+                    setDiscountType(nextType);
+                    if (!nextType) setDiscountValue('0');
+                  }}
+                  onChangeValue={setDiscountValue}
+                />
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--khata-text-muted)]">
                   <span>Total Line Items:</span>
                   <span className="font-bold text-[var(--khata-text)]">{items.length} items</span>
@@ -1374,6 +1471,14 @@ export const NormalBillingView: React.FC = () => {
                     ₹{calculationSummary.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </span>
                 </div>
+                {calculationSummary.discountAmount > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-600 dark:text-emerald-400">
+                    <span>Commercial Discount:</span>
+                    <span className="font-bold">
+                      -₹{calculationSummary.discountAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                )}
 
                 <div className="border-t border-[var(--khata-border)] pt-2.5 mt-2 flex flex-wrap items-center justify-between gap-2">
                   <div>
@@ -1586,6 +1691,15 @@ export const NormalBillingView: React.FC = () => {
                             <div className="flex flex-wrap items-center justify-end gap-1.5">
                               <button
                                 type="button"
+                                onClick={() => void handleInspectBill(bill.id)}
+                                className="neu-btn-secondary text-xs px-2.5 py-1 flex items-center gap-1 font-bold"
+                                title="Inspect bill details"
+                              >
+                                <Info className="w-3.5 h-3.5" />
+                                <span>Details</span>
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => openRecordPdfPreview(bill, false)}
                                 className="neu-btn-secondary text-xs px-2.5 py-1 flex items-center gap-1 font-bold"
                                 title="Preview bill"
@@ -1677,6 +1791,14 @@ export const NormalBillingView: React.FC = () => {
                           ₹{Number(bill.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </div>
                         <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => void handleInspectBill(bill.id)}
+                            className="neu-btn-secondary text-xs px-2.5 py-1.5 flex items-center gap-1 font-bold"
+                          >
+                            <Info className="w-3.5 h-3.5" />
+                            <span>Details</span>
+                          </button>
                           <button
                             type="button"
                             onClick={() => openRecordPdfPreview(bill, false)}
@@ -1867,6 +1989,19 @@ export const NormalBillingView: React.FC = () => {
           onClose={handleClosePreview}
         />
       )}
+
+      <BillRecordDetailModal
+        variant="normal"
+        record={detailRecord}
+        isLoading={isLoadingDetail}
+        error={detailError}
+        onClose={() => {
+          setDetailRecord(null);
+          setDetailError(null);
+        }}
+        onPreviewPdf={(bill) => openRecordPdfPreview(bill, false)}
+        onDuplicate={handleDuplicateBill}
+      />
 
       {imageExportTarget && (
         <PdfImageExportModal

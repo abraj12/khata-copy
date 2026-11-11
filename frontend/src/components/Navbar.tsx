@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
+import { broadcastCloseOtherPopovers, useViewportPopover } from '../utils/useViewportPopover.js';
 import { useAuth } from '../features/auth/AuthProvider.js';
 import { NotificationCenterButton } from './NotificationCenterButton.js';
 import {
@@ -35,18 +36,23 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isBillMenuOpen, setIsBillMenuOpen] = useState(false);
-  const billMenuRef = useRef<HTMLDivElement>(null);
+  const closeBillMenu = useCallback(() => setIsBillMenuOpen(false), []);
+  const {
+    containerRef: billMenuRef,
+    triggerRef: billTriggerRef,
+    popoverStyle: billPopoverStyle,
+  } = useViewportPopover({
+    isOpen: isBillMenuOpen,
+    onClose: closeBillMenu,
+    preferredWidthPx: 208,
+    offsetY: 6,
+  });
 
-  // Close bill dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (billMenuRef.current && !billMenuRef.current.contains(e.target as Node)) {
-        setIsBillMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  const handleSelectTab = (tab: NavTab) => {
+    setIsBillMenuOpen(false);
+    broadcastCloseOtherPopovers();
+    onTabChange(tab);
+  };
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -96,7 +102,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             >
               <Store className="w-5 h-5 text-[var(--khata-accent)]" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h1 className="text-sm sm:text-base md:text-lg font-black tracking-tight text-[var(--khata-text)] leading-none">
                 Khata
               </h1>
@@ -113,10 +119,8 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
           >
             {/* 0. Home Tab */}
             <button
-              onClick={() => {
-                setIsBillMenuOpen(false);
-                onTabChange('home');
-              }}
+              type="button"
+              onClick={() => handleSelectTab('home')}
               className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
                 currentTab === 'home'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
@@ -130,10 +134,8 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
 
             {/* 1. Khata Tab */}
             <button
-              onClick={() => {
-                setIsBillMenuOpen(false);
-                onTabChange('khata');
-              }}
+              type="button"
+              onClick={() => handleSelectTab('khata')}
               className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
                 currentTab === 'khata'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
@@ -147,10 +149,8 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
 
             {/* 2. Products Tab */}
             <button
-              onClick={() => {
-                setIsBillMenuOpen(false);
-                onTabChange('products');
-              }}
+              type="button"
+              onClick={() => handleSelectTab('products')}
               className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
                 currentTab === 'products'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
@@ -164,10 +164,8 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
 
             {/* 3. Quotations Tab */}
             <button
-              onClick={() => {
-                setIsBillMenuOpen(false);
-                onTabChange('quotations');
-              }}
+              type="button"
+              onClick={() => handleSelectTab('quotations')}
               className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
                 currentTab === 'quotations'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
@@ -182,7 +180,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             {/* Suppliers Navigation Tab */}
             <button
               type="button"
-              onClick={() => onTabChange('suppliers')}
+              onClick={() => handleSelectTab('suppliers')}
               className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
                 currentTab === 'suppliers'
                   ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
@@ -197,8 +195,9 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             {/* 4. Bill Dropdown Menu (Contains GST Bill & Normal Bill) */}
             <div className="relative flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial" ref={billMenuRef}>
               <button
+                ref={billTriggerRef}
                 type="button"
-                onClick={() => setIsBillMenuOpen(!isBillMenuOpen)}
+                onClick={() => setIsBillMenuOpen((prev) => !prev)}
                 className={`w-full inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] whitespace-nowrap ${
                   isBillActive
                     ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
@@ -216,8 +215,8 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               {/* Submenu Dropdown */}
               {isBillMenuOpen && (
                 <div
-                  className="absolute right-0 top-full mt-1.5 w-[min(13rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] p-1.5 rounded-xl border border-[var(--khata-border)] shadow-xl z-50 animate-in fade-in slide-in-from-top-1"
-                  style={{ background: 'var(--khata-surface)' }}
+                  className="absolute right-0 top-full mt-1.5 w-[min(13rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] max-h-[calc(100vh-5rem)] overflow-y-auto p-1.5 rounded-xl border border-[var(--khata-border)] shadow-xl z-50 animate-in fade-in slide-in-from-top-1"
+                  style={{ background: 'var(--khata-surface)', ...billPopoverStyle }}
                   role="menu"
                 >
                   {/* GST Bill Option */}
@@ -272,7 +271,12 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
 
             {/* Persistent Appearance & Accessibility Button */}
             <button
-              onClick={onOpenAppearance}
+              type="button"
+              onClick={() => {
+                setIsBillMenuOpen(false);
+                broadcastCloseOtherPopovers();
+                onOpenAppearance();
+              }}
               title="Appearance & Accessibility"
               aria-label="Open Appearance & Accessibility settings"
               className="neu-btn-secondary text-xs px-2.5 sm:px-3 py-1.5 sm:py-2 inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
@@ -291,6 +295,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
 
             {/* Logout Button */}
             <button
+              type="button"
               onClick={handleLogout}
               disabled={isLoggingOut}
               className="neu-btn-secondary text-rose-500 hover:text-rose-600 text-xs px-2.5 sm:px-3.5 py-1.5 sm:py-2 inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"

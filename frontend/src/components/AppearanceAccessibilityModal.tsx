@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   X,
   Palette,
@@ -8,8 +8,22 @@ import {
   Layers,
   RotateCcw,
   Check,
+  Calendar,
+  Printer,
+  Server,
+  RefreshCw,
 } from 'lucide-react';
-import { useThemeAccessibility } from '../context/ThemeAccessibilityContext.js';
+import {
+  useThemeAccessibility,
+  DefaultDashboardDatePreset,
+} from '../context/ThemeAccessibilityContext.js';
+import {
+  fetchHealthReadyApi,
+  fetchRealtimeStatusApi,
+  sendTelemetryApi,
+  SystemReadinessResponse,
+  RealtimeStatusResponse,
+} from '../lib/appDataApi.js';
 import {
   NEUMORPHIC_PRESETS,
   NeuPresetId,
@@ -29,14 +43,52 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
 }) => {
   const {
     preferences,
+    workflowDefaults,
     setPreset,
     setTextSize,
     setContrastOverride,
     setReduceMotion,
     setIncreaseSpacing,
     setStrongFocus,
+    setDefaultDatePreset,
+    setAutoOpenPreview,
     resetToDefaults,
   } = useThemeAccessibility();
+
+  const [checkingDiagnostics, setCheckingDiagnostics] = useState(false);
+  const [readiness, setReadiness] = useState<SystemReadinessResponse | null>(null);
+  const [realtime, setRealtime] = useState<RealtimeStatusResponse['data'] | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
+
+  const handleCheckSystemStatus = async () => {
+    setCheckingDiagnostics(true);
+    setDiagnosticsError(null);
+    const startedAt = Date.now();
+    try {
+      const [readyRes, realtimeRes] = await Promise.all([
+        fetchHealthReadyApi(),
+        fetchRealtimeStatusApi(),
+      ]);
+      setReadiness(readyRes);
+      setRealtime(realtimeRes?.data ?? null);
+      void sendTelemetryApi({
+        kind: 'read_latency',
+        name: 'system_diagnostics',
+        durationMs: Date.now() - startedAt,
+        ok: readyRes.status === 'ready',
+      });
+    } catch (err) {
+      setDiagnosticsError((err as Error).message || 'Could not reach backend diagnostics.');
+      void sendTelemetryApi({
+        kind: 'client_error',
+        name: 'system_diagnostics_failed',
+        durationMs: Date.now() - startedAt,
+        ok: false,
+      });
+    } finally {
+      setCheckingDiagnostics(false);
+    }
+  };
 
   const modalRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
@@ -318,6 +370,120 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
                 ))}
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Section C: Workflow & Print Defaults (Synced to MongoDB Preferences) */}
+        <div className="mt-6 pt-5 border-t border-[var(--khata-border)] space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label
+                htmlFor="appearance-default-date-preset"
+                className="text-sm font-semibold flex items-center gap-2 mb-2 text-[var(--khata-text)]"
+              >
+                <Calendar className="w-4 h-4 text-[var(--khata-accent)]" />
+                Default Dashboard Period
+              </label>
+              <select
+                id="appearance-default-date-preset"
+                value={workflowDefaults.defaultDatePreset}
+                onChange={(e) => setDefaultDatePreset(e.target.value as DefaultDashboardDatePreset)}
+                className="neu-input w-full text-xs font-semibold"
+              >
+                <option value="all_time">All Time</option>
+                <option value="today">Today</option>
+                <option value="yesterday">Yesterday</option>
+                <option value="last_7_days">Last 7 Days</option>
+                <option value="last_30_days">Last 30 Days</option>
+                <option value="this_month">This Month</option>
+                <option value="last_month">Last Month</option>
+                <option value="this_fy">This Financial Year</option>
+                <option value="previous_fy">Previous Financial Year</option>
+              </select>
+            </div>
+
+            <div>
+              <span className="text-sm font-semibold flex items-center gap-2 mb-2 text-[var(--khata-text)]">
+                <Printer className="w-4 h-4 text-[var(--khata-accent)]" />
+                After Saving Bill / Invoice ({workflowDefaults.defaultPaperSize})
+              </span>
+              <div className="grid grid-cols-1 min-[360px]:grid-cols-2 gap-2">
+                {[true, false].map((val) => (
+                  <button
+                    key={String(val)}
+                    type="button"
+                    onClick={() => setAutoOpenPreview(val)}
+                    className={
+                      'py-2 px-3 rounded-lg text-xs font-semibold border transition-all ' +
+                      (workflowDefaults.autoOpenPreview === val
+                        ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-sm'
+                        : 'border-[var(--khata-border)] text-[var(--khata-text)] bg-[var(--khata-surface-inset)] hover:border-[var(--khata-accent)]')
+                    }
+                  >
+                    {val ? 'Auto-Open Preview' : 'Summary Only'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Section D: On-demand System & Sync Status */}
+          <div className="p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-semibold text-[var(--khata-text)]">
+                <Server className="w-4 h-4 text-[var(--khata-accent)]" />
+                <span>System, Database &amp; Realtime Status</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleCheckSystemStatus()}
+                disabled={checkingDiagnostics}
+                className="neu-btn-secondary text-xs px-3 py-1.5 inline-flex items-center gap-1.5"
+              >
+                <RefreshCw className={'w-3.5 h-3.5 ' + (checkingDiagnostics ? 'animate-spin' : '')} />
+                <span>{checkingDiagnostics ? 'Checking...' : 'Check Status'}</span>
+              </button>
+            </div>
+
+            {diagnosticsError && (
+              <p className="text-xs text-rose-500">{diagnosticsError}</p>
+            )}
+
+            {(readiness || realtime) && (
+              <div className="space-y-1.5 text-xs text-[var(--khata-text-muted)]">
+                {readiness && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={
+                        'px-2 py-0.5 rounded font-semibold ' +
+                        (readiness.status === 'ready'
+                          ? 'bg-emerald-500/15 text-emerald-600'
+                          : 'bg-rose-500/15 text-rose-600')
+                      }
+                    >
+                      Backend: {readiness.status}
+                    </span>
+                    {readiness.services?.postgres && (
+                      <span className="px-2 py-0.5 rounded bg-[var(--khata-surface)] border border-[var(--khata-border)]">
+                        PostgreSQL: {readiness.services.postgres}
+                      </span>
+                    )}
+                    {readiness.services?.mongodb && (
+                      <span className="px-2 py-0.5 rounded bg-[var(--khata-surface)] border border-[var(--khata-border)]">
+                        MongoDB: {readiness.services.mongodb}
+                      </span>
+                    )}
+                    {readiness.message && <span>{readiness.message}</span>}
+                  </div>
+                )}
+                {realtime && (
+                  <p className="text-[11px] leading-snug">
+                    Sync mode: <strong className="text-[var(--khata-text)]">{realtime.status}</strong> via{' '}
+                    <span className="font-mono">{realtime.authoritativeSource}</span> — {realtime.notes}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         </div>
 

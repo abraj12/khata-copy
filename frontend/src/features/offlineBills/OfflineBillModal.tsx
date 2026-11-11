@@ -678,7 +678,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
       {/* Lightbox / Zoom View Modal */}
       {lightboxBill && (
         <div
-          className="fixed inset-0 bg-black/85 backdrop-blur-md z-[60] flex flex-col items-center justify-center p-4"
+          className="fixed inset-0 bg-black/85 backdrop-blur-md z-[60] flex flex-col items-center justify-center p-4 overflow-y-auto"
           role="dialog"
           aria-modal="true"
         >

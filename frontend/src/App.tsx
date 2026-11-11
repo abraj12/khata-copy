@@ -111,7 +111,7 @@ export function KhataDashboard() {
       className="min-h-screen flex flex-col"
       style={{ backgroundColor: 'var(--khata-bg)', color: 'var(--khata-text)' }}
     >
-      <div className="mhi-no-print">
+      <div className="mhi-no-print sticky top-0 z-30">
         <Navbar
           currentTab={currentTab}
           onTabChange={handleTabChange}
@@ -141,7 +141,7 @@ export function KhataDashboard() {
       </footer>
 
       {/* Persistent Appearance & Accessibility Modal */}
-      <div className="mhi-no-print">
+      <div className="mhi-no-print sticky top-0 z-30">
         <AppearanceAccessibilityModal
           isOpen={isAppearanceOpen}
           onClose={() => setIsAppearanceOpen(false)}

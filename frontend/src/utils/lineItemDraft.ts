@@ -241,3 +241,102 @@ export function upsertScannedProductLine<T extends DraftLineBase>(
     error: null,
   };
 }
+
+
+export type CommercialDiscountType = 'percentage' | 'fixed' | null;
+
+/**
+ * Mirrors backend resolveValidatedDiscount rounding and capping semantics using Decimal.ROUND_HALF_UP.
+ */
+export function calculateCommercialDiscount(
+  subtotalDec: Decimal,
+  discountType: CommercialDiscountType,
+  discountValueInput: unknown
+): {
+  subtotalDec: Decimal;
+  discountType: CommercialDiscountType;
+  discountValueDec: Decimal;
+  discountAmountDec: Decimal;
+  netSubtotalDec: Decimal;
+} {
+  const safeSubtotal =
+    subtotalDec.isFinite() && !subtotalDec.isNegative()
+      ? subtotalDec.toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+      : new Decimal(0);
+
+  if (!discountType) {
+    return {
+      subtotalDec: safeSubtotal,
+      discountType: null,
+      discountValueDec: new Decimal(0),
+      discountAmountDec: new Decimal(0),
+      netSubtotalDec: safeSubtotal,
+    };
+  }
+
+  let parsed = decimalOrZero(discountValueInput, 0);
+  if (!parsed.isFinite() || parsed.isNegative()) {
+    parsed = new Decimal(0);
+  }
+
+  let discountValueDec = parsed.toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  let discountAmountDec = new Decimal(0);
+
+  if (discountType === 'percentage') {
+    if (discountValueDec.greaterThan(100)) {
+      discountValueDec = new Decimal(100);
+    }
+    discountAmountDec = safeSubtotal
+      .times(discountValueDec)
+      .dividedBy(100)
+      .toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  } else {
+    discountAmountDec = Decimal.min(discountValueDec, safeSubtotal).toDecimalPlaces(
+      2,
+      Decimal.ROUND_HALF_UP
+    );
+  }
+
+  const netSubtotalDec = Decimal.max(
+    0,
+    safeSubtotal.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+  );
+
+  return {
+    subtotalDec: safeSubtotal,
+    discountType,
+    discountValueDec,
+    discountAmountDec,
+    netSubtotalDec,
+  };
+}
+
+/**
+ * Strictly validates active discount value (empty evaluates to 0, matching backend resolveValidatedDiscount).
+ */
+export function validateCommercialDiscountInput(
+  discountType: CommercialDiscountType,
+  discountValueInput: unknown
+): string | null {
+  if (!discountType) return null;
+  const rawStr = discountValueInput === null || discountValueInput === undefined ? '' : String(discountValueInput).trim();
+  const valueToValidate = rawStr === '' ? '0' : rawStr;
+
+  if (discountType === 'percentage') {
+    return validatePercentageDraftInput(valueToValidate, 'Discount percentage');
+  }
+
+  try {
+    const dec = parseStrictDecimal(valueToValidate, {
+      allowNegative: false,
+      maxDecimalPlaces: 2,
+      fieldName: 'Discount fixed amount',
+    });
+    if (dec.lessThan(0)) {
+      return 'Discount fixed amount cannot be negative.';
+    }
+    return null;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}

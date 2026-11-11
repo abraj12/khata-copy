@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useViewportPopover } from '../utils/useViewportPopover.js';
 import {
   Bell,
   Check,
@@ -50,7 +51,13 @@ export const NotificationCenterButton: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const closePopover = useCallback(() => setIsOpen(false), []);
+  const { containerRef, triggerRef, popoverStyle } = useViewportPopover({
+    isOpen,
+    onClose: closePopover,
+    preferredWidthPx: 384,
+    offsetY: 8,
+  });
 
   const loadNotifications = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -74,23 +81,7 @@ export const NotificationCenterButton: React.FC = () => {
     return () => controller.abort();
   }, [loadNotifications]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleOutsideClick = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsOpen(false);
-    };
-    document.addEventListener('mousedown', handleOutsideClick);
-    document.addEventListener('keydown', handleEscape);
-    return () => {
-      document.removeEventListener('mousedown', handleOutsideClick);
-      document.removeEventListener('keydown', handleEscape);
-    };
-  }, [isOpen]);
+
 
   const handleToggle = () => {
     const nextOpen = !isOpen;
@@ -132,6 +123,7 @@ export const NotificationCenterButton: React.FC = () => {
   return (
     <div ref={containerRef} className="relative shrink-0">
       <button
+        ref={triggerRef}
         type="button"
         onClick={handleToggle}
         className="neu-btn-secondary p-2 sm:px-3 text-sm font-medium relative inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
@@ -154,10 +146,10 @@ export const NotificationCenterButton: React.FC = () => {
         <div
           role="dialog"
           aria-label="Business notifications"
-          className="absolute right-0 mt-2 w-[min(24rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-[var(--khata-border)] shadow-xl z-50 overflow-hidden"
-          style={{ backgroundColor: 'var(--khata-surface)', color: 'var(--khata-text)' }}
+          className="absolute right-0 mt-2 w-[min(24rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] max-h-[calc(100vh-5rem)] flex flex-col rounded-2xl border border-[var(--khata-border)] shadow-xl z-50 overflow-hidden"
+          style={{ backgroundColor: 'var(--khata-surface)', color: 'var(--khata-text)', ...popoverStyle }}
         >
-          <div className="px-4 py-3 border-b border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-2">
+          <div className="px-4 py-3 border-b border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-2 shrink-0">
             <div>
               <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--khata-text)]">
                 Notifications
@@ -191,7 +183,7 @@ export const NotificationCenterButton: React.FC = () => {
             </div>
           </div>
 
-          <div className="max-h-80 overflow-y-auto divide-y divide-[var(--khata-border)]">
+          <div className="flex-1 min-h-0 max-h-80 overflow-y-auto divide-y divide-[var(--khata-border)]">
             {loading && notifications.length === 0 ? (
               <div className="py-8 flex items-center justify-center gap-2 text-xs text-[var(--khata-text-muted)]">
                 <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
@@ -214,7 +206,7 @@ export const NotificationCenterButton: React.FC = () => {
                   {renderSeverityIcon(item.severity)}
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs font-bold text-[var(--khata-text)] truncate">{item.title}</span>
+                      <span className="text-xs font-bold text-[var(--khata-text)] break-words min-w-0">{item.title}</span>
                       <span className="text-[10px] font-mono text-[var(--khata-text-muted)] shrink-0">
                         {formatRelativeTime(item.createdAt)}
                       </span>

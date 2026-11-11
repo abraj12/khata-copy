@@ -17,6 +17,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import { formatCurrency, safeDecimal } from '../../lib/formatters.js';
+import { useOptionalThemeAccessibility } from '../../context/ThemeAccessibilityContext.js';
 import { getBusinessDateISO, isValidBusinessDate } from '../../utils/businessDate.js';
 import type {
   DashboardDatePreset,
@@ -37,7 +38,11 @@ export interface HomeDashboardProps {
 }
 
 export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
-  const [preset, setPreset] = useState<DashboardDatePreset>('all_time');
+  const themeContext = useOptionalThemeAccessibility();
+  const preferredDefaultPreset = themeContext?.workflowDefaults.defaultDatePreset ?? 'all_time';
+  const [preset, setPreset] = useState<DashboardDatePreset>(preferredDefaultPreset);
+  const appliedDefaultPresetRef = useRef<DashboardDatePreset>(preferredDefaultPreset);
+  const userChangedPresetRef = useRef(false);
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   const [data, setData] = useState<DashboardOverviewData | null>(null);
@@ -120,13 +125,25 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
   };
 
   useEffect(() => {
-    void loadOverview('all_time', '', '');
+    void loadOverview(preferredDefaultPreset, '', '');
     return () => {
       abortRef.current?.abort();
     };
   }, []);
 
+  useEffect(() => {
+    if (
+      !userChangedPresetRef.current &&
+      preferredDefaultPreset !== appliedDefaultPresetRef.current
+    ) {
+      appliedDefaultPresetRef.current = preferredDefaultPreset;
+      setPreset(preferredDefaultPreset);
+      void loadOverview(preferredDefaultPreset, '', '');
+    }
+  }, [preferredDefaultPreset]);
+
   const handlePresetChange = (nextPreset: DashboardDatePreset) => {
+    userChangedPresetRef.current = true;
     setPreset(nextPreset);
     if (nextPreset !== 'custom') {
       void loadOverview(nextPreset, customFrom, customTo);

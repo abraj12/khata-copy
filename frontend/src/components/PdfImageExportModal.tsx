@@ -144,7 +144,7 @@ export const PdfImageExportModal: React.FC<PdfImageExportModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm p-2 sm:p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
       role="dialog"
       aria-modal="true"
       aria-label={title}

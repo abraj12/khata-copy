@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { fetchPreferencesApi, updatePreferencesApi } from '../lib/appDataApi.js';
+import type { DashboardDatePreset } from '../features/dashboard/dashboard.types.js';
 import {
   NeuPresetId,
   TextSizeOption,
@@ -11,14 +12,45 @@ import {
   NEUMORPHIC_PRESETS,
 } from '../theme/neumorphicThemes.js';
 
+export type DefaultDashboardDatePreset = Exclude<DashboardDatePreset, 'custom'>;
+
+export interface WorkflowPrintPreferences {
+  defaultDatePreset: DefaultDashboardDatePreset;
+  defaultPaperSize: 'A4';
+  autoOpenPreview: boolean;
+}
+
+const VALID_DATE_PRESETS: ReadonlySet<DefaultDashboardDatePreset> = new Set([
+  'today',
+  'yesterday',
+  'last_7_days',
+  'last_30_days',
+  'this_month',
+  'last_month',
+  'this_fy',
+  'previous_fy',
+  'all_time',
+]);
+
+export const DEFAULT_WORKFLOW_PREFERENCES: WorkflowPrintPreferences = {
+  defaultDatePreset: 'all_time',
+  defaultPaperSize: 'A4',
+  autoOpenPreview: true,
+};
+
+const WORKFLOW_PREFERENCES_STORAGE_KEY = 'khata_workflow_preferences_v1';
+
 interface ThemeAccessibilityContextType {
   preferences: UIPreferences;
+  workflowDefaults: WorkflowPrintPreferences;
   setPreset: (preset: NeuPresetId) => void;
   setTextSize: (size: TextSizeOption) => void;
   setContrastOverride: (contrast: ContrastOption) => void;
   setReduceMotion: (motion: MotionOption) => void;
   setIncreaseSpacing: (increase: boolean) => void;
   setStrongFocus: (focus: boolean) => void;
+  setDefaultDatePreset: (preset: DefaultDashboardDatePreset) => void;
+  setAutoOpenPreview: (autoOpen: boolean) => void;
   resetToDefaults: () => void;
   syncFromServer: () => Promise<void>;
   resetServerSync: () => void;
@@ -75,8 +107,38 @@ function loadSavedPreferences(): UIPreferences {
   return DEFAULT_PREFERENCES;
 }
 
+function isValidDefaultPreset(value: unknown): value is DefaultDashboardDatePreset {
+  return typeof value === 'string' && VALID_DATE_PRESETS.has(value as DefaultDashboardDatePreset);
+}
+
+function loadSavedWorkflowPreferences(): WorkflowPrintPreferences {
+  try {
+    const raw = localStorage.getItem(WORKFLOW_PREFERENCES_STORAGE_KEY);
+    if (!raw) return DEFAULT_WORKFLOW_PREFERENCES;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      return {
+        defaultDatePreset: isValidDefaultPreset(parsed.defaultDatePreset)
+          ? parsed.defaultDatePreset
+          : DEFAULT_WORKFLOW_PREFERENCES.defaultDatePreset,
+        defaultPaperSize: 'A4',
+        autoOpenPreview:
+          typeof parsed.autoOpenPreview === 'boolean'
+            ? parsed.autoOpenPreview
+            : DEFAULT_WORKFLOW_PREFERENCES.autoOpenPreview,
+      };
+    }
+  } catch {
+    // fallback safely
+  }
+  return DEFAULT_WORKFLOW_PREFERENCES;
+}
+
 export const ThemeAccessibilityProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [preferences, setPreferences] = useState<UIPreferences>(loadSavedPreferences);
+  const [workflowDefaults, setWorkflowDefaults] = useState<WorkflowPrintPreferences>(
+    loadSavedWorkflowPreferences
+  );
   const [announcement, setAnnouncement] = useState<string>('');
   const serverSyncEnabledRef = useRef(false);
   const skipNextServerSaveRef = useRef(false);
@@ -96,27 +158,42 @@ export const ThemeAccessibilityProvider: React.FC<{ children: React.ReactNode }>
       if (res?.source === 'mongodb') {
         serverSyncEnabledRef.current = true;
       }
-      if (res?.source === 'mongodb' && res.preferences?.theme) {
-        const t = res.preferences.theme;
-        const validPreset = NEUMORPHIC_PRESETS.some((p) => p.id === t.preset);
-        const nextPrefs: UIPreferences = {
-          version: 3,
-          preset: validPreset ? (t.preset as NeuPresetId) : DEFAULT_PREFERENCES.preset,
-          textSize: ['100', '115', '130', '145'].includes(String(t.textSize))
-            ? (t.textSize as TextSizeOption)
-            : DEFAULT_PREFERENCES.textSize,
-          contrastOverride: ['default', 'enhanced'].includes(String(t.contrastOverride))
-            ? (t.contrastOverride as ContrastOption)
-            : DEFAULT_PREFERENCES.contrastOverride,
-          reduceMotion: ['system', 'on', 'off'].includes(String(t.reduceMotion))
-            ? (t.reduceMotion as MotionOption)
-            : DEFAULT_PREFERENCES.reduceMotion,
-          increaseSpacing:
-            typeof t.increaseSpacing === 'boolean' ? t.increaseSpacing : DEFAULT_PREFERENCES.increaseSpacing,
-          strongFocus: typeof t.strongFocus === 'boolean' ? t.strongFocus : DEFAULT_PREFERENCES.strongFocus,
-        };
+      if (res?.source === 'mongodb' && res.preferences) {
         skipNextServerSaveRef.current = true;
-        setPreferences(nextPrefs);
+        if (res.preferences.theme) {
+          const t = res.preferences.theme;
+          const validPreset = NEUMORPHIC_PRESETS.some((p) => p.id === t.preset);
+          const nextPrefs: UIPreferences = {
+            version: 3,
+            preset: validPreset ? (t.preset as NeuPresetId) : DEFAULT_PREFERENCES.preset,
+            textSize: ['100', '115', '130', '145'].includes(String(t.textSize))
+              ? (t.textSize as TextSizeOption)
+              : DEFAULT_PREFERENCES.textSize,
+            contrastOverride: ['default', 'enhanced'].includes(String(t.contrastOverride))
+              ? (t.contrastOverride as ContrastOption)
+              : DEFAULT_PREFERENCES.contrastOverride,
+            reduceMotion: ['system', 'on', 'off'].includes(String(t.reduceMotion))
+              ? (t.reduceMotion as MotionOption)
+              : DEFAULT_PREFERENCES.reduceMotion,
+            increaseSpacing:
+              typeof t.increaseSpacing === 'boolean' ? t.increaseSpacing : DEFAULT_PREFERENCES.increaseSpacing,
+            strongFocus: typeof t.strongFocus === 'boolean' ? t.strongFocus : DEFAULT_PREFERENCES.strongFocus,
+          };
+          setPreferences(nextPrefs);
+        }
+
+        const serverDatePreset = res.preferences.dashboardDefaults?.defaultDatePreset;
+        const serverPrint = res.preferences.printPreferences;
+        setWorkflowDefaults({
+          defaultDatePreset: isValidDefaultPreset(serverDatePreset)
+            ? serverDatePreset
+            : DEFAULT_WORKFLOW_PREFERENCES.defaultDatePreset,
+          defaultPaperSize: 'A4',
+          autoOpenPreview:
+            typeof serverPrint?.autoOpenPreview === 'boolean'
+              ? serverPrint.autoOpenPreview
+              : DEFAULT_WORKFLOW_PREFERENCES.autoOpenPreview,
+        });
       }
     } catch {
       // Fail-open to localStorage defaults if offline or server unreachable
@@ -142,6 +219,7 @@ export const ThemeAccessibilityProvider: React.FC<{ children: React.ReactNode }>
     // Save non-sensitive preferences safely
     try {
       localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
+      localStorage.setItem(WORKFLOW_PREFERENCES_STORAGE_KEY, JSON.stringify(workflowDefaults));
     } catch {
       // safe fallback
     }
@@ -156,11 +234,18 @@ export const ThemeAccessibilityProvider: React.FC<{ children: React.ReactNode }>
       clearTimeout(saveTimerRef.current);
     }
     saveTimerRef.current = setTimeout(() => {
-      void updatePreferencesApi({ theme: preferences }).catch(() => {
+      void updatePreferencesApi({
+        theme: preferences,
+        dashboardDefaults: { defaultDatePreset: workflowDefaults.defaultDatePreset },
+        printPreferences: {
+          defaultPaperSize: workflowDefaults.defaultPaperSize,
+          autoOpenPreview: workflowDefaults.autoOpenPreview,
+        },
+      }).catch(() => {
         // Non-blocking best-effort sync
       });
     }, 350);
-  }, [preferences]);
+  }, [preferences, workflowDefaults]);
 
   const setPreset = useCallback((preset: NeuPresetId) => {
     setPreferences((prev) => ({ ...prev, preset }));
@@ -190,24 +275,38 @@ export const ThemeAccessibilityProvider: React.FC<{ children: React.ReactNode }>
 
   const setStrongFocus = useCallback((strongFocus: boolean) => {
     setPreferences((prev) => ({ ...prev, strongFocus }));
-    announce(`Strong focus indicator ${strongFocus ? 'enabled' : 'disabled'}`);
+    announce('Strong focus indicator ' + (strongFocus ? 'enabled' : 'disabled'));
+  }, [announce]);
+
+  const setDefaultDatePreset = useCallback((defaultDatePreset: DefaultDashboardDatePreset) => {
+    setWorkflowDefaults((prev) => ({ ...prev, defaultDatePreset }));
+    announce('Default dashboard period set to ' + defaultDatePreset.replace(/_/g, ' '));
+  }, [announce]);
+
+  const setAutoOpenPreview = useCallback((autoOpenPreview: boolean) => {
+    setWorkflowDefaults((prev) => ({ ...prev, autoOpenPreview }));
+    announce('Auto-open print preview ' + (autoOpenPreview ? 'enabled' : 'disabled'));
   }, [announce]);
 
   const resetToDefaults = useCallback(() => {
     setPreferences(DEFAULT_PREFERENCES);
-    announce('Appearance and accessibility settings reset to Soft Light defaults');
+    setWorkflowDefaults(DEFAULT_WORKFLOW_PREFERENCES);
+    announce('Appearance and workflow settings reset to defaults');
   }, [announce]);
 
   return (
     <ThemeAccessibilityContext.Provider
       value={{
         preferences,
+        workflowDefaults,
         setPreset,
         setTextSize,
         setContrastOverride,
         setReduceMotion,
         setIncreaseSpacing,
         setStrongFocus,
+        setDefaultDatePreset,
+        setAutoOpenPreview,
         resetToDefaults,
         syncFromServer,
         resetServerSync,
@@ -237,6 +336,10 @@ export const ThemeAccessibilityProvider: React.FC<{ children: React.ReactNode }>
     </ThemeAccessibilityContext.Provider>
   );
 };
+
+export function useOptionalThemeAccessibility(): ThemeAccessibilityContextType | undefined {
+  return useContext(ThemeAccessibilityContext);
+}
 
 export function useThemeAccessibility(): ThemeAccessibilityContextType {
   const context = useContext(ThemeAccessibilityContext);
