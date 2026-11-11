@@ -1,6 +1,6 @@
 import PDFDocument from 'pdfkit';
-import fs from 'fs';
 import { numberToIndianWords, formatDateToIndian } from '../gstInvoices/gstInvoices.pdf.js';
+import { fetchSafeLogoBuffer } from './logoFetch.js';
 
 export interface QuotationPdfItem {
   itemIndex?: number;
@@ -83,12 +83,15 @@ export function formatIndianCurrency(val: string | number): string {
  * Generates an executive, professional corporate PDF for Quotations.
  * Features:
  * - A4 portrait layout with crisp typography
+ * - Safe HTTPS/R2 PNG & JPEG company logo embedding
  * - Deep navy blue brand headers (#1e3a8a)
  * - Multi-page item table pagination with repeated headers
  * - Clear commercial terms & bank details block
  * - Concurrency safe, streaming to buffer
  */
 export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buffer> {
+  const logoBuffer = await fetchSafeLogoBuffer(data.company?.logoUrl);
+
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({
@@ -118,13 +121,13 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
       // Table columns geometry
       // Total content width: 523pt
       const colWidths = [
-        32,  // S.No
+        32, // S.No
         211, // Description & Barcode
-        60,  // HSN
-        40,  // Qty
-        35,  // Unit
-        70,  // Rate
-        75,  // Amount
+        60, // HSN
+        40, // Qty
+        35, // Unit
+        70, // Rate
+        75, // Amount
       ];
 
       const colX = [
@@ -146,26 +149,43 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
         // Top accent bar
         doc.rect(margin, headerTop, contentWidth, 4).fill(primaryNavy);
 
+        let companyTextX = margin;
+        let companyTextWidth = 280;
+        if (logoBuffer) {
+          try {
+            doc.image(logoBuffer, margin, headerTop + 12, { fit: [64, 46] });
+            companyTextX = margin + 74;
+            companyTextWidth = 215;
+          } catch {
+            companyTextX = margin;
+            companyTextWidth = 280;
+          }
+        }
+
         // Left Company Info
         doc.fillColor(primaryNavy)
           .font('Helvetica-Bold')
-          .fontSize(15)
-          .text(data.company.companyName || 'ALGIONS AI LABS PRIVATE LIMITED', margin, headerTop + 12);
+          .fontSize(logoBuffer ? 13 : 15)
+          .text(data.company.companyName || 'ALGIONS AI LABS PRIVATE LIMITED', companyTextX, headerTop + 12, {
+            width: companyTextWidth,
+          });
 
         doc.fillColor(secondarySlate)
           .font('Helvetica')
           .fontSize(8);
 
-        let companyY = headerTop + 32;
+        let companyY = Math.max(headerTop + 32, doc.y + 3);
         if (data.company.cin) {
-          doc.text(`CIN: ${data.company.cin}`, margin, companyY);
-          companyY += 11;
+          doc.text(`CIN: ${data.company.cin}`, companyTextX, companyY, { width: companyTextWidth });
+          companyY = doc.y + 2;
         }
 
         const addressLines = (data.company.address || '').split('\n');
         addressLines.forEach((line) => {
-          doc.text(line, margin, companyY, { width: 280 });
-          companyY += 10;
+          if (line.trim()) {
+            doc.text(line, companyTextX, companyY, { width: companyTextWidth });
+            companyY = doc.y + 2;
+          }
         });
 
         const contactParts = [
@@ -175,18 +195,25 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
         ].filter(Boolean);
 
         if (contactParts.length > 0) {
-          doc.text(contactParts.join('  |  '), margin, companyY, { width: 280 });
-          companyY += 11;
+          doc.text(contactParts.join('  |  '), companyTextX, companyY, { width: companyTextWidth });
+          companyY = doc.y + 2;
         }
 
         if (data.company.gstin) {
-          doc.font('Helvetica-Bold').text(`GSTIN: ${data.company.gstin}`, margin, companyY);
-          companyY += 11;
+          doc.font('Helvetica-Bold').text(`GSTIN: ${data.company.gstin}`, companyTextX, companyY, {
+            width: companyTextWidth,
+          });
+          companyY = doc.y + 2;
         }
 
         if (data.company.state || data.company.stateCode) {
-          doc.font('Helvetica').text(`State: ${data.company.state || ''}${data.company.stateCode ? ` (Code: ${data.company.stateCode})` : ''}`, margin, companyY);
-          companyY += 11;
+          doc.font('Helvetica').text(
+            `State: ${data.company.state || ''}${data.company.stateCode ? ` (Code: ${data.company.stateCode})` : ''}`,
+            companyTextX,
+            companyY,
+            { width: companyTextWidth }
+          );
+          companyY = doc.y + 2;
         }
 
         // Right Quotation Info Card
@@ -207,19 +234,28 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
 
         let cardTextY = cardTop + 32;
         doc.text('Quotation No:', cardX + 10, cardTextY);
-        doc.font('Helvetica-Bold').text(data.quotationNumber || 'QT-001', cardX + 75, cardTextY, { align: 'right', width: cardWidth - 85 });
+        doc.font('Helvetica-Bold').text(data.quotationNumber || 'QT-001', cardX + 75, cardTextY, {
+          align: 'right',
+          width: cardWidth - 85,
+        });
         cardTextY += 13;
 
         doc.font('Helvetica').text('Date:', cardX + 10, cardTextY);
-        doc.font('Helvetica-Bold').text(formatDateToIndian(data.quotationDate), cardX + 75, cardTextY, { align: 'right', width: cardWidth - 85 });
+        doc.font('Helvetica-Bold').text(formatDateToIndian(data.quotationDate), cardX + 75, cardTextY, {
+          align: 'right',
+          width: cardWidth - 85,
+        });
         cardTextY += 13;
 
         if (data.validUntil) {
           doc.font('Helvetica').text('Valid Until:', cardX + 10, cardTextY);
-          doc.font('Helvetica-Bold').text(formatDateToIndian(data.validUntil), cardX + 75, cardTextY, { align: 'right', width: cardWidth - 85 });
+          doc.font('Helvetica-Bold').text(formatDateToIndian(data.validUntil), cardX + 75, cardTextY, {
+            align: 'right',
+            width: cardWidth - 85,
+          });
         }
 
-        currentY = Math.max(companyY + 12, cardTop + 85);
+        currentY = Math.max(companyY + 12, logoBuffer ? headerTop + 68 : cardTop + 85, cardTop + 85);
 
         // Divider
         doc.moveTo(margin, currentY).lineTo(margin + contentWidth, currentY).strokeColor(borderGrey).lineWidth(0.75).stroke();
@@ -230,11 +266,15 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
         const custBoxX = margin;
         const projBoxX = margin + custBoxWidth + 14;
         const boxTop = currentY;
+        const boxHeight = 78;
 
         // Box 1: Customer Details
-        doc.rect(custBoxX, boxTop, custBoxWidth, 72).fillAndStroke(bgLight, borderGrey);
+        doc.rect(custBoxX, boxTop, custBoxWidth, boxHeight).fillAndStroke(bgLight, borderGrey);
         doc.fillColor(primaryNavy).font('Helvetica-Bold').fontSize(8.5).text('QUOTATION ISSUED TO:', custBoxX + 8, boxTop + 7);
-        doc.fillColor(textDark).font('Helvetica-Bold').fontSize(9.5).text(data.customer.name || 'Valued Customer', custBoxX + 8, boxTop + 20, { width: custBoxWidth - 16, ellipsis: true });
+        doc.fillColor(textDark).font('Helvetica-Bold').fontSize(9.5).text(data.customer.name || 'Valued Customer', custBoxX + 8, boxTop + 20, {
+          width: custBoxWidth - 16,
+          ellipsis: true,
+        });
 
         doc.font('Helvetica').fontSize(8).fillColor(secondarySlate);
         let custSubY = boxTop + 33;
@@ -245,25 +285,30 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
         const custContact = [
           data.customer.phone ? `Phone: ${data.customer.phone}` : null,
           data.customer.gstin ? `GSTIN: ${data.customer.gstin}` : null,
-          (data.customer.state || data.customer.stateCode)
+          data.customer.state || data.customer.stateCode
             ? `State: ${data.customer.state || ''}${data.customer.stateCode ? ` (${data.customer.stateCode})` : ''}`
             : null,
-        ].filter(Boolean).join('  |  ');
+        ]
+          .filter(Boolean)
+          .join('  |  ');
         if (custContact) {
-          doc.text(custContact, custBoxX + 8, custSubY, { width: custBoxWidth - 16, ellipsis: true });
+          doc.text(custContact, custBoxX + 8, custSubY, { width: custBoxWidth - 16, height: 24 });
         }
 
         // Box 2: Project / Commercial Subject
-        doc.rect(projBoxX, boxTop, custBoxWidth, 72).fillAndStroke(bgLight, borderGrey);
+        doc.rect(projBoxX, boxTop, custBoxWidth, boxHeight).fillAndStroke(bgLight, borderGrey);
         doc.fillColor(primaryNavy).font('Helvetica-Bold').fontSize(8.5).text('PROJECT / SUBJECT DETAILS:', projBoxX + 8, boxTop + 7);
 
-        doc.fillColor(textDark).font('Helvetica-Bold').fontSize(9).text(data.projectTitle || 'Commercial Supply & Services Offer', projBoxX + 8, boxTop + 20, { width: custBoxWidth - 16, ellipsis: true });
+        doc.fillColor(textDark).font('Helvetica-Bold').fontSize(9).text(data.projectTitle || 'Commercial Supply & Services Offer', projBoxX + 8, boxTop + 20, {
+          width: custBoxWidth - 16,
+          ellipsis: true,
+        });
 
         doc.font('Helvetica').fontSize(8).fillColor(secondarySlate);
         const subjectText = data.subject || 'Quotation prepared in accordance with the requested scope of products and specifications.';
-        doc.text(subjectText, projBoxX + 8, boxTop + 33, { width: custBoxWidth - 16, height: 32, ellipsis: true });
+        doc.text(subjectText, projBoxX + 8, boxTop + 33, { width: custBoxWidth - 16, height: 34, ellipsis: true });
 
-        currentY = boxTop + 80;
+        currentY = boxTop + boxHeight + 8;
       };
 
       // Table Header renderer (called on page 1 and on every overflow page)
@@ -339,7 +384,10 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
         doc.text(String(item.quantity), colX[3], currentY + 6, { width: colWidths[3], align: 'center' });
         doc.text(item.unit || 'pcs', colX[4], currentY + 6, { width: colWidths[4], align: 'center' });
         doc.text(formatIndianCurrency(item.rate), colX[5], currentY + 6, { width: colWidths[5] - 6, align: 'right' });
-        doc.font('Helvetica-Bold').text(formatIndianCurrency(item.amount), colX[6], currentY + 6, { width: colWidths[6] - 8, align: 'right' });
+        doc.font('Helvetica-Bold').text(formatIndianCurrency(item.amount), colX[6], currentY + 6, {
+          width: colWidths[6] - 8,
+          align: 'right',
+        });
 
         currentY += rowHeight;
       });
@@ -383,16 +431,17 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
         doc.font(isBold ? 'Helvetica-Bold' : 'Helvetica').fontSize(isBold ? 9 : 8);
         doc.fillColor(isAccent ? primaryNavy : textDark);
         doc.text(label, rightColX, totalRowY, { width: 110, align: 'left' });
-        doc.text(`₹ ${formatIndianCurrency(amount)}`, rightColX + 110, totalRowY, { width: summaryRightWidth - 110, align: 'right' });
+        doc.text(`₹ ${formatIndianCurrency(amount)}`, rightColX + 110, totalRowY, {
+          width: summaryRightWidth - 110,
+          align: 'right',
+        });
         totalRowY += 15;
       };
 
       drawSummaryRow('Subtotal', data.totals.subtotal);
 
       if (Number(data.totals.discountAmount || 0) > 0) {
-        const discLabel = data.totals.discountType === 'percentage'
-          ? `Discount (${data.totals.discountValue}%)`
-          : 'Discount';
+        const discLabel = data.totals.discountType === 'percentage' ? `Discount (${data.totals.discountValue}%)` : 'Discount';
         drawSummaryRow(discLabel, `-${data.totals.discountAmount}`);
       }
 
@@ -412,7 +461,10 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
       doc.rect(rightColX - 4, totalRowY - 2, summaryRightWidth + 4, 22).fill(primaryNavy);
       doc.font('Helvetica-Bold').fontSize(10).fillColor('#ffffff');
       doc.text('Grand Total', rightColX, totalRowY + 4, { width: 110, align: 'left' });
-      doc.text(`₹ ${formatIndianCurrency(data.totals.grandTotal)}`, rightColX + 110, totalRowY + 4, { width: summaryRightWidth - 110, align: 'right' });
+      doc.text(`₹ ${formatIndianCurrency(data.totals.grandTotal)}`, rightColX + 110, totalRowY + 4, {
+        width: summaryRightWidth - 110,
+        align: 'right',
+      });
 
       currentY = summaryTop + summaryBlockHeight + 6;
 
@@ -432,7 +484,10 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
 
       doc.font('Helvetica').fontSize(7.5).fillColor(secondarySlate);
       let termLineY = termsTop + 22;
-      const standardTerms = (data.termsAndConditions || 'Payment terms: 100% advance or as agreed.\nDelivery: As per standard schedule.\nWarranty: Standard manufacturer support.').split('\n');
+      const standardTerms = (
+        data.termsAndConditions ||
+        'Payment terms: 100% advance or as agreed.\nDelivery: As per standard schedule.\nWarranty: Standard manufacturer support.'
+      ).split('\n');
       standardTerms.slice(0, 6).forEach((term) => {
         doc.text(`• ${term.trim()}`, termsX + 8, termLineY, { width: termsWidth - 16 });
         termLineY += 10;
@@ -445,7 +500,9 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
           data.company.bankAccountNumber ? `A/C: ${data.company.bankAccountNumber}` : null,
           data.company.bankIfsc ? `IFSC: ${data.company.bankIfsc}` : null,
           data.company.bankBranch ? `Branch: ${data.company.bankBranch}` : null,
-        ].filter(Boolean).join(' | ');
+        ]
+          .filter(Boolean)
+          .join(' | ');
         doc.font('Helvetica-Bold').text(bankInfo, termsX + 8, termLineY, { width: termsWidth - 16 });
         termLineY += 10;
       }
@@ -481,7 +538,7 @@ export async function generateQuotationPdf(data: QuotationPdfData): Promise<Buff
 
         doc.font('Helvetica').fontSize(7.5).fillColor(secondarySlate);
         const companyLegalName = data.company.companyName || 'Algions AI Labs Private Limited';
-        doc.text('Thank you for your business. This quotation is a commercial offer issued by ' + companyLegalName + '.', margin, pageHeight - 24, {
+        doc.text(`Thank you for your business. This quotation is a commercial offer issued by ${companyLegalName}.`, margin, pageHeight - 24, {
           align: 'left',
           width: contentWidth - 80,
         });

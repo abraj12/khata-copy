@@ -29,34 +29,23 @@ import { fetchProductByBarcode } from '../barcode/barcodeApi.js';
 import { QuotationPreview } from './QuotationPreview.js';
 import { apiClient } from '../../lib/apiClient.js';
 import { formatCurrency } from '../../lib/formatters.js';
-import { INDIAN_STATES } from '../../lib/indianStates.js';
-
-function addLocalCalendarDays(days: number): string {
-  const today = new Date();
-  const result = new Date(today.getFullYear(), today.getMonth(), today.getDate() + days);
-  const year = result.getFullYear();
-  const month = String(result.getMonth() + 1).padStart(2, '0');
-  const day = String(result.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
+import { INDIAN_STATES, getStateByCode, resolveCustomerStateSelection } from '../../lib/indianStates.js';
+import { getBusinessDateISO, addBusinessCalendarDays } from '../../utils/businessDate.js';
+import {
+  applyCatalogProductToDraftLine,
+  validateQuantityInput,
+  validateSellingRateInput,
+} from '../../utils/lineItemDraft.js';
 
 export interface QuotationEditorProps {
   onCancel: () => void;
   onSaved: (quotation: Quotation) => void;
 }
 
-const getLocalISODate = () => {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-};
-
 export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSaved }) => {
   const [settings, setSettings] = useState<QuotationSettings | null>(null);
   const [quotationNumber, setQuotationNumber] = useState('QT-001');
-  const [quotationDate, setQuotationDate] = useState(() => getLocalISODate());
+  const [quotationDate, setQuotationDate] = useState(() => getBusinessDateISO());
   const [validUntil, setValidUntil] = useState('');
 
   // Customer
@@ -65,8 +54,8 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
   const [customerAddress, setCustomerAddress] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerGstin, setCustomerGstin] = useState('');
-  const [customerState, setCustomerState] = useState('Bihar');
-  const [customerStateCode, setCustomerStateCode] = useState('10');
+  const [customerState, setCustomerState] = useState('');
+  const [customerStateCode, setCustomerStateCode] = useState('');
   const [customerSearch, setCustomerSearch] = useState('');
   const [matchedCustomers, setMatchedCustomers] = useState<any[]>([]);
   const [isSearchingCustomer, setIsSearchingCustomer] = useState(false);
@@ -85,7 +74,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
       barcode: '',
       quantity: 1,
       unit: 'pcs',
-      rate: '0.00',
+      rate: '',
       rateUnit: 'pcs',
       amount: '0.00',
     },
@@ -131,7 +120,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
           setSettings(s);
 
           // Calculate default valid until without UTC timezone shift
-          setValidUntil(addLocalCalendarDays(s?.standard_validity_days || 30));
+          setValidUntil(addBusinessCalendarDays(s?.standard_validity_days || 30));
 
           // Default terms
           const defaultTerms = [
@@ -152,8 +141,8 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
 
   // Update intra-state check when customerStateCode changes
   useEffect(() => {
-    const supplierState = settings?.state_code || '10';
-    setIsIntraState(supplierState === customerStateCode);
+    const supplierState = settings?.state_code || '';
+    setIsIntraState(Boolean(supplierState && customerStateCode && supplierState === customerStateCode));
   }, [customerStateCode, settings]);
 
   // Customer search helper (using authoritative /api/v1/khata/customers and request ID guard)
@@ -193,15 +182,9 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     setCustomerPhone(c.phone || '');
     setCustomerAddress(c.address || '');
     setCustomerGstin(c.gstin || '');
-    if (c.state_code) {
-      setCustomerStateCode(c.state_code);
-      const st = INDIAN_STATES.find((s) => s.code === c.state_code);
-      if (st) setCustomerState(st.name);
-    } else if (c.state) {
-      setCustomerState(c.state);
-      const st = INDIAN_STATES.find((s) => s.name.toLowerCase() === c.state.toLowerCase());
-      if (st) setCustomerStateCode(st.code);
-    }
+    const resolvedState = resolveCustomerStateSelection(c);
+    setCustomerState(resolvedState.state);
+    setCustomerStateCode(resolvedState.stateCode);
     setCustomerSearch('');
     setMatchedCustomers([]);
   };
@@ -216,7 +199,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
         barcode: '',
         quantity: 1,
         unit: 'pcs',
-        rate: '0.00',
+        rate: '',
         rateUnit: 'pcs',
         amount: '0.00',
       },
@@ -280,15 +263,16 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     setItems((prev) => {
       const next = [...prev];
       const qty = new Decimal(String(next[rowIdx].quantity || 1));
-      const rate = new Decimal(String(p.buying_price || 0));
+      const nextLine = applyCatalogProductToDraftLine(next[rowIdx], p);
+      const rate = nextLine.rate ? new Decimal(nextLine.rate) : null;
       next[rowIdx] = {
         ...next[rowIdx],
         productId: p.id,
         description: p.name,
         hsnCode: p.hsn_code || '',
         barcode: p.barcode || '',
-        rate: rate.toFixed(2),
-        amount: qty.times(rate).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2),
+        rate: nextLine.rate,
+        amount: rate ? qty.times(rate).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2) : '0.00',
       };
       return next;
     });
@@ -325,7 +309,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
         } else {
           // Check if first row is untouched empty row
           if (prev.length === 1 && !prev[0].description.trim()) {
-            const rate = new Decimal(String(product.buying_price || 0));
+            const nextLine = applyCatalogProductToDraftLine(prev[0], product);
             return [
               {
                 productId: product.id,
@@ -334,15 +318,15 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                 barcode: product.barcode || '',
                 quantity: 1,
                 unit: 'pcs',
-                rate: rate.toFixed(2),
+                rate: nextLine.rate,
                 rateUnit: 'pcs',
-                amount: rate.toFixed(2),
+                amount: nextLine.rate || '0.00',
               },
             ];
           }
 
           // Append new item
-          const rate = new Decimal(String(product.buying_price || 0));
+          const nextLine = applyCatalogProductToDraftLine({}, product);
           return [
             ...prev,
             {
@@ -352,9 +336,9 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
               barcode: product.barcode || '',
               quantity: 1,
               unit: 'pcs',
-              rate: rate.toFixed(2),
+              rate: nextLine.rate,
               rateUnit: 'pcs',
-              amount: rate.toFixed(2),
+              amount: nextLine.rate || '0.00',
             },
           ];
         }
@@ -419,8 +403,8 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
       customerAddress: customerAddress.trim() || null,
       customerPhone: customerPhone.trim() || null,
       customerGstin: customerGstin.trim() || null,
-      customerState,
-      customerStateCode,
+      customerState: customerState || undefined,
+      customerStateCode: customerStateCode || undefined,
       projectTitle: projectTitle.trim() || null,
       subject: subject.trim() || null,
       items: items.map((it) => ({
@@ -442,14 +426,40 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     };
   };
 
-  const handleSave = async (markSent: boolean = false) => {
+  const validateQuotationForm = (): string | null => {
     if (!customerName.trim()) {
-      setError('Customer name is required.');
+      return 'Customer name is required.';
+    }
+    if (gstEnabled && (!customerStateCode || !customerState)) {
+      return 'Customer State is required when GST is included.';
+    }
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (!it.description.trim()) {
+        return `Item #${i + 1}: Description is required.`;
+      }
+      const qtyErr = validateQuantityInput(it.quantity, `Item #${i + 1} quantity`);
+      if (qtyErr) return qtyErr;
+      const rateErr = validateSellingRateInput(it.rate, `Item #${i + 1} selling rate`);
+      if (rateErr) return rateErr;
+    }
+    return null;
+  };
+
+  const handleOpenPreview = () => {
+    const validationErr = validateQuotationForm();
+    if (validationErr) {
+      setError(validationErr);
       return;
     }
-    const invalidItem = items.find((it) => !it.description.trim() || Number(it.quantity) <= 0);
-    if (invalidItem) {
-      setError('All items must have a valid description and a quantity greater than 0.');
+    setError(null);
+    setPreviewPayload(buildPayload());
+  };
+
+  const handleSave = async (markSent: boolean = false) => {
+    const validationErr = validateQuotationForm();
+    if (validationErr) {
+      setError(validationErr);
       return;
     }
 
@@ -499,7 +509,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
           </button>
           <button
             type="button"
-            onClick={() => setPreviewPayload(buildPayload())}
+            onClick={handleOpenPreview}
             className="neu-btn-secondary text-xs px-3.5 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1 sm:flex-initial"
           >
             <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
@@ -664,12 +674,18 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
 
             <div>
               <label className="block text-[11px] font-bold text-[var(--khata-text-muted)] mb-1">
-                Customer State <span className="text-rose-500">*</span>
+                Customer State {gstEnabled && <span className="text-rose-500">*</span>}
               </label>
               <select
                 value={customerStateCode}
                 onChange={(e) => {
-                  const st = INDIAN_STATES.find((s) => s.code === e.target.value);
+                  const code = e.target.value;
+                  if (!code) {
+                    setCustomerStateCode('');
+                    setCustomerState('');
+                    return;
+                  }
+                  const st = getStateByCode(code);
                   if (st) {
                     setCustomerStateCode(st.code);
                     setCustomerState(st.name);
@@ -677,6 +693,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                 }}
                 className="neu-input w-full text-xs font-medium"
               >
+                <option value="">Select customer state</option>
                 {INDIAN_STATES.map((s) => (
                   <option key={s.code} value={s.code}>
                     {s.code} – {s.name}
@@ -694,7 +711,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
               type="text"
               value={customerAddress}
               onChange={(e) => setCustomerAddress(e.target.value)}
-              placeholder="e.g. Plot No 12, Industrial Area, Gopalganj, Bihar"
+              placeholder="e.g. Plot No 12, Industrial Area"
               className="neu-input w-full text-xs font-medium"
             />
           </div>
@@ -807,7 +824,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                         className="w-full text-left p-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] transition flex justify-between items-center"
                       >
                         <span className="font-bold">{p.name}</span>
-                        <span className="text-[10px] text-[var(--khata-text-muted)]">₹{p.buying_price}</span>
+                        <span className="text-[10px] text-[var(--khata-text-muted)] font-mono">Ref: ₹{p.buying_price}</span>
                       </button>
                     ))}
                   </div>
@@ -948,7 +965,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                             className="w-full text-left p-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] transition flex justify-between items-center"
                           >
                             <span className="font-bold">{p.name}</span>
-                            <span className="text-[10px] text-[var(--khata-text-muted)]">₹{p.buying_price}</span>
+                            <span className="text-[10px] text-[var(--khata-text-muted)] font-mono">Ref: ₹{p.buying_price}</span>
                           </button>
                         ))}
                       </div>
@@ -1141,7 +1158,9 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                       Supply Type
                     </label>
                     <div className="text-xs font-bold text-[var(--khata-text)] pt-1">
-                      {isIntraState
+                      {!customerStateCode
+                        ? 'Select customer state to determine CGST/SGST vs IGST'
+                        : isIntraState
                         ? `Intra-State (CGST: ${(gstRate / 2).toFixed(1)}% + SGST: ${(gstRate / 2).toFixed(1)}%)`
                         : `Inter-State (IGST: ${gstRate}%)`}
                     </div>
@@ -1251,7 +1270,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
           </button>
           <button
             type="button"
-            onClick={() => setPreviewPayload(buildPayload())}
+            onClick={handleOpenPreview}
             className="neu-btn-secondary text-xs px-3 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1"
           >
             <Eye className="w-4 h-4 text-[var(--khata-accent)]" />

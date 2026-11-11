@@ -1,8 +1,18 @@
-import { AppError } from '../../utils/errors.js';
-import crypto from 'crypto';
 import { Decimal } from 'decimal.js';
 import { appPool } from '../../config/database.js';
+import { env } from '../../config/env.js';
+import { AppError } from '../../utils/errors.js';
+import { getBusinessDateISO } from '../../utils/businessDate.js';
+import { resolveValidatedState } from '../../utils/indianTax.js';
 import { validateMoneyInput, validateDecimalQuantityInput, escapeLike } from '../../utils/validation.js';
+import {
+  acquireIdempotencyLock,
+  checkIdempotencyRecord,
+  cleanupExpiredIdempotencyKeys,
+  hashIdempotencyPayload,
+  IdempotencyDbClient,
+  storeIdempotencyRecord,
+} from '../../services/idempotency.service.js';
 
 // Configure Decimal globally for money arithmetic
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
@@ -12,6 +22,8 @@ export interface CustomerSummaryItem {
   name: string;
   phone: string | null;
   address?: string | null;
+  state: string | null;
+  state_code: string | null;
   totalUdhar: string;
   totalReceived: string;
   outstanding: string;
@@ -52,11 +64,29 @@ export interface CreateTransactionInput {
     name: string;
     phone?: string | null;
     address?: string | null;
+    state?: string | null;
+    stateCode?: string | null;
   };
   items: CreateTransactionItemInput[];
   initialPayment?: number | string | null;
   note?: string | null;
   idempotencyKey?: string | null;
+}
+
+export interface CreateCustomerInput {
+  name: string;
+  phone?: string | null;
+  address?: string | null;
+  state?: string | null;
+  stateCode?: string | null;
+}
+
+export interface UpdateCustomerInput {
+  name?: string;
+  phone?: string | null;
+  address?: string | null;
+  state?: string | null;
+  stateCode?: string | null;
 }
 
 export class KhataService {
@@ -97,14 +127,11 @@ export class KhataService {
       return `+91${cleaned}`;
     }
 
-    throw new AppError('Invalid phone number format. Must be a valid 10-digit Indian mobile number.', 400, 'INVALID_PHONE_FORMAT');
-  }
-
-  /**
-   * Computes SHA-256 hash for idempotency payload comparison
-   */
-  private hashPayload(payload: unknown): string {
-    return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+    throw new AppError(
+      'Invalid phone number format. Must be a valid 10-digit Indian mobile number.',
+      400,
+      'INVALID_PHONE_FORMAT'
+    );
   }
 
   /**
@@ -154,7 +181,8 @@ export class KhataService {
   }
 
   /**
-   * Searchable Customer List with independent pre-aggregated totals and bounded pagination
+   * Searchable Customer List with independent pre-aggregated totals and bounded pagination.
+   * Uses LEFT JOIN so customers without prior transactions are also discoverable.
    */
   public async listCustomers(optionsOrSearch?: string | ListCustomersOptions): Promise<PaginatedCustomersResult> {
     const opts = typeof optionsOrSearch === 'string' ? { search: optionsOrSearch } : optionsOrSearch || {};
@@ -191,17 +219,21 @@ export class KhataService {
         c.name,
         c.phone,
         c.address,
+        c.state,
+        c.state_code,
         COALESCE(tx.total_udhar, 0)::numeric AS total_udhar,
         COALESCE(pay.total_received, 0)::numeric AS total_received,
         GREATEST(COALESCE(tx.total_udhar, 0) - COALESCE(alloc.total_allocated, 0), 0)::numeric AS outstanding,
         GREATEST(tx.last_activity, pay.last_payment) AS last_activity
       FROM customers c
-      INNER JOIN customer_tx tx ON tx.customer_id = c.id
+      LEFT JOIN customer_tx tx ON tx.customer_id = c.id
       LEFT JOIN customer_alloc alloc ON alloc.customer_id = c.id
       LEFT JOIN customer_pay pay ON pay.customer_id = c.id
     `;
 
+    const conditions: string[] = ['c.archived_at IS NULL'];
     const params: unknown[] = [];
+
     if (opts.search && opts.search.trim()) {
       const raw = opts.search.trim();
       const escaped = escapeLike(raw.toLowerCase());
@@ -217,12 +249,13 @@ export class KhataService {
 
       if (cleanPhoneDigits.length >= 3) {
         params.push(`%${escapeLike(cleanPhoneDigits)}%`);
-        sql += ` WHERE (c.normalized_name ILIKE $1 OR c.phone ILIKE $1 OR c.normalized_phone ILIKE $2) `;
+        conditions.push(`(c.normalized_name ILIKE $1 OR c.phone ILIKE $1 OR c.normalized_phone ILIKE $2)`);
       } else {
-        sql += ` WHERE (c.normalized_name ILIKE $1 OR c.phone ILIKE $1) `;
+        conditions.push(`(c.normalized_name ILIKE $1 OR c.phone ILIKE $1)`);
       }
     }
 
+    sql += ` WHERE ${conditions.join(' AND ')}`;
     sql += ` ORDER BY GREATEST(tx.last_activity, pay.last_payment) DESC NULLS LAST, c.name ASC, c.id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limit + 1, offset);
 
@@ -240,6 +273,8 @@ export class KhataService {
         name: row.name,
         phone: row.phone,
         address: row.address || null,
+        state: row.state || null,
+        state_code: row.state_code || null,
         totalUdhar: udhar,
         totalReceived: received,
         outstanding,
@@ -259,9 +294,184 @@ export class KhataService {
   }
 
   /**
-   * Customer Profile & Balance Summary
+   * Creates a standalone customer profile (supports NULL state when not supplied)
    */
-  public async getCustomerDetail(customerId: number): Promise<CustomerSummaryItem | null> {
+  public async createCustomer(input: CreateCustomerInput): Promise<CustomerSummaryItem> {
+    const rawName = input.name.trim();
+    if (!rawName) {
+      throw new AppError('Customer name is required.', 400, 'VALIDATION_ERROR');
+    }
+
+    const normName = this.normalizeName(rawName);
+    const normPhone = this.normalizeCustomerPhone(input.phone);
+    const rawPhone = input.phone?.trim() || null;
+    const custAddr = input.address?.trim() || null;
+
+    const resolvedState = resolveValidatedState({
+      state: input.state,
+      stateCode: input.stateCode,
+      required: false,
+      fieldLabel: 'Customer',
+    });
+
+    const client = await appPool.connect();
+    try {
+      await client.query('BEGIN');
+
+      if (normPhone) {
+        const phoneConflict = await client.query(
+          'SELECT id, name FROM customers WHERE normalized_phone = $1 FOR UPDATE',
+          [normPhone]
+        );
+        if (phoneConflict.rows.length > 0) {
+          throw new AppError(
+            `Phone number ${rawPhone || normPhone} is already attached to customer #${phoneConflict.rows[0].id} (${phoneConflict.rows[0].name}).`,
+            409,
+            'PHONE_ALREADY_ATTACHED'
+          );
+        }
+      }
+
+      const insertRes = await client.query(
+        `INSERT INTO customers (
+          name, normalized_name, phone, normalized_phone, address, state, state_code, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+        RETURNING id`,
+        [
+          rawName,
+          normName,
+          rawPhone,
+          normPhone,
+          custAddr,
+          resolvedState.state,
+          resolvedState.stateCode,
+        ]
+      );
+
+      const newId = parseInt(insertRes.rows[0].id, 10);
+      const detail = await this.getCustomerDetailWithDb(client, newId);
+      await client.query('COMMIT');
+      return detail!;
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Ignore rollback failure
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Updates an existing customer's profile.
+   * Explicit `{ state: null, stateCode: null }` (or `{ state: null }`) clears both state columns cleanly.
+   */
+  public async updateCustomer(customerId: number, input: UpdateCustomerInput): Promise<CustomerSummaryItem> {
+    const client = await appPool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const existingRes = await client.query(
+        'SELECT id, name, phone, normalized_phone, address, state, state_code FROM customers WHERE id = $1 AND archived_at IS NULL FOR UPDATE',
+        [customerId]
+      );
+      if (existingRes.rows.length === 0) {
+        throw new AppError('Customer not found.', 404, 'CUSTOMER_NOT_FOUND');
+      }
+
+      const updates: string[] = [];
+      const params: unknown[] = [];
+      const pushUpdate = (col: string, val: unknown) => {
+        params.push(val);
+        updates.push(`${col} = $${params.length}`);
+      };
+
+      if (input.name !== undefined) {
+        const rawName = input.name.trim();
+        if (!rawName) {
+          throw new AppError('Customer name is required.', 400, 'VALIDATION_ERROR');
+        }
+        pushUpdate('name', rawName);
+        pushUpdate('normalized_name', this.normalizeName(rawName));
+      }
+
+      if (input.phone !== undefined) {
+        const normPhone = this.normalizeCustomerPhone(input.phone);
+        const rawPhone = input.phone ? input.phone.trim() || null : null;
+
+        if (normPhone) {
+          const phoneConflict = await client.query(
+            'SELECT id, name FROM customers WHERE normalized_phone = $1 AND id != $2 FOR UPDATE',
+            [normPhone, customerId]
+          );
+          if (phoneConflict.rows.length > 0) {
+            throw new AppError(
+              `Phone number ${rawPhone || normPhone} is already attached to customer #${phoneConflict.rows[0].id} (${phoneConflict.rows[0].name}).`,
+              409,
+              'PHONE_ALREADY_ATTACHED'
+            );
+          }
+        }
+        pushUpdate('phone', rawPhone);
+        pushUpdate('normalized_phone', normPhone);
+      }
+
+      if (input.address !== undefined) {
+        pushUpdate('address', input.address ? input.address.trim() || null : null);
+      }
+
+      if (input.state !== undefined || input.stateCode !== undefined) {
+        const clearingOnlyState =
+          (input.state === null || (typeof input.state === 'string' && input.state.trim() === '')) &&
+          (input.stateCode === undefined ||
+            input.stateCode === null ||
+            (typeof input.stateCode === 'string' && input.stateCode.trim() === ''));
+
+        if (clearingOnlyState) {
+          pushUpdate('state', null);
+          pushUpdate('state_code', null);
+        } else {
+          const resolved = resolveValidatedState({
+            state: input.state,
+            stateCode: input.stateCode,
+            required: false,
+            fieldLabel: 'Customer',
+          });
+          pushUpdate('state', resolved.state);
+          pushUpdate('state_code', resolved.stateCode);
+        }
+      }
+
+      if (updates.length > 0) {
+        updates.push('updated_at = NOW()');
+        params.push(customerId);
+        await client.query(
+          `UPDATE customers SET ${updates.join(', ')} WHERE id = $${params.length}`,
+          params
+        );
+      }
+
+      const detail = await this.getCustomerDetailWithDb(client, customerId);
+      await client.query('COMMIT');
+      return detail!;
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Ignore rollback failure
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async getCustomerDetailWithDb(
+    db: IdempotencyDbClient,
+    customerId: number
+  ): Promise<CustomerSummaryItem | null> {
     const query = `
       WITH customer_tx AS (
         SELECT
@@ -295,6 +505,8 @@ export class KhataService {
         c.name,
         c.phone,
         c.address,
+        c.state,
+        c.state_code,
         COALESCE(tx.total_udhar, 0)::numeric AS total_udhar,
         COALESCE(pay.total_received, 0)::numeric AS total_received,
         GREATEST(COALESCE(tx.total_udhar, 0) - COALESCE(alloc.total_allocated, 0), 0)::numeric AS outstanding,
@@ -303,10 +515,10 @@ export class KhataService {
       LEFT JOIN customer_tx tx ON tx.customer_id = c.id
       LEFT JOIN customer_alloc alloc ON alloc.customer_id = c.id
       LEFT JOIN customer_pay pay ON pay.customer_id = c.id
-      WHERE c.id = $1
+      WHERE c.id = $1 AND c.archived_at IS NULL
     `;
 
-    const result = await appPool.query(query, [customerId]);
+    const result = await db.query(query, [customerId]);
     if (result.rows.length === 0) return null;
 
     const row = result.rows[0];
@@ -319,11 +531,20 @@ export class KhataService {
       name: row.name,
       phone: row.phone,
       address: row.address || null,
+      state: row.state || null,
+      state_code: row.state_code || null,
       totalUdhar: udhar,
       totalReceived: received,
       outstanding,
       lastActivity: row.last_activity,
     };
+  }
+
+  /**
+   * Customer Profile & Balance Summary
+   */
+  public async getCustomerDetail(customerId: number): Promise<CustomerSummaryItem | null> {
+    return this.getCustomerDetailWithDb(appPool, customerId);
   }
 
   /**
@@ -424,54 +645,92 @@ export class KhataService {
   }
 
   /**
-   * Creates a new Udhar Transaction with line items and optional initial payment atomically
-   * Supports Idempotency-Key and safe customer resolution
+   * Creates a new Udhar Transaction with line items and optional initial payment atomically.
+   * Supports 24-hour TTL Idempotency-Key and safe customer resolution.
    */
   public async createTransaction(input: CreateTransactionInput) {
     if (!input.items || input.items.length === 0) {
       throw new AppError('At least one item is required for an Udhar transaction.', 400, 'VALIDATION_ERROR');
     }
 
+    const rawName = input.customer.name.trim();
+    if (!rawName) {
+      throw new AppError('Customer name is required.', 400, 'VALIDATION_ERROR');
+    }
+
+    const normName = this.normalizeName(rawName);
+    const normPhone = this.normalizeCustomerPhone(input.customer.phone);
+    const custAddr = input.customer.address ? input.customer.address.trim() || null : null;
+    const resolvedCustomerState = resolveValidatedState({
+      state: input.customer.state,
+      stateCode: input.customer.stateCode,
+      required: false,
+      fieldLabel: 'Customer',
+    });
+
+    const parsedItems = input.items.map((item) => {
+      const prodId = Number(item.productId);
+      const qtyDec = validateDecimalQuantityInput(item.quantity, `Item for product ID ${prodId} quantity`);
+      const sellPriceDec = validateMoneyInput(item.sellingPrice, `Selling price for product ID ${prodId}`);
+      return {
+        prodId,
+        qtyDec,
+        sellPriceDec,
+      };
+    });
+
+    const initPayDec =
+      input.initialPayment !== undefined && input.initialPayment !== null && input.initialPayment !== ''
+        ? validateMoneyInput(input.initialPayment, 'Initial payment')
+        : null;
+
+    const idempotencyKey = input.idempotencyKey?.trim() || null;
+    const requestHash = idempotencyKey
+      ? hashIdempotencyPayload({
+          customer: {
+            id: input.customer.id ?? null,
+            name: normName,
+            phone: normPhone,
+            address: custAddr,
+            state: resolvedCustomerState.state,
+            stateCode: resolvedCustomerState.stateCode,
+          },
+          items: parsedItems.map((it) => ({
+            productId: it.prodId,
+            quantity: it.qtyDec.toFixed(2),
+            sellingPrice: it.sellPriceDec.toFixed(2),
+          })),
+          initialPayment: initPayDec ? initPayDec.toFixed(2) : null,
+          note: input.note?.trim() || null,
+        })
+      : null;
+
     const client = await appPool.connect();
     try {
       await client.query('BEGIN');
 
-      // Idempotency check
-      if (input.idempotencyKey) {
-        const idempRes = await client.query(
-          'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
-          [input.idempotencyKey]
+      if (idempotencyKey && requestHash) {
+        await acquireIdempotencyLock(client, idempotencyKey);
+        const existingIdemp = await checkIdempotencyRecord(
+          client,
+          idempotencyKey,
+          'CREATE_TRANSACTION',
+          requestHash
         );
-        if (idempRes.rows.length > 0) {
-          const row = idempRes.rows[0];
-          const currentHash = this.hashPayload({
-            customer: input.customer,
-            items: input.items,
-            initialPayment: input.initialPayment,
-            note: input.note,
-          });
-          if (row.request_hash === currentHash) {
-            await client.query('COMMIT');
-            return row.response_body;
-          } else {
-            throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
-          }
+        if (existingIdemp.found && !existingIdemp.expired) {
+          await client.query('COMMIT');
+          return existingIdemp.responseBody;
         }
+        await cleanupExpiredIdempotencyKeys(client, 100);
       }
 
       // 1. Resolve Customer safely
       let customerId: number;
-      const rawName = input.customer.name.trim();
-      if (!rawName) throw new AppError('Customer name is required.', 400, 'VALIDATION_ERROR');
-
-      const normName = this.normalizeName(rawName);
-      const normPhone = this.normalizeCustomerPhone(input.customer.phone);
-      const custAddr = input.customer.address ? input.customer.address.trim() : null;
 
       if (input.customer.id) {
         // Explicitly selected customer
         const custRes = await client.query(
-          'SELECT id, name, phone, normalized_phone FROM customers WHERE id = $1 FOR UPDATE',
+          'SELECT id, name, phone, normalized_phone, state, state_code FROM customers WHERE id = $1 FOR UPDATE',
           [input.customer.id]
         );
         if (custRes.rows.length === 0) {
@@ -506,7 +765,7 @@ export class KhataService {
         }
         if (custAddr) {
           await client.query(
-            'UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2 AND (address IS NULL OR address = \'\')',
+            "UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2 AND (address IS NULL OR address = '')",
             [custAddr, existing.id]
           );
         }
@@ -533,15 +792,12 @@ export class KhataService {
         if (matchedCustomer) {
           customerId = parseInt(matchedCustomer.id, 10);
         } else if (normPhone) {
-          // Phone provided, but no customer found with this phone yet.
-          // Check if exactly one customer with matching normalized name exists and currently has NO phone
           const nameMatches = await client.query(
             'SELECT id, name, phone, normalized_phone FROM customers WHERE normalized_name = $1 FOR UPDATE',
             [normName]
           );
 
           if (nameMatches.rows.length === 1 && !nameMatches.rows[0].phone) {
-            // Exactly one existing customer with no phone: safely attach phone under row lock!
             const existingCust = nameMatches.rows[0];
             await client.query(
               'UPDATE customers SET phone = $1, normalized_phone = $2, updated_at = NOW() WHERE id = $3',
@@ -549,14 +805,12 @@ export class KhataService {
             );
             customerId = parseInt(existingCust.id, 10);
           } else if (nameMatches.rows.length > 0 && nameMatches.rows.some((c) => c.phone !== null)) {
-            // Name matches someone with a different phone -> reject to prevent accidental merge
             throw new AppError(
               `A customer named "${rawName}" already exists with a different phone number. Please select the customer explicitly or verify identity.`,
               409,
               'CUSTOMER_NAME_CONFLICT'
             );
           } else if (nameMatches.rows.length > 1) {
-            // Multiple customers with the same name -> ambiguous
             throw new AppError(
               `Multiple customers found matching "${rawName}". Please specify customer ID or phone to disambiguate.`,
               409,
@@ -568,32 +822,36 @@ export class KhataService {
               }))
             );
           } else {
-            // 0 matches: safe to insert new customer with the phone
             const newCust = await client.query(
-              `INSERT INTO customers (name, normalized_name, phone, normalized_phone, address, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+              `INSERT INTO customers (name, normalized_name, phone, normalized_phone, address, state, state_code, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
                RETURNING id`,
-              [rawName, normName, input.customer.phone ? input.customer.phone.trim() : null, normPhone, custAddr]
+              [
+                rawName,
+                normName,
+                input.customer.phone ? input.customer.phone.trim() : null,
+                normPhone,
+                custAddr,
+                resolvedCustomerState.state,
+                resolvedCustomerState.stateCode,
+              ]
             );
             customerId = parseInt(newCust.rows[0].id, 10);
           }
         } else {
-          // No phone provided. Search by exact normalized name
           const nameMatches = await client.query(
             'SELECT id, name, phone, address FROM customers WHERE normalized_name = $1 FOR UPDATE',
             [normName]
           );
           if (nameMatches.rows.length === 1) {
-            // Exactly one match: safely reuse
             customerId = parseInt(nameMatches.rows[0].id, 10);
             if (custAddr && !nameMatches.rows[0].address) {
-              await client.query(
-                'UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2',
-                [custAddr, customerId]
-              );
+              await client.query('UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2', [
+                custAddr,
+                customerId,
+              ]);
             }
           } else if (nameMatches.rows.length > 1) {
-            // Ambiguous matches: reject with 409 AMBIGUOUS_CUSTOMER_MATCH
             throw new AppError(
               `Multiple customers found matching "${rawName}". Please specify customer ID or phone.`,
               409,
@@ -605,12 +863,11 @@ export class KhataService {
               }))
             );
           } else {
-            // 0 matches: create new customer without phone
             const newCust = await client.query(
-              `INSERT INTO customers (name, normalized_name, phone, normalized_phone, address, created_at, updated_at)
-               VALUES ($1, $2, NULL, NULL, $3, NOW(), NOW())
+              `INSERT INTO customers (name, normalized_name, phone, normalized_phone, address, state, state_code, created_at, updated_at)
+               VALUES ($1, $2, NULL, NULL, $3, $4, $5, NOW(), NOW())
                RETURNING id`,
-              [rawName, normName, custAddr]
+              [rawName, normName, custAddr, resolvedCustomerState.state, resolvedCustomerState.stateCode]
             );
             customerId = parseInt(newCust.rows[0].id, 10);
           }
@@ -621,6 +878,15 @@ export class KhataService {
         await client.query(
           `UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2 AND (address IS NULL OR address = '')`,
           [custAddr, customerId]
+        );
+      }
+
+      if (resolvedCustomerState.stateCode) {
+        await client.query(
+          `UPDATE customers
+           SET state = $1, state_code = $2, updated_at = NOW()
+           WHERE id = $3 AND (state_code IS NULL OR state_code = '')`,
+          [resolvedCustomerState.state, resolvedCustomerState.stateCode, customerId]
         );
       }
 
@@ -636,34 +902,36 @@ export class KhataService {
 
       let serverComputedTotal = new Decimal(0);
 
-      for (const item of input.items) {
-        const prodId = Number(item.productId);
-        const qtyDec = validateDecimalQuantityInput(item.quantity, `Item for product ID ${prodId} quantity`);
-        const sellPriceDec = validateMoneyInput(item.sellingPrice, `Selling price for product ID ${prodId}`);
-
+      for (const parsedItem of parsedItems) {
         const prodRes = await client.query(
           'SELECT id, name, buying_price, archived_at FROM products WHERE id = $1',
-          [prodId]
+          [parsedItem.prodId]
         );
 
         if (prodRes.rows.length === 0) {
-          throw new AppError(`Product with ID ${prodId} does not exist.`, 404, 'PRODUCT_NOT_FOUND');
+          throw new AppError(`Product with ID ${parsedItem.prodId} does not exist.`, 404, 'PRODUCT_NOT_FOUND');
         }
 
         const product = prodRes.rows[0];
         if (product.archived_at) {
-          throw new AppError(`Product "${product.name}" is archived and cannot be selected for new Udhar.`, 400, 'PRODUCT_ARCHIVED');
+          throw new AppError(
+            `Product "${product.name}" is archived and cannot be selected for new Udhar.`,
+            400,
+            'PRODUCT_ARCHIVED'
+          );
         }
 
-        const lineTotalDec = qtyDec.times(sellPriceDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+        const lineTotalDec = parsedItem.qtyDec
+          .times(parsedItem.sellPriceDec)
+          .toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
         serverComputedTotal = serverComputedTotal.plus(lineTotalDec);
 
         verifiedItems.push({
-          productId: prodId,
+          productId: parsedItem.prodId,
           nameSnapshot: product.name,
           buyingPriceSnapshot: new Decimal(product.buying_price).toFixed(2),
-          quantity: qtyDec.toFixed(2),
-          sellingPrice: sellPriceDec.toFixed(2),
+          quantity: parsedItem.qtyDec.toFixed(2),
+          sellingPrice: parsedItem.sellPriceDec.toFixed(2),
           lineTotal: lineTotalDec.toFixed(2),
         });
       }
@@ -672,12 +940,13 @@ export class KhataService {
         throw new AppError('Transaction total must be greater than zero.', 400, 'VALIDATION_ERROR');
       }
 
-      // 3. Insert udhar_transactions
+      // 3. Insert udhar_transactions using configured business date (IST)
+      const businessDate = getBusinessDateISO(env.BUSINESS_TIME_ZONE);
       const txRes = await client.query(
         `INSERT INTO udhar_transactions (customer_id, transaction_date, total_amount, note, created_at)
-         VALUES ($1, CURRENT_DATE, $2, $3, NOW())
+         VALUES ($1, $2::DATE, $3, $4, NOW())
          RETURNING id, transaction_date, total_amount, note, created_at`,
-        [customerId, serverComputedTotal.toFixed(2), input.note || null]
+        [customerId, businessDate, serverComputedTotal.toFixed(2), input.note || null]
       );
       const transactionId = parseInt(txRes.rows[0].id, 10);
 
@@ -701,9 +970,7 @@ export class KhataService {
 
       // 5. Initial Payment Handling (if provided)
       let initialPaymentRecorded = '0.00';
-      if (input.initialPayment !== undefined && input.initialPayment !== null && input.initialPayment !== '') {
-        const initPayDec = validateMoneyInput(input.initialPayment, 'Initial payment');
-
+      if (initPayDec !== null) {
         if (initPayDec.greaterThan(serverComputedTotal)) {
           throw new AppError(
             `Initial payment (₹${initPayDec.toFixed(2)}) cannot exceed transaction total (₹${serverComputedTotal.toFixed(2)}).`,
@@ -749,46 +1016,23 @@ export class KhataService {
         remainingDue,
       };
 
-      // Save idempotency key if provided
-      if (input.idempotencyKey) {
-        const currentHash = this.hashPayload({
-          customer: input.customer,
-          items: input.items,
-          initialPayment: input.initialPayment,
-          note: input.note,
+      if (idempotencyKey && requestHash) {
+        await storeIdempotencyRecord(client, {
+          key: idempotencyKey,
+          action: 'CREATE_TRANSACTION',
+          requestHash,
+          responseStatus: 201,
+          responseBody: responsePayload,
         });
-        await client.query(
-          `INSERT INTO idempotency_keys (key, action, request_hash, response_status, response_body, created_at)
-           VALUES ($1, $2, $3, $4, $5, NOW())`,
-          [input.idempotencyKey, 'CREATE_TRANSACTION', currentHash, 201, JSON.stringify(responsePayload)]
-        );
       }
 
       await client.query('COMMIT');
       return responsePayload;
     } catch (err: unknown) {
-      await client.query('ROLLBACK');
-      const pgErr = err as { code?: string; constraint?: string };
-      if (input.idempotencyKey && pgErr?.code === '23505' && pgErr?.constraint?.includes('idempotency')) {
-        const existingKeyRes = await appPool.query(
-          'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
-          [input.idempotencyKey]
-        );
-        if (existingKeyRes.rows.length > 0) {
-          const row = existingKeyRes.rows[0];
-          const currentHash = this.hashPayload({
-            customer: input.customer,
-            items: input.items,
-            initialPayment: input.initialPayment,
-            note: input.note,
-          });
-          if (row.request_hash === currentHash) {
-            return row.response_body;
-          } else {
-            throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
-          }
-        }
-        throw new AppError('A request with this idempotency key is currently processing. Please retry in a moment.', 409, 'IDEMPOTENCY_IN_FLIGHT');
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Ignore rollback failure
       }
       throw err;
     } finally {
@@ -797,8 +1041,8 @@ export class KhataService {
   }
 
   /**
-   * Records a Customer Payment and allocates it using strict FIFO order to oldest outstanding transactions
-   * Uses exact Decimal arithmetic and idempotency protection
+   * Records a Customer Payment and allocates it using strict FIFO order to oldest outstanding transactions.
+   * Uses exact Decimal arithmetic and shared 24-hour TTL idempotency protection.
    */
   public async recordPayment(
     customerId: number,
@@ -811,33 +1055,36 @@ export class KhataService {
       throw new AppError('Payment amount must be greater than zero.', 400, 'VALIDATION_ERROR');
     }
 
+    const cleanKey = idempotencyKey?.trim() || null;
+    const requestHash = cleanKey
+      ? hashIdempotencyPayload({
+          customerId,
+          amount: payDec.toFixed(2),
+          note: note?.trim() || null,
+        })
+      : null;
+
     const client = await appPool.connect();
     try {
       await client.query('BEGIN');
 
-      // Idempotency check
-      if (idempotencyKey) {
-        const idempRes = await client.query(
-          'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
-          [idempotencyKey]
+      if (cleanKey && requestHash) {
+        await acquireIdempotencyLock(client, cleanKey);
+        const existingIdemp = await checkIdempotencyRecord(
+          client,
+          cleanKey,
+          'RECORD_PAYMENT',
+          requestHash
         );
-        if (idempRes.rows.length > 0) {
-          const row = idempRes.rows[0];
-          const currentHash = this.hashPayload({ customerId, amount: payDec.toFixed(2), note: note || null });
-          if (row.request_hash === currentHash) {
-            await client.query('COMMIT');
-            return row.response_body;
-          } else {
-            throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
-          }
+        if (existingIdemp.found && !existingIdemp.expired) {
+          await client.query('COMMIT');
+          return existingIdemp.responseBody;
         }
+        await cleanupExpiredIdempotencyKeys(client, 100);
       }
 
       // 1. Lock customer row FOR UPDATE
-      const custRes = await client.query(
-        'SELECT id, name FROM customers WHERE id = $1 FOR UPDATE',
-        [customerId]
-      );
+      const custRes = await client.query('SELECT id, name FROM customers WHERE id = $1 FOR UPDATE', [customerId]);
       if (custRes.rows.length === 0) {
         throw new AppError('Customer not found.', 404, 'CUSTOMER_NOT_FOUND');
       }
@@ -951,36 +1198,23 @@ export class KhataService {
         allocations: allocationDetails,
       };
 
-      // Save idempotency key if provided
-      if (idempotencyKey) {
-        const currentHash = this.hashPayload({ customerId, amount: payDec.toFixed(2), note: note || null });
-        await client.query(
-          `INSERT INTO idempotency_keys (key, action, request_hash, response_status, response_body, created_at)
-           VALUES ($1, $2, $3, $4, $5, NOW())`,
-          [idempotencyKey, 'RECORD_PAYMENT', currentHash, 201, JSON.stringify(responsePayload)]
-        );
+      if (cleanKey && requestHash) {
+        await storeIdempotencyRecord(client, {
+          key: cleanKey,
+          action: 'RECORD_PAYMENT',
+          requestHash,
+          responseStatus: 201,
+          responseBody: responsePayload,
+        });
       }
 
       await client.query('COMMIT');
       return responsePayload;
     } catch (err: unknown) {
-      await client.query('ROLLBACK');
-      const pgErr = err as { code?: string; constraint?: string };
-      if (idempotencyKey && pgErr?.code === '23505' && pgErr?.constraint?.includes('idempotency')) {
-        const existingKeyRes = await appPool.query(
-          'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
-          [idempotencyKey]
-        );
-        if (existingKeyRes.rows.length > 0) {
-          const row = existingKeyRes.rows[0];
-          const currentHash = this.hashPayload({ customerId, amount: payDec.toFixed(2), note: note || null });
-          if (row.request_hash === currentHash) {
-            return row.response_body;
-          } else {
-            throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
-          }
-        }
-        throw new AppError('A request with this idempotency key is currently processing. Please retry in a moment.', 409, 'IDEMPOTENCY_IN_FLIGHT');
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Ignore rollback failure
       }
       throw err;
     } finally {

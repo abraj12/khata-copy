@@ -36,6 +36,18 @@ import {
 } from './normalBillsApi.js';
 import Decimal from 'decimal.js';
 import { apiClient } from '../../lib/apiClient.js';
+import { fetchQuotationSettings } from '../quotations/quotationApi.js';
+import {
+  INDIAN_STATES,
+  getStateByCode,
+  resolveCustomerStateSelection,
+} from '../../lib/indianStates.js';
+import { getBusinessDateISO } from '../../utils/businessDate.js';
+import {
+  applyCatalogProductToDraftLine,
+  validateQuantityInput,
+  validateSellingRateInput,
+} from '../../utils/lineItemDraft.js';
 
 interface ProductItem {
   id: number;
@@ -49,6 +61,8 @@ interface CustomerItem {
   name: string;
   phone: string;
   address?: string | null;
+  state?: string | null;
+  state_code?: string | null;
 }
 
 interface FormLineItem {
@@ -63,34 +77,38 @@ interface FormLineItem {
 }
 
 function getTodayLocalDate(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return getBusinessDateISO();
 }
 
 export const NormalBillingView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'create' | 'history'>('create');
 
   // Form Header States
+  const [companyProfile, setCompanyProfile] = useState<{
+    name: string;
+    address: string;
+    gstin: string | null;
+    phone: string | null;
+    state: string;
+    stateCode: string;
+  } | null>(null);
   const [billNumber, setBillNumber] = useState('');
   const [isManualBillNumber, setIsManualBillNumber] = useState(false);
   const [billDate, setBillDate] = useState(getTodayLocalDate);
-  const [state, setState] = useState('Bihar');
-  const [stateCode, setStateCode] = useState('10');
+  const [state, setState] = useState('');
+  const [stateCode, setStateCode] = useState('');
   const [transportationMode, setTransportationMode] = useState('');
   const [vehicleNumber, setVehicleNumber] = useState('');
   const [dateOfSupply, setDateOfSupply] = useState(getTodayLocalDate);
-  const [placeOfSupply, setPlaceOfSupply] = useState('Gopalganj, Bihar');
+  const [placeOfSupply, setPlaceOfSupply] = useState('');
 
   // Customer states
   const [customerId, setCustomerId] = useState<number | null>(null);
   const [customerName, setCustomerName] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
-  const [customerState, setCustomerState] = useState('Bihar');
-  const [customerStateCode, setCustomerStateCode] = useState('10');
+  const [customerState, setCustomerState] = useState('');
+  const [customerStateCode, setCustomerStateCode] = useState('');
 
   // Line items
   const [items, setItems] = useState<FormLineItem[]>([
@@ -118,7 +136,7 @@ export const NormalBillingView: React.FC = () => {
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
   const handleDirectPrint = (bill: NormalBillRecord) => {
-    setPreviewInvoice(mapNormalBillToInvoiceProps(bill));
+    setPreviewInvoice(mapNormalBillToInvoiceProps(bill, companyProfile || undefined));
     setAutoPrintAfterPreview(true);
   };
 
@@ -175,6 +193,26 @@ export const NormalBillingView: React.FC = () => {
 
   useEffect(() => {
     fetchNextNumber();
+    (async () => {
+      try {
+        const settings = await fetchQuotationSettings();
+        if (settings) {
+          setCompanyProfile({
+            name: settings.company_name,
+            address: settings.address,
+            gstin: settings.gstin,
+            phone: settings.phone,
+            state: settings.state,
+            stateCode: settings.state_code,
+          });
+          setState(settings.state || '');
+          setStateCode(settings.state_code || '');
+          setPlaceOfSupply((prev) => prev || settings.state || '');
+        }
+      } catch (err) {
+        console.warn('Could not load company profile for normal billing:', err);
+      }
+    })();
   }, []);
 
   // 2. Load existing products from catalogue for search/selection
@@ -313,6 +351,9 @@ export const NormalBillingView: React.FC = () => {
     setCustomerName(customer.name);
     setCustomerPhone(customer.phone || '');
     setCustomerAddress(customer.address || '');
+    const resolvedState = resolveCustomerStateSelection(customer);
+    setCustomerState(resolvedState.state);
+    setCustomerStateCode(resolvedState.stateCode);
     setIsCustomerDropdownOpen(false);
   };
 
@@ -352,19 +393,16 @@ export const NormalBillingView: React.FC = () => {
   };
 
   const handleSelectProduct = (itemId: string, product: ProductItem) => {
-    const rawHsn = product.hsn_code || (product as any).hsnCode;
-    const cleanHsn = rawHsn ? String(rawHsn).trim() : null;
-
     setItems((prev) =>
       prev.map((item) => {
         if (item.id === itemId) {
+          const updated = applyCatalogProductToDraftLine(item, product);
           return {
             ...item,
-            productId: Number(product.id),
-            description: product.name,
-            // If product has HSN available, autofill it; shopkeeper can still freely edit it
-            hsnCode: cleanHsn !== null && cleanHsn !== '' ? cleanHsn : item.hsnCode || '',
-            rate: product.buying_price ? String(product.buying_price) : item.rate,
+            productId: updated.productId,
+            description: updated.description,
+            hsnCode: updated.hsnCode,
+            rate: updated.rate,
           };
         }
         return item;
@@ -427,6 +465,7 @@ export const NormalBillingView: React.FC = () => {
       vehicleNumber,
       dateOfSupply,
       placeOfSupply,
+      company: companyProfile || { state, stateCode },
       customer: {
         name: customerName,
         address: customerAddress,
@@ -464,6 +503,9 @@ export const NormalBillingView: React.FC = () => {
     customerPhone,
     customerState,
     customerStateCode,
+    companyProfile,
+    state,
+    stateCode,
     calculationSummary,
   ]);
 
@@ -480,14 +522,10 @@ export const NormalBillingView: React.FC = () => {
       if (!itm.description.trim()) {
         return `Item #${i + 1}: Description of goods is required.`;
       }
-      const q = parseFloat(itm.quantity);
-      if (isNaN(q) || q <= 0) {
-        return `Item #${i + 1}: Quantity must be greater than zero.`;
-      }
-      const r = parseFloat(itm.rate);
-      if (isNaN(r) || r < 0) {
-        return `Item #${i + 1}: Rate cannot be negative.`;
-      }
+      const qtyErr = validateQuantityInput(itm.quantity, `Item #${i + 1} quantity`);
+      if (qtyErr) return qtyErr;
+      const rateErr = validateSellingRateInput(itm.rate, `Item #${i + 1} rate`);
+      if (rateErr) return rateErr;
     }
     return null;
   };
@@ -524,8 +562,8 @@ export const NormalBillingView: React.FC = () => {
         customerName: customerName.trim(),
         customerAddress: customerAddress.trim() || null,
         customerPhone: customerPhone.trim() || null,
-        customerState,
-        customerStateCode,
+        customerState: customerState.trim() || null,
+        customerStateCode: customerStateCode.trim() || null,
         items: items.map((item) => ({
           productId: item.productId ? Number(item.productId) : null,
           description: item.description.trim(),
@@ -571,8 +609,8 @@ export const NormalBillingView: React.FC = () => {
         customerName: customerName.trim(),
         customerAddress: customerAddress.trim() || null,
         customerPhone: customerPhone.trim() || null,
-        customerState,
-        customerStateCode,
+        customerState: customerState.trim() || null,
+        customerStateCode: customerStateCode.trim() || null,
         items: items.map((item) => ({
           productId: item.productId ? Number(item.productId) : null,
           description: item.description.trim(),
@@ -598,10 +636,15 @@ export const NormalBillingView: React.FC = () => {
 
   // Reset form to clean state
   const handleResetForm = () => {
+    idempotencyKeyRef.current =
+      typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+    setSuccessRecord(null);
     setCustomerName('');
     setCustomerId(null);
     setCustomerAddress('');
     setCustomerPhone('');
+    setCustomerState('');
+    setCustomerStateCode('');
     setTransportationMode('');
     setVehicleNumber('');
     const today = getTodayLocalDate();
@@ -706,7 +749,7 @@ export const NormalBillingView: React.FC = () => {
                 <span>Section A: Bill Information</span>
               </div>
               <span className="text-[11px] font-semibold text-[var(--khata-text-muted)]">
-                Company: Algions AI Labs Private Limited
+                Company: {companyProfile?.name || 'Company Tax Profile'}
               </span>
             </div>
 
@@ -770,29 +813,33 @@ export const NormalBillingView: React.FC = () => {
                 />
               </div>
 
-              {/* State */}
+              {/* Seller State (from Company Settings) */}
               <div>
                 <label className="block text-xs font-bold text-[var(--khata-text-muted)] mb-1">
-                  State
+                  Seller State
                 </label>
                 <input
                   type="text"
                   value={state}
-                  onChange={(e) => setState(e.target.value)}
-                  className="neu-input w-full text-xs"
+                  readOnly
+                  placeholder="From Settings"
+                  className="neu-input w-full text-xs cursor-default"
+                  style={{ background: 'var(--khata-surface-inset)' }}
                 />
               </div>
 
-              {/* State Code */}
+              {/* Seller State Code */}
               <div>
                 <label className="block text-xs font-bold text-[var(--khata-text-muted)] mb-1">
-                  State Code
+                  Seller State Code
                 </label>
                 <input
                   type="text"
                   value={stateCode}
-                  onChange={(e) => setStateCode(e.target.value)}
-                  className="neu-input w-full text-xs font-mono"
+                  readOnly
+                  placeholder="--"
+                  className="neu-input w-full text-xs font-mono cursor-default"
+                  style={{ background: 'var(--khata-surface-inset)' }}
                 />
               </div>
 
@@ -1003,17 +1050,33 @@ export const NormalBillingView: React.FC = () => {
               </div>
 
               {/* Customer State & State Code */}
-              <div className="grid grid-cols-2 gap-2">
-                <div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="sm:col-span-2">
                   <label className="block text-xs font-bold text-[var(--khata-text-muted)] mb-1">
-                    State
+                    State (Optional)
                   </label>
-                  <input
-                    type="text"
-                    value={customerState}
-                    onChange={(e) => setCustomerState(e.target.value)}
+                  <select
+                    value={customerStateCode}
+                    onChange={(e) => {
+                      const code = e.target.value;
+                      if (!code) {
+                        setCustomerStateCode('');
+                        setCustomerState('');
+                        return;
+                      }
+                      const matched = getStateByCode(code);
+                      setCustomerStateCode(code);
+                      setCustomerState(matched ? matched.name : '');
+                    }}
                     className="neu-input w-full text-xs"
-                  />
+                  >
+                    <option value="">None / Not specified</option>
+                    {INDIAN_STATES.map((s) => (
+                      <option key={s.code} value={s.code}>
+                        {s.code} – {s.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-[var(--khata-text-muted)] mb-1">
@@ -1022,8 +1085,16 @@ export const NormalBillingView: React.FC = () => {
                   <input
                     type="text"
                     value={customerStateCode}
-                    onChange={(e) => setCustomerStateCode(e.target.value)}
-                    className="neu-input w-full text-xs font-mono"
+                    onChange={(e) => {
+                      const code = e.target.value.replace(/\D/g, '').slice(0, 2);
+                      setCustomerStateCode(code);
+                      const matched = getStateByCode(code);
+                      if (matched) setCustomerState(matched.name);
+                      else if (!code) setCustomerState('');
+                    }}
+                    maxLength={2}
+                    placeholder="--"
+                    className="neu-input w-full text-xs font-mono text-center"
                   />
                 </div>
               </div>
@@ -1160,7 +1231,7 @@ export const NormalBillingView: React.FC = () => {
                         <datalist id={`normal-product-options-${item.id}`}>
                           {availableProducts.map((p) => (
                             <option key={p.id} value={p.name}>
-                              {p.hsn_code ? `HSN: ${p.hsn_code} | ` : ''}₹{p.buying_price}
+                              {p.hsn_code ? `HSN: ${p.hsn_code} | ` : ''}Ref: ₹{p.buying_price}
                             </option>
                           ))}
                         </datalist>
@@ -1215,8 +1286,8 @@ export const NormalBillingView: React.FC = () => {
                                         </span>
                                       )}
                                     </div>
-                                    <span className="text-xs font-bold text-[var(--khata-accent)] font-mono ml-2">
-                                      ₹{p.buying_price}
+                                    <span className="text-xs font-bold text-[var(--khata-text-muted)] font-mono ml-2">
+                                      Ref: ₹{p.buying_price}
                                     </span>
                                   </button>
                                 ))}
@@ -1254,8 +1325,10 @@ export const NormalBillingView: React.FC = () => {
                         </label>
                         <input
                           type="number"
-                          step="0.001"
-                          min="0.001"
+                          step="0.01"
+                          min="0.01"
+                          max="1000000"
+                          inputMode="decimal"
                           value={item.quantity}
                           onChange={(e) => handleItemChange(item.id, 'quantity', e.target.value)}
                           placeholder="1"
@@ -1482,92 +1555,160 @@ export const NormalBillingView: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="border-b border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-[var(--khata-text-muted)] font-black uppercase text-[10px] tracking-wider">
-                      <th className="p-3">Bill No.</th>
-                      <th className="p-3">Date</th>
-                      <th className="p-3">Customer</th>
-                      <th className="p-3">Items</th>
-                      <th className="p-3 text-right">Total Amount</th>
-                      <th className="p-3 text-center">Status</th>
-                      <th className="p-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[var(--khata-border)]">
-                    {historyBills.map((bill) => (
-                      <tr
-                        key={bill.id}
-                        className="hover:bg-[var(--khata-surface-inset)] transition group"
-                      >
-                        <td className="p-3 font-mono font-black text-[var(--khata-text)]">
-                          {bill.bill_number}
-                        </td>
-                        <td className="p-3 text-[var(--khata-text-muted)] font-mono">
-                          {bill.bill_date}
-                        </td>
-                        <td className="p-3">
-                          <div className="font-bold text-[var(--khata-text)]">{bill.customer_name}</div>
-                          {bill.customer_phone && (
-                            <div className="text-[10px] text-[var(--khata-text-muted)] font-mono">
-                              {bill.customer_phone}
-                            </div>
-                          )}
-                        </td>
-                        <td className="p-3 text-[var(--khata-text-muted)]">
-                          {bill.items?.length || 0} items
-                        </td>
-                        <td className="p-3 text-right font-black text-[var(--khata-text)]">
-                          ₹{Number(bill.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        </td>
-                        <td className="p-3 text-center">
-                          <span
-                            className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
-                              bill.pdf_status === 'uploaded'
-                                ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
-                                : 'bg-neutral-500/10 text-neutral-600 border border-neutral-500/20'
-                            }`}
-                          >
-                            {bill.pdf_status === 'uploaded' ? 'Saved (R2)' : 'Saved (Local)'}
-                          </span>
-                        </td>
-                        <td className="p-3 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => setPreviewInvoice(mapNormalBillToInvoiceProps(bill))}
-                              className="neu-btn-secondary text-xs px-2.5 py-1 flex items-center gap-1 font-bold"
-                              title="Preview bill"
-                            >
-                              <Eye className="w-3.5 h-3.5" />
-                              <span className="hidden sm:inline">View</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDirectPrint(bill)}
-                              className="neu-btn-secondary text-xs px-2.5 py-1 flex items-center gap-1 font-bold"
-                              title="Print bill"
-                            >
-                              <Printer className="w-3.5 h-3.5" />
-                              <span className="hidden sm:inline">Print</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => downloadNormalBillPdf(bill.id, bill.bill_number)}
-                              className="neu-btn-primary text-xs px-2.5 py-1 flex items-center gap-1 font-bold"
-                              title="Download PDF"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                              <span className="hidden sm:inline">PDF</span>
-                            </button>
-                          </div>
-                        </td>
+              <>
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-[var(--khata-text-muted)] font-black uppercase text-[10px] tracking-wider">
+                        <th className="p-3">Bill No.</th>
+                        <th className="p-3">Date</th>
+                        <th className="p-3">Customer</th>
+                        <th className="p-3">Items</th>
+                        <th className="p-3 text-right">Total Amount</th>
+                        <th className="p-3 text-center">Status</th>
+                        <th className="p-3 text-right">Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y divide-[var(--khata-border)]">
+                      {historyBills.map((bill) => (
+                        <tr
+                          key={bill.id}
+                          className="hover:bg-[var(--khata-surface-inset)] transition group"
+                        >
+                          <td className="p-3 font-mono font-black text-[var(--khata-text)]">
+                            {bill.bill_number}
+                          </td>
+                          <td className="p-3 text-[var(--khata-text-muted)] font-mono">
+                            {bill.bill_date}
+                          </td>
+                          <td className="p-3">
+                            <div className="font-bold text-[var(--khata-text)]">{bill.customer_name}</div>
+                            {bill.customer_phone && (
+                              <div className="text-[10px] text-[var(--khata-text-muted)] font-mono">
+                                {bill.customer_phone}
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-3 text-[var(--khata-text-muted)]">
+                            {bill.items?.length || 0} items
+                          </td>
+                          <td className="p-3 text-right font-black text-[var(--khata-text)]">
+                            ₹{Number(bill.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          </td>
+                          <td className="p-3 text-center">
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                                bill.pdf_status === 'uploaded'
+                                  ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                                  : 'bg-neutral-500/10 text-neutral-600 border border-neutral-500/20'
+                              }`}
+                            >
+                              {bill.pdf_status === 'uploaded' ? 'Saved (R2)' : 'Saved (Local)'}
+                            </span>
+                          </td>
+                          <td className="p-3 text-right">
+                            <div className="flex flex-wrap items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setPreviewInvoice(mapNormalBillToInvoiceProps(bill, companyProfile || undefined))}
+                                className="neu-btn-secondary text-xs px-2.5 py-1 flex items-center gap-1 font-bold"
+                                title="Preview bill"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>View</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDirectPrint(bill)}
+                                className="neu-btn-secondary text-xs px-2.5 py-1 flex items-center gap-1 font-bold"
+                                title="Print bill"
+                              >
+                                <Printer className="w-3.5 h-3.5" />
+                                <span>Print</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => downloadNormalBillPdf(bill.id, bill.bill_number)}
+                                className="neu-btn-primary text-xs px-2.5 py-1 flex items-center gap-1 font-bold"
+                                title="Download PDF"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>PDF</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile Card View */}
+                <div className="md:hidden divide-y divide-[var(--khata-border)]">
+                  {historyBills.map((bill) => (
+                    <div key={bill.id} className="p-3.5 space-y-2.5 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-black text-sm text-[var(--khata-accent)]">
+                            #{bill.bill_number}
+                          </span>
+                          <span className="text-[11px] text-[var(--khata-text-muted)] font-mono">
+                            {bill.bill_date}
+                          </span>
+                        </div>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            bill.pdf_status === 'uploaded'
+                              ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                              : 'bg-neutral-500/10 text-neutral-600 border border-neutral-500/20'
+                          }`}
+                        >
+                          {bill.pdf_status === 'uploaded' ? 'Saved (R2)' : 'Saved (Local)'}
+                        </span>
+                      </div>
+                      <div>
+                        <div className="font-bold text-sm text-[var(--khata-text)]">{bill.customer_name}</div>
+                        {bill.customer_phone && (
+                          <div className="text-[11px] text-[var(--khata-text-muted)] font-mono">
+                            {bill.customer_phone}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                        <div className="font-black text-base text-[var(--khata-text)]">
+                          ₹{Number(bill.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewInvoice(mapNormalBillToInvoiceProps(bill, companyProfile || undefined))}
+                            className="neu-btn-secondary text-xs px-2.5 py-1.5 flex items-center gap-1 font-bold"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>View</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDirectPrint(bill)}
+                            className="neu-btn-secondary text-xs px-2.5 py-1.5 flex items-center gap-1 font-bold"
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                            <span>Print</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => downloadNormalBillPdf(bill.id, bill.bill_number)}
+                            className="neu-btn-primary text-xs px-2.5 py-1.5 flex items-center gap-1 font-bold"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>PDF</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
 
             {/* Pagination Controls */}
@@ -1629,7 +1770,7 @@ export const NormalBillingView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  setPreviewInvoice(mapNormalBillToInvoiceProps(successRecord));
+                  setPreviewInvoice(mapNormalBillToInvoiceProps(successRecord, companyProfile || undefined));
                 }}
                 className="neu-btn-primary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold"
               >

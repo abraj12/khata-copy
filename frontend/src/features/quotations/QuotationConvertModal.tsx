@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, ArrowRight, FileText, CheckCircle, AlertTriangle, Loader2 } from 'lucide-react';
 import { Quotation } from './quotation.types.js';
 import { convertQuotationToBill } from './quotationApi.js';
 import { formatCurrency } from '../../lib/formatters.js';
-import { INDIAN_STATES } from '../../lib/indianStates.js';
+import { INDIAN_STATES, getStateByCode } from '../../lib/indianStates.js';
+import { getBusinessDateISO } from '../../utils/businessDate.js';
 
 export interface QuotationConvertModalProps {
   isOpen: boolean;
@@ -20,15 +21,21 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
 }) => {
   const [billType, setBillType] = useState<'normal' | 'gst'>('normal');
   const [gstRateOverride, setGstRateOverride] = useState<number>(18);
-  const [selectedStateCode, setSelectedStateCode] = useState<string>(quotation?.customer_state_code || '10');
+  const [selectedStateCode, setSelectedStateCode] = useState<string>(quotation?.customer_state_code || '');
   const [force, setForce] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    setSelectedStateCode(quotation?.customer_state_code || '');
+    setForce(false);
+    setError(null);
+  }, [quotation?.id, quotation?.customer_state_code, isOpen]);
+
   if (!isOpen || !quotation) return null;
 
   const isAccepted = quotation.status === 'accepted';
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getBusinessDateISO();
   const isExpired = Boolean(quotation.valid_until && quotation.valid_until < todayStr);
   const requiresForce = !isAccepted || isExpired;
 
@@ -38,9 +45,17 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
 
     try {
       const appliedRate = (!quotation.gst_enabled && billType === 'gst') ? gstRateOverride : undefined;
-      const selectedStateObj = INDIAN_STATES.find((s) => s.code === selectedStateCode);
+
+
+      const selectedStateObj = getStateByCode(selectedStateCode);
+
       const custState = quotation.customer_state || selectedStateObj?.name;
       const custStateCode = quotation.customer_state_code || selectedStateCode;
+      if (billType === 'gst' && (!custStateCode || !custState)) {
+        setError('Please select the customer state for GST tax calculation.');
+        setIsSubmitting(false);
+        return;
+      }
       const result = await convertQuotationToBill(quotation.id, billType, force, appliedRate, custState, custStateCode);
       onConverted(result.billType, result.billId, result.billNumber);
       onClose();
@@ -211,6 +226,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
               onChange={(e) => setSelectedStateCode(e.target.value)}
               className="neu-input w-full text-xs font-medium"
             >
+              <option value="">Select customer state</option>
               {INDIAN_STATES.map((s) => (
                 <option key={s.code} value={s.code}>
                   {s.code} – {s.name}
@@ -229,7 +245,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
             <p className="text-[11px] text-[var(--khata-text-muted)]">
               This quotation was created without GST. Select the tax rate to apply for the tax invoice:
             </p>
-            <div className="grid grid-cols-4 gap-2 pt-1">
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 pt-1">
               {[0, 5, 12, 18, 28].map((rate) => (
                 <button
                   key={rate}

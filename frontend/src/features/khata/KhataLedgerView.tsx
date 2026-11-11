@@ -25,6 +25,7 @@ import { SearchablePicker } from '../../components/SearchablePicker.js';
 import { OfflineBillModal } from '../offlineBills/OfflineBillModal.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { resolveImageUrl } from '../products/productsApi.js';
+import { INDIAN_STATES, getStateByCode } from '../../lib/indianStates.js';
 
 interface SummaryData {
   totalCustomers: number | string;
@@ -36,6 +37,8 @@ interface CustomerListItem {
   id: number;
   name: string;
   phone: string | null;
+  state?: string | null;
+  state_code?: string | null;
   totalUdhar: number | string;
   totalReceived: number | string;
   outstanding: number | string;
@@ -106,6 +109,8 @@ interface CustomerHistoryData {
     id: number;
     name: string;
     phone: string | null;
+    state?: string | null;
+    state_code?: string | null;
     totalUdhar: number | string;
     totalReceived: number | string;
     outstanding: number | string;
@@ -165,6 +170,8 @@ export const KhataLedgerView: React.FC = () => {
   const [selectedExistingCustomer, setSelectedExistingCustomer] = useState<CustomerListItem | null>(null);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [newCustomerState, setNewCustomerState] = useState('');
+  const [newCustomerStateCode, setNewCustomerStateCode] = useState('');
   const [udharLines, setUdharLines] = useState<UdharFormLine[]>([
     { lineId: generateLineId(), productId: '', selectedProduct: null, quantity: '1', sellingPrice: '' },
   ]);
@@ -178,6 +185,8 @@ export const KhataLedgerView: React.FC = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
   const [activeCustomerDetailId, setActiveCustomerDetailId] = useState<number | null>(null);
   const [customerHistory, setCustomerHistory] = useState<CustomerHistoryData | null>(null);
+  const [detailStateCode, setDetailStateCode] = useState<string>('');
+  const [isSavingCustomerState, setIsSavingCustomerState] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [expandedTxIds, setExpandedTxIds] = useState<Set<number>>(new Set());
 
@@ -363,6 +372,7 @@ export const KhataLedgerView: React.FC = () => {
       // Verify customer ID matches
       if (payload.customer && payload.customer.id === customerId) {
         setCustomerHistory(payload);
+        setDetailStateCode(payload.customer.state_code || '');
       }
     } catch (err: unknown) {
       if ((err as Error)?.name === 'AbortError') return;
@@ -383,6 +393,31 @@ export const KhataLedgerView: React.FC = () => {
     setPaymentIdempotencyKey(generateIdempotencyKey('pay'));
     setExpandedTxIds(new Set());
     fetchCustomerHistory(customerId);
+  };
+
+  const handleSaveCustomerState = async (newCode: string) => {
+    if (!activeCustomerDetailId || !customerHistory) return;
+    const matched = newCode ? getStateByCode(newCode) : undefined;
+    setIsSavingCustomerState(true);
+    try {
+      await apiClient(`/api/v1/khata/customers/${activeCustomerDetailId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          state: matched ? matched.name : null,
+          stateCode: matched ? matched.code : null,
+        }),
+      });
+      setDetailStateCode(matched ? matched.code : '');
+      await Promise.all([
+        fetchCustomerHistory(activeCustomerDetailId),
+        fetchCustomers(debouncedSearch, 0, false),
+      ]);
+      showNotification('success', 'Customer state updated.');
+    } catch (err) {
+      showNotification('error', (err as Error).message || 'Failed to update customer state.');
+    } finally {
+      setIsSavingCustomerState(false);
+    }
   };
 
   const handleOpenNewUdharModal = () => {
@@ -479,6 +514,8 @@ export const KhataLedgerView: React.FC = () => {
     setSelectedExistingCustomer(customer);
     setNewCustomerName('');
     setNewCustomerPhone('');
+    setNewCustomerState('');
+    setNewCustomerStateCode('');
   };
 
   const handleClearCustomer = () => {
@@ -496,7 +533,13 @@ export const KhataLedgerView: React.FC = () => {
     setUdharFormError(null);
 
     // Validate customer
-    let customerPayload: { id: number | null; name: string; phone: string | null };
+    let customerPayload: {
+      id: number | null;
+      name: string;
+      phone: string | null;
+      state?: string | null;
+      stateCode?: string | null;
+    };
     if (selectedExistingCustomer) {
       customerPayload = {
         id: selectedExistingCustomer.id,
@@ -512,6 +555,8 @@ export const KhataLedgerView: React.FC = () => {
         id: null,
         name: newCustomerName.trim(),
         phone: newCustomerPhone.trim() || null,
+        state: newCustomerState.trim() || null,
+        stateCode: newCustomerStateCode.trim() || null,
       };
     }
 
@@ -605,6 +650,8 @@ export const KhataLedgerView: React.FC = () => {
       setSelectedExistingCustomer(null);
       setNewCustomerName('');
       setNewCustomerPhone('');
+      setNewCustomerState('');
+      setNewCustomerStateCode('');
       setUdharLines([
         { lineId: generateLineId(), productId: '', selectedProduct: null, quantity: '1', sellingPrice: '' },
       ]);
@@ -841,7 +888,67 @@ export const KhataLedgerView: React.FC = () => {
           </div>
         ) : (
           <div>
-            <div className="overflow-x-auto">
+            {/* Mobile Card List (sm:hidden) */}
+            <div className="sm:hidden divide-y divide-[var(--khata-border)]">
+              {customers.map((c) => {
+                const outDec = safeDecimal(c.outstanding);
+                const isSettled = outDec.lessThanOrEqualTo(0);
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => handleOpenCustomerDetail(c.id)}
+                    className="w-full text-left p-4 space-y-2 hover:bg-[var(--khata-surface-inset)]/70 transition-colors"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-bold text-sm text-[var(--khata-text)] truncate">{c.name}</div>
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--khata-text-muted)] mt-0.5">
+                          {c.phone && <span className="font-mono">{c.phone}</span>}
+                          {c.state && (
+                            <span className="px-1.5 py-0.5 rounded bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] font-medium">
+                              {c.state_code ? `${c.state_code} · ` : ''}{c.state}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <span
+                        className={`neu-badge flex-shrink-0 ${
+                          isSettled ? 'neu-badge-success' : 'neu-badge-danger'
+                        }`}
+                      >
+                        {isSettled ? 'Settled' : 'Pending'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 pt-1 text-xs">
+                      <div>
+                        <span className="text-[10px] text-[var(--khata-text-muted)] block">Udhar</span>
+                        <span className="font-semibold tabular-numbers">{formatCurrency(c.totalUdhar)}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-[var(--khata-text-muted)] block">Received</span>
+                        <span className="font-semibold text-[var(--khata-success)] tabular-numbers">
+                          {formatCurrency(c.totalReceived)}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] text-[var(--khata-text-muted)] block">Due</span>
+                        <span
+                          className={`font-bold tabular-numbers ${
+                            isSettled ? 'text-[var(--khata-text-muted)]' : 'text-[var(--khata-danger)]'
+                          }`}
+                        >
+                          {formatCurrency(c.outstanding)}
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Desktop Table View (hidden sm:block) */}
+            <div className="hidden sm:block overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="border-b border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
@@ -873,8 +980,15 @@ export const KhataLedgerView: React.FC = () => {
                       >
                         <td className="py-3.5 px-4 sm:px-6">
                           <div className="font-semibold text-[var(--khata-text)]">{c.name}</div>
-                          {c.phone && (
-                            <div className="text-xs text-[var(--khata-text-muted)] font-mono">{c.phone}</div>
+                          {(c.phone || c.state) && (
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--khata-text-muted)] mt-0.5">
+                              {c.phone && <span className="font-mono">{c.phone}</span>}
+                              {c.state && (
+                                <span className="px-1.5 py-0.5 rounded bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] text-[10px] font-medium">
+                                  {c.state_code ? `${c.state_code} · ` : ''}{c.state}
+                                </span>
+                              )}
+                            </div>
                           )}
                         </td>
                         <td className="py-3.5 px-4 sm:px-6 text-right tabular-numbers font-medium text-[var(--khata-text)]">
@@ -1050,7 +1164,7 @@ export const KhataLedgerView: React.FC = () => {
                       </button>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
                       <div>
                         <label className="block text-xs font-semibold text-[var(--khata-text)] mb-1">
                           New Customer Name <span className="text-rose-500">*</span>
@@ -1075,6 +1189,33 @@ export const KhataLedgerView: React.FC = () => {
                           placeholder="e.g. 9876543210"
                           className="neu-input w-full text-sm font-medium"
                         />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-[var(--khata-text)] mb-1">
+                          State (Optional)
+                        </label>
+                        <select
+                          value={newCustomerStateCode}
+                          onChange={(e) => {
+                            const code = e.target.value;
+                            if (!code) {
+                              setNewCustomerStateCode('');
+                              setNewCustomerState('');
+                              return;
+                            }
+                            const matched = getStateByCode(code);
+                            setNewCustomerStateCode(code);
+                            setNewCustomerState(matched ? matched.name : '');
+                          }}
+                          className="neu-input w-full text-sm font-medium"
+                        >
+                          <option value="">Not specified</option>
+                          {INDIAN_STATES.map((s) => (
+                            <option key={s.code} value={s.code}>
+                              {s.code} – {s.name}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                     </div>
                   )}
@@ -1356,6 +1497,27 @@ export const KhataLedgerView: React.FC = () => {
                         {customerHistory.customer.phone}
                       </p>
                     )}
+                    <div className="flex flex-wrap items-center gap-2 mt-2">
+                      <label className="text-[11px] font-bold uppercase text-[var(--khata-text-muted)]">
+                        State:
+                      </label>
+                      <select
+                        value={detailStateCode}
+                        disabled={isSavingCustomerState}
+                        onChange={(e) => handleSaveCustomerState(e.target.value)}
+                        className="neu-input text-xs py-1 px-2.5 max-w-[240px]"
+                      >
+                        <option value="">Not specified (Clear state)</option>
+                        {INDIAN_STATES.map((s) => (
+                          <option key={s.code} value={s.code}>
+                            {s.code} – {s.name}
+                          </option>
+                        ))}
+                      </select>
+                      {isSavingCustomerState && (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--khata-accent)]" />
+                      )}
+                    </div>
                   </div>
 
                   <button

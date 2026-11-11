@@ -1,15 +1,24 @@
 import { useState, useEffect } from 'react';
 import './MannatTaxInvoice.css';
 
-const SHOP = Object.freeze({
-  gstin: '10ABGCA8624E1Z3',
-  mobile: '94938 40000',
+export interface MannatInvoiceCompany {
+  name?: string;
+  address?: string | null;
+  gstin?: string | null;
+  phone?: string | null;
+  state?: string | null;
+  stateCode?: string | null;
+  jurisdiction?: string | null;
+}
+
+const DEFAULT_COMPANY: MannatInvoiceCompany = Object.freeze({
   name: 'ALGIONS AI LABS PRIVATE LIMITED',
-  tradeName: 'ALGIONS AI LABS',
-  address: 'House no 145A, Ward no 26, Haziyapur, Gopalganj, Bihar - 841428',
-  state: 'Bihar',
-  stateCode: '10',
-  jurisdiction: 'Gopalganj Jurisdiction only.',
+  address: '',
+  gstin: '',
+  phone: '',
+  state: '',
+  stateCode: '',
+  jurisdiction: 'Subject to seller jurisdiction.',
 });
 
 export const numberWords = (value: number | string): string => {
@@ -96,8 +105,8 @@ export interface MannatInvoiceCustomer {
   name?: string;
   address?: string | null;
   gstin?: string | null;
-  state?: string;
-  stateCode?: string;
+  state?: string | null;
+  stateCode?: string | null;
   phone?: string | null;
 }
 
@@ -122,6 +131,7 @@ export interface MannatInvoiceProps {
   vehicleNumber?: string | null;
   dateOfSupply?: string | null;
   placeOfSupply?: string | null;
+  company?: MannatInvoiceCompany;
   customer?: MannatInvoiceCustomer;
   items?: MannatInvoiceItem[];
   totals?: MannatInvoiceTotals;
@@ -150,6 +160,10 @@ export default function MannatTaxInvoice({
   isNormalBill = false,
   billTitle,
 }: MannatTaxInvoiceComponentProps) {
+  const company: MannatInvoiceCompany = {
+    ...DEFAULT_COMPANY,
+    ...(invoice.company || {}),
+  };
   const customer = invoice.customer || {};
   const items = Array.isArray(invoice.items) ? invoice.items : [];
   const suppliedTotals = invoice.totals || {};
@@ -224,7 +238,7 @@ export default function MannatTaxInvoice({
               </span>
             )}
           </div>
-          <div className="mhi-toolbar-actions flex items-center gap-2">
+          <div className="mhi-toolbar-actions flex flex-wrap items-center gap-2">
             {isMobileScreen && (
               <button
                 type="button"
@@ -271,15 +285,15 @@ export default function MannatTaxInvoice({
               : undefined
           }
         >
-          <article className="mhi-invoice" aria-label={`Algions AI Labs Private Limited ${displayTitle}`}>
+          <article className="mhi-invoice" aria-label={`${company.name || ''} ${displayTitle}`.trim()}>
           <header className="mhi-shop-header">
             <div className="mhi-topline">
-              <strong>GSTIN : {SHOP.gstin}</strong>
+              <strong>GSTIN : {company.gstin || ''}</strong>
               <strong className="mhi-tax-title">{displayTitle}</strong>
-              <strong>Mob.: {SHOP.mobile}</strong>
+              <strong>Mob.: {company.phone || ''}</strong>
             </div>
-            <div className="mhi-shop-name">{SHOP.name}</div>
-            <div className="mhi-shop-address">{SHOP.address}</div>
+            <div className="mhi-shop-name">{company.name || ''}</div>
+            <div className="mhi-shop-address">{company.address || ''}</div>
           </header>
 
           <section className="mhi-invoice-meta">
@@ -289,8 +303,8 @@ export default function MannatTaxInvoice({
                 <span>Date :</span><strong>{printableDate(invoice.invoiceDate)}</strong>
               </div>
               <div className="mhi-meta-line mhi-state-line">
-                <span>State :</span><strong>{SHOP.state}</strong>
-                <span>State Code :</span><strong>{SHOP.stateCode}</strong>
+                <span>State :</span><strong>{company.state || ''}</strong>
+                <span>State Code :</span><strong>{company.stateCode || ''}</strong>
               </div>
             </div>
             <div className="mhi-meta-right">
@@ -311,8 +325,8 @@ export default function MannatTaxInvoice({
             <div className="mhi-customer-line"><strong>Address :</strong><span>{customer.address || ''}</span></div>
             <div className="mhi-customer-bottom">
               <div className="mhi-customer-gstin"><strong>GSTIN :</strong><span>{customer.gstin || ''}</span></div>
-              <div><strong>State :</strong><span>{customer.state || 'Bihar'}</span></div>
-              <div><strong>State Code :</strong><span>{customer.stateCode || '10'}</span></div>
+              <div><strong>State :</strong><span>{customer.state || ''}</span></div>
+              <div><strong>State Code :</strong><span>{customer.stateCode || ''}</span></div>
             </div>
           </section>
 
@@ -375,11 +389,11 @@ export default function MannatTaxInvoice({
             <div className="mhi-footer-left">
               <strong className="mhi-eoe">E.&amp;O.E.</strong>
               <div>All disputes are subject to</div>
-              <strong>{SHOP.jurisdiction}</strong>
+              <strong>{company.jurisdiction || 'Subject to seller jurisdiction.'}</strong>
             </div>
             <div className="mhi-footer-right">
               <em>Certified that the particulars given above are true and correct.</em>
-              <strong className="mhi-for-shop">For Algions AI Labs Private Limited</strong>
+              <strong className="mhi-for-shop">{company.name ? `For ${company.name}` : 'Authorised Signatory'}</strong>
               <div className="mhi-signature-wrap">
                 <div className="mhi-signature-rule" />
                 <strong>Authorised Signatory</strong>

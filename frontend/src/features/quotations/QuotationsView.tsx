@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { INDIAN_STATES, getStateByCode } from '../../lib/indianStates.js';
 import {
   FileText,
   Plus,
@@ -805,6 +806,29 @@ export const QuotationsView: React.FC = () => {
                     onChange={(e) => setSettings({ ...settings, website: e.target.value })}
                     className="neu-input w-full text-xs"
                   />
+                </div>
+                <div>
+                  <label className="block font-bold text-[var(--khata-text-muted)] mb-1">Seller State & Code</label>
+                  <select
+                    value={settings.state_code || ''}
+                    onChange={(e) => {
+                      const matched = getStateByCode(e.target.value);
+                      setSettings({
+                        ...settings,
+                        state_code: e.target.value,
+                        state: matched ? matched.name : settings.state,
+                      });
+                    }}
+                    className="neu-input w-full text-xs"
+                    required
+                  >
+                    <option value="">Select Seller State</option>
+                    {INDIAN_STATES.map((s) => (
+                      <option key={s.code} value={s.code}>
+                        {s.code} – {s.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="block font-bold text-[var(--khata-text-muted)] mb-1">Standard Validity (Days)</label>

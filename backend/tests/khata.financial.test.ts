@@ -20,6 +20,9 @@ interface CustomerRow {
   normalized_name: string;
   phone: string | null;
   normalized_phone: string | null;
+  address?: string | null;
+  state?: string | null;
+  state_code?: string | null;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -69,6 +72,7 @@ interface IdempotencyRow {
   response_status: number;
   response_body: unknown;
   created_at: string;
+  expires_at: string;
 }
 
 // In-Memory PostgreSQL State Simulator for Unit/Integration Verification
@@ -102,31 +106,59 @@ class MockDatabaseState {
       return { rows: [], rowCount: 0 };
     }
 
+    if (s.includes('PG_ADVISORY_XACT_LOCK')) {
+      return { rows: [], rowCount: 0 };
+    }
+
+    if (s.includes('PG_TRY_ADVISORY_XACT_LOCK')) {
+      return { rows: [{ acquired: true }], rowCount: 1 };
+    }
+
     // 2. Idempotency Keys Queries
-    if (s.startsWith('SELECT REQUEST_HASH, RESPONSE_STATUS, RESPONSE_BODY FROM IDEMPOTENCY_KEYS')) {
+    if (s.startsWith('SELECT') && s.includes('FROM IDEMPOTENCY_KEYS')) {
       const key = params[0] as string;
       const found = this.idempotencyKeys.find((k) => k.key === key);
-      return { rows: found ? [found] : [], rowCount: found ? 1 : 0 };
+      if (!found) {
+        return { rows: [], rowCount: 0 };
+      }
+      const isExpired = new Date(found.expires_at).getTime() <= Date.now();
+      return { rows: [{ ...found, is_expired: isExpired }], rowCount: 1 };
     }
 
     if (s.startsWith('INSERT INTO IDEMPOTENCY_KEYS')) {
       const key = params[0] as string;
-      if (this.idempotencyKeys.some((k) => k.key === key)) {
+      const existingIdx = this.idempotencyKeys.findIndex((k) => k.key === key);
+      const existing = existingIdx >= 0 ? this.idempotencyKeys[existingIdx] : null;
+      if (existing && new Date(existing.expires_at).getTime() > Date.now()) {
         const err = new Error('duplicate key value violates unique constraint "idempotency_keys_key_key"');
         (err as any).code = '23505';
         (err as any).constraint = 'idempotency_keys_key_key';
         throw err;
       }
+      const now = Date.now();
       const row: IdempotencyRow = {
         key,
         action: params[1] as string,
         request_hash: params[2] as string,
         response_status: params[3] as number,
         response_body: JSON.parse(params[4] as string),
-        created_at: new Date().toISOString(),
+        created_at: new Date(now).toISOString(),
+        expires_at: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
       };
-      this.idempotencyKeys.push(row);
+      if (existingIdx >= 0) {
+        this.idempotencyKeys[existingIdx] = row;
+      } else {
+        this.idempotencyKeys.push(row);
+      }
       return { rows: [row], rowCount: 1 };
+    }
+
+    if (s.startsWith('DELETE FROM IDEMPOTENCY_KEYS')) {
+      const before = this.idempotencyKeys.length;
+      this.idempotencyKeys = this.idempotencyKeys.filter(
+        (k) => new Date(k.expires_at).getTime() > Date.now()
+      );
+      return { rows: [], rowCount: before - this.idempotencyKeys.length };
     }
 
     // 3. Products Queries
@@ -198,14 +230,28 @@ class MockDatabaseState {
       return { rows: [], rowCount: 0 };
     }
 
+    if (s.startsWith('UPDATE CUSTOMERS') && s.includes('SET STATE = $1, STATE_CODE = $2')) {
+      const cust = this.customers.find((c) => c.id === params[2]?.toString());
+      if (cust && !cust.state_code) {
+        cust.state = (params[0] as string) || null;
+        cust.state_code = (params[1] as string) || null;
+        cust.updated_at = new Date().toISOString();
+      }
+      return { rows: cust ? [cust] : [], rowCount: cust ? 1 : 0 };
+    }
+
     if (s.startsWith('INSERT INTO CUSTOMERS')) {
       const id = (this.nextId++).toString();
+      const withoutPhone = s.includes('NULL, NULL');
       const row: CustomerRow = {
         id,
         name: params[0] as string,
         normalized_name: params[1] as string,
-        phone: (params[2] as string) || null,
-        normalized_phone: (params[3] as string) || null,
+        phone: withoutPhone ? null : (params[2] as string) || null,
+        normalized_phone: withoutPhone ? null : (params[3] as string) || null,
+        address: ((withoutPhone ? params[2] : params[4]) as string) || null,
+        state: ((withoutPhone ? params[3] : params[5]) as string) || null,
+        state_code: ((withoutPhone ? params[4] : params[6]) as string) || null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         archived_at: null,
@@ -220,9 +266,9 @@ class MockDatabaseState {
       const row: UdharTxRow = {
         id,
         customer_id: params[0]?.toString() as string,
-        transaction_date: new Date().toISOString().split('T')[0],
-        total_amount: params[1] as string,
-        note: (params[2] as string) || null,
+        transaction_date: (params[1] as string) || new Date().toISOString().split('T')[0],
+        total_amount: params[2] as string,
+        note: (params[3] as string) || null,
         created_at: new Date().toISOString(),
       };
       this.udharTransactions.push(row);
@@ -402,6 +448,9 @@ class MockDatabaseState {
           id: cust.id,
           name: cust.name,
           phone: cust.phone,
+          address: cust.address ?? null,
+          state: cust.state ?? null,
+          state_code: cust.state_code ?? null,
           total_udhar: totalUdhar.toFixed(2),
           total_received: totalReceived.toFixed(2),
           outstanding: outstanding.toFixed(2),
@@ -629,7 +678,7 @@ describe('Khata Application Financial Correctness & FIFO Allocation Test Suite',
       items: [{ productId: parseInt(prod.id.toString(), 10), quantity: '2', sellingPrice: '2400.00' }],
     };
     await expect(khataService.createTransaction(conflictingInput)).rejects.toThrow(
-      /Idempotency key reused with different request payload/
+      /Idempotency key reused with a different request/
     );
   });
 

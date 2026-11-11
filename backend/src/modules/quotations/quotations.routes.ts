@@ -1,5 +1,9 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
+import { env } from '../../config/env.js';
+import { getBusinessDateISO } from '../../utils/businessDate.js';
+import { resolveValidatedState, validateGstin, validateGstinForState } from '../../utils/indianTax.js';
+import { getCompanyTaxProfile } from '../../services/companyTaxProfile.service.js';
 import { quotationsService } from './quotations.service.js';
 import { generateQuotationPdf } from './quotations.pdf.js';
 import {
@@ -76,48 +80,61 @@ router.post('/preview-pdf', async (req: Request, res: Response, next: NextFuncti
       return;
     }
 
-    const settings = await quotationsService.getSettings();
+    const companyProfile = await getCompanyTaxProfile();
+    const resolvedCustomerState = resolveValidatedState({
+      state: parsed.data.customerState,
+      stateCode: parsed.data.customerStateCode,
+      required: parsed.data.gstEnabled,
+      fieldLabel: 'Customer',
+    });
+
+    const validatedCustomerGstin = parsed.data.customerGstin
+      ? resolvedCustomerState.stateCode
+        ? validateGstinForState(parsed.data.customerGstin, resolvedCustomerState.stateCode)
+        : validateGstin(parsed.data.customerGstin)
+      : null;
+
     const calc = quotationsService.calculateQuotationTotals(
       parsed.data.items,
       parsed.data.discountType,
       parsed.data.discountValue,
       parsed.data.gstEnabled,
       parsed.data.gstRate,
-      settings.state_code,
-      parsed.data.customerStateCode || settings.state_code
+      companyProfile.stateCode,
+      resolvedCustomerState.stateCode
     );
 
     const quotationNumber = parsed.data.quotationNumber || 'PREVIEW-QT';
-    const quotationDate = parsed.data.quotationDate || new Date().toISOString().split('T')[0];
+    const quotationDate = parsed.data.quotationDate || getBusinessDateISO(env.BUSINESS_TIME_ZONE);
 
     const pdfBuffer = await generateQuotationPdf({
       quotationNumber,
       quotationDate,
       validUntil: parsed.data.validUntil || null,
       company: {
-        companyName: settings.company_name,
-        logoUrl: settings.logo_url,
-        cin: settings.cin,
-        gstin: settings.gstin,
-        address: settings.address,
-        email: settings.email,
-        phone: settings.phone,
-        website: settings.website,
-        state: settings.state,
-        stateCode: settings.state_code,
-        bankName: settings.bank_name,
-        bankAccountNumber: settings.bank_account_number,
-        bankIfsc: settings.bank_ifsc,
-        bankBranch: settings.bank_branch,
-        signatoryTitle: settings.signatory_title,
+        companyName: companyProfile.companyName,
+        logoUrl: companyProfile.logoUrl,
+        cin: companyProfile.cin,
+        gstin: companyProfile.gstin,
+        address: companyProfile.address,
+        email: companyProfile.email,
+        phone: companyProfile.phone,
+        website: companyProfile.website,
+        state: companyProfile.state,
+        stateCode: companyProfile.stateCode,
+        bankName: companyProfile.bankName,
+        bankAccountNumber: companyProfile.bankAccountNumber,
+        bankIfsc: companyProfile.bankIfsc,
+        bankBranch: companyProfile.bankBranch,
+        signatoryTitle: companyProfile.signatoryTitle,
       },
       customer: {
         name: parsed.data.customerName,
         address: parsed.data.customerAddress,
         phone: parsed.data.customerPhone,
-        gstin: parsed.data.customerGstin,
-        state: parsed.data.customerState,
-        stateCode: parsed.data.customerStateCode,
+        gstin: validatedCustomerGstin,
+        state: resolvedCustomerState.state ?? undefined,
+        stateCode: resolvedCustomerState.stateCode ?? undefined,
       },
       projectTitle: parsed.data.projectTitle,
       subject: parsed.data.subject,
@@ -209,6 +226,8 @@ router.get('/:id/pdf', async (req: Request, res: Response, next: NextFunction) =
         address: quotation.customer_address,
         phone: quotation.customer_phone,
         gstin: quotation.customer_gstin,
+        state: quotation.customer_state ?? undefined,
+        stateCode: quotation.customer_state_code ?? undefined,
       },
       projectTitle: quotation.project_title,
       subject: quotation.subject,

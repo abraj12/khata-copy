@@ -42,3 +42,60 @@ export const INDIAN_STATES: IndianState[] = [
   { code: '38', name: 'Ladakh' },
   { code: '97', name: 'Other Territory' },
 ];
+
+export function getStateByCode(code?: string | null): IndianState | undefined {
+  if (!code) return undefined;
+  const trimmed = String(code).trim();
+  const padded = /^\d$/.test(trimmed) ? `0${trimmed}` : trimmed;
+  return INDIAN_STATES.find((s) => s.code === padded);
+}
+
+export function getStateByName(name?: string | null): IndianState | undefined {
+  if (!name) return undefined;
+  const normalized = String(name).trim().toLowerCase();
+  return INDIAN_STATES.find((s) => s.name.toLowerCase() === normalized);
+}
+
+/**
+ * Resolves customer state and 2-digit GST state code strictly from the selected customer record.
+ * Clears state to empty strings ('') when a customer has no stored state (never falls back to another state).
+ */
+export function resolveCustomerStateSelection(
+  customer?: { state?: string | null; state_code?: string | null; stateCode?: string | null } | null
+): { state: string; stateCode: string } {
+  if (!customer) {
+    return { state: '', stateCode: '' };
+  }
+
+  const rawCode = customer.state_code ?? customer.stateCode ?? null;
+  const rawName = customer.state ?? null;
+
+  const matchedByCode = getStateByCode(rawCode);
+  if (matchedByCode) {
+    return {
+      state: rawName && rawName.trim() ? rawName.trim() : matchedByCode.name,
+      stateCode: matchedByCode.code,
+    };
+  }
+
+  const matchedByName = getStateByName(rawName);
+  if (matchedByName) {
+    return {
+      state: matchedByName.name,
+      stateCode: matchedByName.code,
+    };
+  }
+
+  return {
+    state: rawName ? rawName.trim() : '',
+    stateCode: rawCode ? String(rawCode).trim() : '',
+  };
+}
+
+export function extractStateCodeFromGstin(gstin?: string | null): string | null {
+  if (!gstin) return null;
+  const normalized = String(gstin).trim().toUpperCase();
+  if (normalized.length < 2) return null;
+  const prefix = normalized.slice(0, 2);
+  return getStateByCode(prefix) ? prefix : null;
+}

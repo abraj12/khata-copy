@@ -24,8 +24,8 @@ export interface CreateNormalBillPayload {
   customerName: string;
   customerAddress?: string | null;
   customerPhone?: string | null;
-  customerState?: string;
-  customerStateCode?: string;
+  customerState?: string | null;
+  customerStateCode?: string | null;
   items: NormalBillItemPayload[];
   notes?: string | null;
   idempotencyKey?: string | null;
@@ -45,8 +45,8 @@ export interface NormalBillRecord {
   customer_name: string;
   customer_address: string | null;
   customer_phone: string | null;
-  customer_state: string;
-  customer_state_code: string;
+  customer_state: string | null;
+  customer_state_code: string | null;
   total_amount: string;
   amount_in_words: string;
   r2_object_key: string | null;
@@ -200,7 +200,10 @@ export async function downloadNormalBillDraftPdf(payload: CreateNormalBillPayloa
   window.URL.revokeObjectURL(blobUrl);
 }
 
-export function mapNormalBillToInvoiceProps(record: NormalBillRecord): MannatInvoiceProps {
+export function mapNormalBillToInvoiceProps(
+  record: NormalBillRecord,
+  company?: { name?: string; address?: string | null; gstin?: string | null; phone?: string | null }
+): MannatInvoiceProps {
   return {
     id: record.id,
     invoiceNumber: record.bill_number,
@@ -209,6 +212,14 @@ export function mapNormalBillToInvoiceProps(record: NormalBillRecord): MannatInv
     vehicleNumber: record.vehicle_number,
     dateOfSupply: record.date_of_supply,
     placeOfSupply: record.place_of_supply,
+    company: {
+      name: company?.name,
+      address: company?.address,
+      gstin: company?.gstin,
+      phone: company?.phone,
+      state: record.state,
+      stateCode: record.state_code,
+    },
     customer: {
       name: record.customer_name,
       address: record.customer_address,

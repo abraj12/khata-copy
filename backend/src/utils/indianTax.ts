@@ -43,6 +43,9 @@ export const GST_STATE_CODES: Record<string, string> = {
   '97': 'Other Territory',
 };
 
+const GSTIN_CHARSET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+
 /**
  * Normalizes and validates Indian GST State/UT Code.
  * Ensures 2-digit padding and official mapping membership.
@@ -72,26 +75,87 @@ export function normalizeGstStateCode(
 }
 
 /**
- * Validates a GSTIN against the official 15-character format and checks that
- * the first 2 characters match the buyer's state code.
+ * Computes the official 15th check digit of an Indian GSTIN using Luhn mod-36.
  */
-export function validateGstinForState(
-  gstin: string | null | undefined,
-  stateCode: string
-): void {
-  if (!gstin || !gstin.trim()) return;
-
-  const normalized = gstin.trim().toUpperCase();
-
-  const gstinRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
-
-  if (!gstinRegex.test(normalized)) {
+export function computeGstinCheckDigit(first14: string): string {
+  const normalized = first14.trim().toUpperCase();
+  if (normalized.length !== 14) {
     throw new AppError(
       'Invalid GSTIN format. Must be 15 alphanumeric characters matching Indian GSTIN specification.',
       400,
       'INVALID_GSTIN'
     );
   }
+
+  let factor = 1;
+  let sum = 0;
+
+  for (const ch of normalized) {
+    const codePoint = GSTIN_CHARSET.indexOf(ch);
+    if (codePoint < 0) {
+      throw new AppError(
+        'Invalid GSTIN format. Must be 15 alphanumeric characters matching Indian GSTIN specification.',
+        400,
+        'INVALID_GSTIN'
+      );
+    }
+    const product = codePoint * factor;
+    factor = factor === 1 ? 2 : 1;
+    sum += Math.floor(product / 36) + (product % 36);
+  }
+
+  const checkCodePoint = (36 - (sum % 36)) % 36;
+  return GSTIN_CHARSET[checkCodePoint];
+}
+
+/**
+ * Validates a GSTIN structure, state code prefix membership, and Luhn mod-36 check digit.
+ * Returns normalized uppercase GSTIN, or null when empty.
+ */
+export function validateGstin(gstin: string | null | undefined): string | null {
+  if (!gstin || !gstin.trim()) return null;
+
+  const normalized = gstin.trim().toUpperCase();
+
+  if (!GSTIN_REGEX.test(normalized)) {
+    throw new AppError(
+      'Invalid GSTIN format. Must be 15 alphanumeric characters matching Indian GSTIN specification.',
+      400,
+      'INVALID_GSTIN'
+    );
+  }
+
+  const prefixCode = normalized.slice(0, 2);
+  if (!GST_STATE_CODES[prefixCode]) {
+    throw new AppError(
+      `Invalid GSTIN state code prefix "${prefixCode}". Must begin with a recognized Indian GST State/UT code.`,
+      400,
+      'INVALID_GSTIN'
+    );
+  }
+
+  const expectedCheckDigit = computeGstinCheckDigit(normalized.slice(0, 14));
+  if (normalized[14] !== expectedCheckDigit) {
+    throw new AppError(
+      'Invalid GSTIN checksum digit. Please verify the 15-character GSTIN.',
+      400,
+      'INVALID_GSTIN'
+    );
+  }
+
+  return normalized;
+}
+
+/**
+ * Validates a GSTIN against the official 15-character format, Luhn mod-36 checksum,
+ * and checks that the first 2 characters match the buyer's state code.
+ */
+export function validateGstinForState(
+  gstin: string | null | undefined,
+  stateCode: string
+): string | null {
+  const normalized = validateGstin(gstin);
+  if (!normalized) return null;
 
   const expectedCode = normalizeGstStateCode(stateCode);
 
@@ -102,13 +166,107 @@ export function validateGstinForState(
       'GSTIN_STATE_MISMATCH'
     );
   }
+
+  return normalized;
 }
 
 /**
  * Retrieves the state name for a given 2-digit state code.
  */
 export function getStateNameByCode(code: string | number | null | undefined): string | undefined {
-  if (!code) return undefined;
+  if (code === null || code === undefined || String(code).trim() === '') return undefined;
   const normalized = String(code).trim().padStart(2, '0');
   return GST_STATE_CODES[normalized];
+}
+
+function normalizeStateNameKey(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const STATE_NAME_TO_CODE: Record<string, string> = Object.fromEntries(
+  Object.entries(GST_STATE_CODES).map(([code, stateName]) => [normalizeStateNameKey(stateName), code])
+);
+
+/**
+ * Resolves a 2-digit state code from a canonical Indian state/UT name.
+ */
+export function getStateCodeByName(name: string | null | undefined): string | undefined {
+  if (!name || !name.trim()) return undefined;
+  return STATE_NAME_TO_CODE[normalizeStateNameKey(name)];
+}
+
+export interface StateValidationInput {
+  state?: string | null;
+  stateCode?: string | number | null;
+  required?: boolean;
+  fieldLabel?: string;
+}
+
+export interface ResolvedStateResult {
+  state: string | null;
+  stateCode: string | null;
+}
+
+/**
+ * Normalizes and cross-validates state name and 2-digit Indian GST state code.
+ * Never defaults to Bihar or any other fallback when values are omitted or mismatched.
+ */
+export function resolveValidatedState(input: StateValidationInput): ResolvedStateResult {
+  const rawState = typeof input.state === 'string' ? input.state.trim() : '';
+  const rawCode =
+    input.stateCode === null || input.stateCode === undefined
+      ? ''
+      : String(input.stateCode).trim();
+  const fieldLabel = input.fieldLabel || 'Customer';
+
+  if (!rawState && !rawCode) {
+    if (input.required) {
+      throw new AppError(
+        `${fieldLabel} state code is required for GST calculation.`,
+        400,
+        'STATE_CODE_REQUIRED'
+      );
+    }
+    return { state: null, stateCode: null };
+  }
+
+  if (rawCode) {
+    const normalizedCode = normalizeGstStateCode(rawCode);
+    const canonicalName = GST_STATE_CODES[normalizedCode];
+
+    if (rawState) {
+      const matchedCodeForName = getStateCodeByName(rawState);
+      if (!matchedCodeForName || matchedCodeForName !== normalizedCode) {
+        throw new AppError(
+          `State name "${rawState}" does not match state code "${normalizedCode}" (${canonicalName}).`,
+          400,
+          'STATE_CODE_NAME_MISMATCH'
+        );
+      }
+    }
+
+    return {
+      state: canonicalName,
+      stateCode: normalizedCode,
+    };
+  }
+
+  const resolvedCode = getStateCodeByName(rawState);
+  if (!resolvedCode) {
+    throw new AppError(
+      `Invalid Indian GST state name "${rawState}". Please select a recognized state or supply its 2-digit state code.`,
+      400,
+      'INVALID_STATE_CODE'
+    );
+  }
+
+  return {
+    state: GST_STATE_CODES[resolvedCode],
+    stateCode: resolvedCode,
+  };
 }

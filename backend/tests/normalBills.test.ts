@@ -55,6 +55,25 @@ describe('Normal Billing Module (Non-GST Standard Bills) Test Suite', () => {
           rowCount: 4,
         } as any;
       }
+      if (sqlText.includes('FROM quotation_settings')) {
+        return {
+          rows: [
+            {
+              id: 1,
+              company_name: 'ALGIONS AI LABS PRIVATE LIMITED',
+              cin: 'U62011BR2026PTC088473',
+              gstin: '10ABGCA8624E1Z3',
+              address: 'House No. 145A, Haziyapur, Ward 26, Gopalganj, Bihar – 841428',
+              email: 'contact@algions.in',
+              phone: '94938 40000',
+              website: 'algions.in',
+              state: 'Bihar',
+              state_code: '10',
+            },
+          ],
+          rowCount: 1,
+        } as any;
+      }
       return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] } as any;
     });
 
@@ -114,6 +133,25 @@ describe('Normal Billing Module (Non-GST Standard Bills) Test Suite', () => {
         const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
         if (sqlText === 'BEGIN' || sqlText === 'COMMIT' || sqlText === 'ROLLBACK') {
           return { rowCount: 1 };
+        }
+        if (sqlText.includes('FROM quotation_settings')) {
+          return {
+            rows: [
+              {
+                id: 1,
+                company_name: 'ALGIONS AI LABS PRIVATE LIMITED',
+                cin: 'U62011BR2026PTC088473',
+                gstin: '10ABGCA8624E1Z3',
+                address: 'House No. 145A, Haziyapur, Ward 26, Gopalganj, Bihar – 841428',
+                email: 'contact@algions.in',
+                phone: '94938 40000',
+                website: 'algions.in',
+                state: 'Bihar',
+                state_code: '10',
+              },
+            ],
+            rowCount: 1,
+          };
         }
         if (sqlText.includes('SELECT 1 FROM normal_bills WHERE bill_number')) {
           return { rows: [], rowCount: 0 };

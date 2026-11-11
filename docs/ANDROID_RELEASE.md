@@ -80,9 +80,9 @@ Android requires all applications to be digitally signed with a certificate befo
 
 | Certificate Type | Purpose | SHA-256 Fingerprint Location |
 |---|---|---|
-| **Development / Debug Certificate** | Local testing on developer devices via `assembleDebug`. Standard debug key in `~/.android/debug.keystore`. | Fingerprint `D0:83:6B:...` currently registered for local validation. |
-| **Existing Original Release Key** | Used if Khata was previously distributed directly (e.g. via direct APK download). Must be retained for in-place updates. | Extracted using `keytool -list -v -keystore release-keystore.jks`. |
-| **Google Play App Signing Key** | Google's certificate if distributed via the Play Store with Play App Signing. Google replaces your upload key with this key for users. | Extracted from Google Play Console -> App Signing -> App signing key certificate. |
+| **Development / Debug Certificate** | Local testing on developer devices via `assembleDebug`. Standard debug key in `~/.android/debug.keystore`. | Local debug fingerprint `D0:83:6B:...` registered in `assetlinks.json` for local/CI debug validation. Replace or supplement before release rollout. |
+| **Existing Original Release Key** | Used if Khata was previously distributed directly (e.g. via direct APK download). Must be retained for in-place updates. | Extracted using `keytool -list -v -keystore release-keystore.jks` and registered in `frontend/public/.well-known/assetlinks.json`. |
+| **Google Play App Signing Key** | Google's certificate if distributed via the Play Store with Play App Signing. Google replaces your upload key with this key for users. | Extracted from Google Play Console -> App Signing -> App signing key certificate; MUST be added to `assetlinks.json` before Play Store launch so TWA hides the browser bar. |
 | **Play Upload Key** | The key used only to upload AABs/APKs to the Google Play Console if Play App Signing is enabled. | Extracted from your local upload keystore. |
 
 > [!CRITICAL]
@@ -134,6 +134,9 @@ cd android-twa
 ---
 
 ## 6. Testing TWA & Verification Procedure
+
+- **Repository Automated Checks (Local / CI):** `node frontend/scripts/validate-assetlinks.js`, `./gradlew assembleDebug --no-daemon`, and fail-closed verification that `./gradlew assembleRelease --no-daemon` rejects builds without signing credentials.
+- **Operator Physical-Device & Play Console Checks (Requires Owner Device & Signing Key):**
 
 1. **Install Debug APK on Test Device:**
    ```bash

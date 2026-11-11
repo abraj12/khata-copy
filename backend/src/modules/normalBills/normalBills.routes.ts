@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { normalBillsService } from './normalBills.service.js';
 import { isValidCalendarDate as checkCalendarDate } from '../../utils/businessDate.js';
+import { validateDecimalQuantityInput, validateMoneyInput } from '../../utils/validation.js';
 
 const router = Router();
 
@@ -32,45 +33,74 @@ const normalBillItemSchema = z.object({
   description: z.string().trim().min(1, 'Item description is required').max(255),
   hsnCode: z.string().trim().max(20).nullable().optional(),
   quantity: z.union([z.number(), z.string()]).refine((val) => {
-    const n = Number(val);
-    return Number.isFinite(n) && n > 0;
-  }, 'Quantity must be a positive number'),
+    try {
+      validateDecimalQuantityInput(val, 'Quantity');
+      return true;
+    } catch {
+      return false;
+    }
+  }, 'Quantity must be greater than 0 and up to 1,000,000 with at most 2 decimal places'),
   unit: z.string().trim().max(20).nullable().optional(),
   rate: z.union([z.number(), z.string()]).refine((val) => {
-    const n = Number(val);
-    return Number.isFinite(n) && n >= 0;
-  }, 'Rate cannot be negative'),
+    try {
+      validateMoneyInput(val, 'Rate', { allowZero: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }, 'Rate must be a non-negative number with at most 2 decimal places'),
   rateUnit: z.string().trim().max(20).nullable().optional(),
 });
 
 const createNormalBillSchema = z.object({
   billNumber: z.string().trim().max(50).optional(),
-  billDate: z.string().trim().refine(isValidCalendarDate, 'Bill date must be a valid calendar date in YYYY-MM-DD format').optional(),
-  state: z.string().trim().max(100).optional(),
-  stateCode: z.string().trim().max(10).optional(),
+  billDate: z
+    .string()
+    .trim()
+    .refine(isValidCalendarDate, 'Bill date must be a valid calendar date in YYYY-MM-DD format')
+    .optional(),
+  state: z.string().trim().max(100).nullable().optional(),
+  stateCode: z.string().trim().max(10).nullable().optional(),
   transportationMode: z.string().trim().max(100).nullable().optional(),
   vehicleNumber: z.string().trim().max(50).nullable().optional(),
-  dateOfSupply: z.string().trim().max(20).refine(isValidCalendarDate, 'Date of supply must be a valid calendar date in YYYY-MM-DD format').nullable().optional(),
+  dateOfSupply: z
+    .string()
+    .trim()
+    .max(20)
+    .refine(isValidCalendarDate, 'Date of supply must be a valid calendar date in YYYY-MM-DD format')
+    .nullable()
+    .optional(),
   placeOfSupply: z.string().trim().max(150).nullable().optional(),
   customerId: optionalIntegerIdSchema,
   customerName: z.string().trim().min(1, 'Customer name is required').max(255),
   customerAddress: z.string().trim().max(500).nullable().optional(),
   customerPhone: z.string().trim().max(20).nullable().optional(),
-  customerState: z.string().trim().max(100).optional(),
-  customerStateCode: z.string().trim().max(10).optional(),
+  customerState: z.string().trim().max(100).nullable().optional(),
+  customerStateCode: z.string().trim().max(10).nullable().optional(),
   subtotalAmount: z.union([z.number(), z.string()]).optional(),
   discountType: z.enum(['percentage', 'fixed']).nullable().optional(),
   discountValue: z.union([z.number(), z.string()]).optional(),
   discountAmount: z.union([z.number(), z.string()]).optional(),
-  items: z.array(normalBillItemSchema).min(1, 'At least one item is required in the bill').max(20, 'A single bill can have at most 20 line items to ensure standard A4 print layout integrity'),
+  items: z
+    .array(normalBillItemSchema)
+    .min(1, 'At least one item is required in the bill')
+    .max(20, 'A single bill can have at most 20 line items to ensure standard A4 print layout integrity'),
   notes: z.string().trim().max(1000).nullable().optional(),
   idempotencyKey: z.string().trim().nullable().optional(),
 });
 
 const listBillsQuerySchema = z.object({
   search: z.string().trim().max(100).optional(),
-  dateFrom: z.string().trim().refine(isValidCalendarDate, 'dateFrom must be a valid calendar date in YYYY-MM-DD format').optional(),
-  dateTo: z.string().trim().refine(isValidCalendarDate, 'dateTo must be a valid calendar date in YYYY-MM-DD format').optional(),
+  dateFrom: z
+    .string()
+    .trim()
+    .refine(isValidCalendarDate, 'dateFrom must be a valid calendar date in YYYY-MM-DD format')
+    .optional(),
+  dateTo: z
+    .string()
+    .trim()
+    .refine(isValidCalendarDate, 'dateTo must be a valid calendar date in YYYY-MM-DD format')
+    .optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -78,7 +108,7 @@ const listBillsQuerySchema = z.object({
 /**
  * GET /api/v1/normal-bills/next-number - Suggest next sequential bill number
  */
-router.get('/next-number', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/next-number', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const nextBillNumber = await normalBillsService.getNextBillNumber();
     res.json({
@@ -218,10 +248,7 @@ router.get('/:id/pdf', async (req: Request, res: Response, next: NextFunction) =
     const { buffer, filename } = await normalBillsService.getBillPdf(id);
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition',
-      `${isDownload ? 'attachment' : 'inline'}; filename="${filename}"`
-    );
+    res.setHeader('Content-Disposition', `${isDownload ? 'attachment' : 'inline'}; filename="${filename}"`);
     res.setHeader('Content-Length', buffer.length);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.send(buffer);

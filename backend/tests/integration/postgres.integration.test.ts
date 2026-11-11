@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import pg from 'pg';
 import fs from 'fs';
 import path from 'path';
@@ -6,11 +6,25 @@ import Decimal from 'decimal.js';
 import session from 'express-session';
 import connectPgSimple from 'connect-pg-simple';
 import { assertSafeTestDatabaseUrl } from '../../src/config/testDbGuard.js';
+import { appPool } from '../../src/config/database.js';
 import {
   allocateDocumentNumber,
   getSuggestedNextDocumentNumber,
   GST_INVOICE_NUMBERING_CONFIG,
+  NORMAL_BILL_NUMBERING_CONFIG,
+  QUOTATION_NUMBERING_CONFIG,
 } from '../../src/modules/billing/numbering.js';
+import {
+  acquireIdempotencyLock,
+  checkIdempotencyRecord,
+  cleanupExpiredIdempotencyKeys,
+  hashIdempotencyPayload,
+  storeIdempotencyRecord,
+} from '../../src/services/idempotency.service.js';
+import { khataService } from '../../src/modules/khata/khata.service.js';
+import { quotationsService } from '../../src/modules/quotations/quotations.service.js';
+import { gstInvoicesService } from '../../src/modules/gstInvoices/gstInvoices.service.js';
+import { normalBillsService } from '../../src/modules/normalBills/normalBills.service.js';
 
 const { Pool } = pg;
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
@@ -80,6 +94,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '016_quotations.sql',
         '017_quotation_conversion_financial_fields.sql',
         '018_numbering_and_legacy_data_integrity.sql',
+        '019_customer_tax_integrity_and_idempotency.sql',
       ];
 
       await client.query(`
@@ -113,7 +128,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
   });
 
   // 1. Migration tracking & Core Tables Verification
-  it('1. All migrations 001-018 are tracked and all 17 core tables exist in PostgreSQL schema', async () => {
+  it('1. All migrations 001-019 are tracked and all 17 core tables exist in PostgreSQL schema', async () => {
     const migRes = await pool.query('SELECT version FROM schema_migrations ORDER BY version ASC');
     expect(migRes.rows.map((r) => r.version)).toEqual([
       '001_auth_tables.sql',
@@ -134,6 +149,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '016_quotations.sql',
       '017_quotation_conversion_financial_fields.sql',
       '018_numbering_and_legacy_data_integrity.sql',
+      '019_customer_tax_integrity_and_idempotency.sql',
     ]);
 
     const expectedTables = [
@@ -515,7 +531,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       await pool.query(`DELETE FROM customers WHERE id = $1`, [custId]);
     } catch (err) {
       deleteFailed = true;
-      expect((err as Error).message).toContain('violates foreign key constraint');
+      expect((err as Error).message).toMatch(/foreign key constraint/i);
+      expect(['23001', '23503']).toContain((err as { code?: string }).code);
     }
     expect(deleteFailed).toBe(true);
   });
@@ -751,13 +768,28 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
   });
 
   it('15. Migration 014: Billing line item quantity strictly enforces 2-decimal scale constraint', async () => {
+    // Explicit customer_state/customer_state_code required post-019 (Bihar default removed)
+    await expect(
+      pool.query(`
+        INSERT INTO gst_invoices (
+          invoice_number, invoice_date, state, state_code, customer_name,
+          taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
+          igst_rate, igst_amount, tax_amount, grand_total, amount_in_words
+        ) VALUES (
+          'INV-INT-NO-STATE', '2026-11-02', 'Uttar Pradesh', '09', 'Missing State Customer',
+          '100.00', '9.00', '9.00', '9.00', '9.00',
+          '0.00', '0.00', '18.00', '118.00', 'Rupees One Hundred Eighteen Only'
+        )
+      `)
+    ).rejects.toThrow(/customer_state/);
+
     const invRes = await pool.query(`
       INSERT INTO gst_invoices (
-        invoice_number, invoice_date, state, state_code, customer_name,
+        invoice_number, invoice_date, state, state_code, customer_name, customer_state, customer_state_code,
         taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
         igst_rate, igst_amount, tax_amount, grand_total, amount_in_words
       ) VALUES (
-        'INV-INT-001', '2026-11-02', 'Uttar Pradesh', '09', 'Test Customer',
+        'INV-INT-001', '2026-11-02', 'Uttar Pradesh', '09', 'Test Customer', 'Uttar Pradesh', '09',
         '100.00', '9.00', '9.00', '9.00', '9.00',
         '0.00', '0.00', '18.00', '118.00', 'Rupees One Hundred Eighteen Only'
       ) RETURNING id
@@ -837,11 +869,11 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     // 2. Verify trailing zero normalization (e.g. 1.20 mathematically valid)
     const invRes = await pool.query(`
       INSERT INTO gst_invoices (
-        invoice_number, invoice_date, state, state_code, customer_name,
+        invoice_number, invoice_date, state, state_code, customer_name, customer_state, customer_state_code,
         taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
         igst_rate, igst_amount, tax_amount, grand_total, amount_in_words
       ) VALUES (
-        'INV-INT-099', '2026-11-02', 'Uttar Pradesh', '09', 'Trailing Zero Test Customer',
+        'INV-INT-099', '2026-11-02', 'Uttar Pradesh', '09', 'Trailing Zero Test Customer', 'Uttar Pradesh', '09',
         '100.00', '9.00', '9.00', '9.00', '9.00',
         '0.00', '0.00', '18.00', '118.00', 'Rupees One Hundred Eighteen Only'
       ) RETURNING id
@@ -989,6 +1021,438 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       await client.query('ROLLBACK');
     } finally {
       client.release();
+    }
+  });
+
+  // 20. Migration 019 Upgrade-from-018 Schema & Backfill Verification
+  it('20. Migration 019 upgrades Release #018 schema cleanly: preserves NULL customer state, backfills 24h idempotency expiry, syncs quotation seq, and removes Bihar defaults', async () => {
+    const migrationsDir = path.resolve(__dirname, '../../migrations');
+    const pre019Migrations = [
+      '001_auth_tables.sql',
+      '002_khata_transactions.sql',
+      '003_idempotency_and_hardening.sql',
+      '004_integer_quantity_and_money_constraints.sql',
+      '005_search_indexes_and_identity_constraints.sql',
+      '006_quantity_two_decimal_places.sql',
+      '007_quantity_strict_scale_and_allocation_integrity.sql',
+      '008_strict_quantity_scale.sql',
+      '009_product_images_and_offline_bills.sql',
+      '010_product_hsn_code.sql',
+      '011_gst_invoices.sql',
+      '012_normal_bills.sql',
+      '013_customer_address.sql',
+      '014_billing_quantity_and_sequences.sql',
+      '015_product_barcode.sql',
+      '016_quotations.sql',
+      '017_quotation_conversion_financial_fields.sql',
+      '018_numbering_and_legacy_data_integrity.sql',
+    ];
+
+    const client = await pool.connect();
+    try {
+      await client.query(`DROP SCHEMA IF EXISTS test_upgrade_018 CASCADE; CREATE SCHEMA test_upgrade_018;`);
+      await client.query(`SET search_path TO test_upgrade_018, public;`);
+
+      for (const file of pre019Migrations) {
+        const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
+        await client.query(sql);
+      }
+
+      // Seed Release #018 data prior to migration 019
+      await client.query(
+        `INSERT INTO customers (name, normalized_name, phone, normalized_phone)
+         VALUES ('Legacy Owner Client', 'legacy owner client', '9812345670', '+919812345670')`
+      );
+      await client.query(
+        `INSERT INTO idempotency_keys (key, action, request_hash, response_status, response_body, created_at)
+         VALUES
+           ('expired-018-key', 'CREATE_TX', 'hash1', 201, '{}'::jsonb, NOW() - INTERVAL '48 hours'),
+           ('fresh-018-key', 'CREATE_TX', 'hash2', 201, '{}'::jsonb, NOW() - INTERVAL '1 hour')`
+      );
+      await client.query(
+        `INSERT INTO quotations (
+           quotation_number, quotation_date, customer_name, company_snapshot, subtotal, taxable_amount, grand_total, amount_in_words
+         ) VALUES (
+           'QT-007', '2026-11-11', 'Upgrade QT Client', '{}'::jsonb, 100.00, 100.00, 100.00, 'Rupees One Hundred Only'
+         )`
+      );
+
+      // Apply migration 019 on top of Release #018 schema
+      const mig019Sql = fs.readFileSync(
+        path.join(migrationsDir, '019_customer_tax_integrity_and_idempotency.sql'),
+        'utf-8'
+      );
+      await client.query(mig019Sql);
+
+      // Verify legacy customer has NULL state (not Bihar!)
+      const custRes = await client.query(`SELECT state, state_code FROM customers WHERE normalized_name = 'legacy owner client'`);
+      expect(custRes.rows[0].state).toBeNull();
+      expect(custRes.rows[0].state_code).toBeNull();
+
+      // Verify idempotency expires_at backfill
+      const idempRes = await client.query(
+        `SELECT key, (expires_at <= NOW()) AS is_expired FROM idempotency_keys ORDER BY key ASC`
+      );
+      expect(idempRes.rows).toEqual([
+        { key: 'expired-018-key', is_expired: true },
+        { key: 'fresh-018-key', is_expired: false },
+      ]);
+
+      // Verify quotation_number_seq synchronized to 7 so nextval() yields 8 (QT-008)
+      const seqNext = await client.query(`SELECT nextval('quotation_number_seq') AS next_num`);
+      expect(Number(seqNext.rows[0].next_num)).toBe(8);
+
+      // Verify artificial Bihar/10 column defaults were removed on gst_invoices & normal_bills
+      const defRes = await client.query(`
+        SELECT table_name, column_name, column_default, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'test_upgrade_018'
+          AND (
+            (table_name = 'gst_invoices' AND column_name IN ('state', 'state_code', 'customer_state', 'customer_state_code'))
+            OR (table_name = 'normal_bills' AND column_name IN ('state', 'state_code', 'customer_state', 'customer_state_code'))
+          )
+      `);
+      for (const col of defRes.rows) {
+        expect(col.column_default).toBeNull();
+      }
+    } finally {
+      await client.query(`SET search_path TO public;`);
+      await client.query(`DROP SCHEMA IF EXISTS test_upgrade_018 CASCADE;`);
+      client.release();
+    }
+  });
+
+  // 21. Direct SQL 2-Decimal Quantity CHECK Constraints Across All 4 Item Tables
+  it('21. Enforces max 2 decimal places & positive quantity CHECK constraints across udhar_items, normal_bill_items, gst_invoice_items, and quotation_items', async () => {
+    const custRes = await pool.query(
+      `INSERT INTO customers (name, normalized_name) VALUES ('Scale Check Cust', 'scale check cust') RETURNING id`
+    );
+    const txRes = await pool.query(
+      `INSERT INTO udhar_transactions (customer_id, transaction_date, total_amount) VALUES ($1, CURRENT_DATE, 100.00) RETURNING id`,
+      [custRes.rows[0].id]
+    );
+    const txId = txRes.rows[0].id;
+
+    // 1. udhar_items
+    await pool.query(
+      `INSERT INTO udhar_items (transaction_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
+       VALUES ($1, 'Valid Udhar', 50.00, 1.25, 80.00, 100.00)`,
+      [txId]
+    );
+    for (const badQty of ['1.234', '0', '-1']) {
+      await expect(
+        pool.query(
+          `INSERT INTO udhar_items (transaction_id, product_name_snapshot, buying_price_snapshot, quantity, selling_price, line_total)
+           VALUES ($1, 'Bad Udhar', 50.00, $2, 80.00, 100.00)`,
+          [txId, badQty]
+        )
+      ).rejects.toThrow();
+    }
+
+    // 2. quotation_items
+    const qtRes = await pool.query(
+      `INSERT INTO quotations (
+         quotation_number, quotation_date, customer_name, company_snapshot, subtotal, taxable_amount, grand_total, amount_in_words
+       ) VALUES (
+         'QT-SCALE-001', '2026-11-11', 'Scale QT Buyer', '{"state":"Bihar","stateCode":"10"}'::jsonb, 100.00, 100.00, 100.00, 'Rupees One Hundred Only'
+       ) RETURNING id`
+    );
+    const qtId = qtRes.rows[0].id;
+    await pool.query(
+      `INSERT INTO quotation_items (quotation_id, item_index, description, quantity, rate, amount)
+       VALUES ($1, 1, 'Valid QT Item', 0.01, 100.00, 1.00)`,
+      [qtId]
+    );
+    for (const badQty of ['1.234', '0', '-0.05']) {
+      await expect(
+        pool.query(
+          `INSERT INTO quotation_items (quotation_id, item_index, description, quantity, rate, amount)
+           VALUES ($1, 2, 'Bad QT Item', $2, 100.00, 100.00)`,
+          [qtId, badQty]
+        )
+      ).rejects.toThrow();
+    }
+
+    // 3. gst_invoice_items & normal_bill_items 0 / negative rejection
+    const invRes = await pool.query(
+      `INSERT INTO gst_invoices (
+         invoice_number, invoice_date, state, state_code, customer_name, customer_state, customer_state_code,
+         taxable_amount, cgst_rate, cgst_amount, sgst_rate, sgst_amount, igst_rate, igst_amount, tax_amount, grand_total, amount_in_words
+       ) VALUES (
+         'INV-SCALE-CHECK', '2026-11-11', 'Bihar', '10', 'Buyer', 'Bihar', '10',
+         100.00, 9.00, 9.00, 9.00, 9.00, 0.00, 0.00, 18.00, 118.00, 'Rupees One Hundred Eighteen Only'
+       ) RETURNING id`
+    );
+    await expect(
+      pool.query(
+        `INSERT INTO gst_invoice_items (invoice_id, item_index, description, quantity, rate, amount)
+         VALUES ($1, 1, 'Zero Qty', 0, 100.00, 0.00)`,
+        [invRes.rows[0].id]
+      )
+    ).rejects.toThrow(/chk_gst_invoice_items_quantity_scale/);
+  });
+
+  // 22. Concurrent Independent Connections (Promise.all) & Real Idempotency Expiry/Race
+  it('22. Handles concurrent independent document number allocations and idempotency lock/expiry/cleanup cleanly', async () => {
+    // Ensure fresh quotation & normal bill concurrency isolation on dedicated connections
+    const allocateParallel = async (count: number) =>
+      Promise.all(
+        Array.from({ length: count }, async () => {
+          const c = await pool.connect();
+          try {
+            await c.query('BEGIN');
+            const qtNum = await allocateDocumentNumber(c, QUOTATION_NUMBERING_CONFIG);
+            await c.query(
+              `INSERT INTO quotations (
+                 quotation_number, quotation_date, customer_name, company_snapshot, subtotal, taxable_amount, grand_total, amount_in_words
+               ) VALUES (
+                 $1, '2026-11-11', 'Concurrent Client', '{}'::jsonb, 100.00, 100.00, 100.00, 'Rupees One Hundred Only'
+               )`,
+              [qtNum]
+            );
+            const nbNum = await allocateDocumentNumber(c, NORMAL_BILL_NUMBERING_CONFIG);
+            await c.query(
+              `INSERT INTO normal_bills (
+                 bill_number, bill_date, state, state_code, customer_name, total_amount, amount_in_words
+               ) VALUES (
+                 $1, '2026-11-11', 'Bihar', '10', 'Concurrent NB Client', 100.00, 'Rupees One Hundred Only'
+               )`,
+              [nbNum]
+            );
+            await c.query('COMMIT');
+            return { qtNum, nbNum };
+          } catch (err) {
+            await c.query('ROLLBACK');
+            throw err;
+          } finally {
+            c.release();
+          }
+        })
+      );
+
+    const results = await allocateParallel(5);
+    const qtNums = results.map((r) => r.qtNum);
+    const nbNums = results.map((r) => r.nbNum);
+    expect(new Set(qtNums).size).toBe(5);
+    expect(new Set(nbNums).size).toBe(5);
+
+    // Concurrent idempotency lock race & payload conflict
+    const raceKey = 'pg-race-idemp-key-019';
+    const hashA = hashIdempotencyPayload({ total: '500.00', notes: 'A' });
+    const hashB = hashIdempotencyPayload({ total: '500.00', notes: 'B' });
+
+    const runIdempotentWorker = async (delayMs: number) => {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        await acquireIdempotencyLock(c, raceKey);
+        const existing = await checkIdempotencyRecord<{ seq: number }>(c, raceKey, 'CREATE_NORMAL_BILL', hashA);
+        if (existing.found && !existing.expired) {
+          await c.query('COMMIT');
+          return { replayed: true, body: existing.responseBody };
+        }
+        if (delayMs > 0) {
+          await new Promise((r) => setTimeout(r, delayMs));
+        }
+        const body = { seq: Math.floor(Math.random() * 10000) + 1 };
+        await storeIdempotencyRecord(c, {
+          key: raceKey,
+          action: 'CREATE_NORMAL_BILL',
+          requestHash: hashA,
+          responseStatus: 201,
+          responseBody: body,
+        });
+        await c.query('COMMIT');
+        return { replayed: false, body };
+      } finally {
+        c.release();
+      }
+    };
+
+    const [w1, w2] = await Promise.all([runIdempotentWorker(40), runIdempotentWorker(0)]);
+    expect([w1.replayed, w2.replayed].sort()).toEqual([false, true]);
+    expect(w1.body.seq).toBe(w2.body.seq);
+
+    // Payload mismatch & cross-action conflict on real DB throw 409
+    await expect(
+      checkIdempotencyRecord(pool, raceKey, 'CREATE_NORMAL_BILL', hashB)
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_CONFLICT' });
+    await expect(
+      checkIdempotencyRecord(pool, raceKey, 'CREATE_GST_INVOICE', hashA)
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_CONFLICT' });
+
+    // Force expiration -> key is reusable & cleanup removes it
+    await pool.query(
+      `UPDATE idempotency_keys SET expires_at = NOW() - INTERVAL '5 minutes' WHERE key = $1`,
+      [raceKey]
+    );
+    const expiredCheck = await checkIdempotencyRecord(pool, raceKey, 'CREATE_GST_INVOICE', hashB);
+    expect(expiredCheck).toEqual({ found: true, expired: true });
+
+    await storeIdempotencyRecord(pool, {
+      key: raceKey,
+      action: 'CREATE_GST_INVOICE',
+      requestHash: hashB,
+      responseStatus: 201,
+      responseBody: { refreshed: true },
+    });
+    const refreshedCheck = await checkIdempotencyRecord(pool, raceKey, 'CREATE_GST_INVOICE', hashB);
+    expect(refreshedCheck).toMatchObject({
+      found: true,
+      expired: false,
+      responseBody: { refreshed: true },
+    });
+
+    await pool.query(
+      `INSERT INTO idempotency_keys (key, action, request_hash, response_status, response_body, created_at, expires_at)
+       VALUES ('pg-expired-cleanup-test', 'CREATE_TX', 'h', 201, '{}'::jsonb, NOW() - INTERVAL '48 hours', NOW() - INTERVAL '24 hours')`
+    );
+    const deleted = await cleanupExpiredIdempotencyKeys(pool, 50);
+    expect(deleted).toBeGreaterThanOrEqual(1);
+    const checkRemaining = await pool.query(`SELECT 1 FROM idempotency_keys WHERE key = 'pg-expired-cleanup-test'`);
+    expect(checkRemaining.rowCount).toBe(0);
+  });
+
+  // 23. End-to-End Service Integration & Rollback Safety Against Real PostgreSQL
+  it('23. Runs real khataService, quotationsService, normalBillsService, and gstInvoicesService against PostgreSQL including conversion & rollback safety', async () => {
+    vi.spyOn(appPool, 'connect').mockImplementation(() => pool.connect());
+    vi.spyOn(appPool, 'query').mockImplementation((...args: any[]) => (pool.query as any)(...args));
+
+    try {
+      // Seed canonical company tax profile in quotation_settings (id = 1)
+      await pool.query(`
+        INSERT INTO quotation_settings (
+          id, company_name, cin, gstin, address, phone, email, website, state, state_code
+        ) VALUES (
+          1, 'ALGIONS AI LABS PRIVATE LIMITED', 'U62011BR2026PTC088473', '10ABGCA8624E1Z3',
+          'Gopalganj, Bihar', '9493840000', 'contact@algions.in', 'algions.in', 'Bihar', '10'
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          company_name = EXCLUDED.company_name,
+          gstin = EXCLUDED.gstin,
+          state = EXCLUDED.state,
+          state_code = EXCLUDED.state_code
+      `);
+
+      // Customer state create -> update -> null clear
+      const createdCust = await khataService.createCustomer({
+        name: 'Real PG Customer',
+        phone: '9876511122',
+        address: 'Pune',
+        state: 'Maharashtra',
+        stateCode: '27',
+      });
+      expect(createdCust.state).toBe('Maharashtra');
+      expect(createdCust.state_code).toBe('27');
+
+      const clearedCust = await khataService.updateCustomer(createdCust.id, {
+        state: null,
+        stateCode: null,
+      });
+      expect(clearedCust.state).toBeNull();
+      expect(clearedCust.state_code).toBeNull();
+
+      // Create GST quotation & convert cleanly using manual QT-200
+      const qt = await quotationsService.createQuotation({
+        quotationNumber: 'QT-200',
+        customerName: 'UP Buyer Corp',
+        customerState: 'Uttar Pradesh',
+        customerStateCode: '09',
+        customerGstin: '09AABCS1429B1ZS',
+        gstEnabled: true,
+        gstRate: 18,
+        discountType: 'percentage',
+        discountValue: '10',
+        items: [
+          { description: 'Item 1', quantity: '2.00', rate: '100.00' },
+          { description: 'Item 2', quantity: '1.00', rate: '300.00' },
+        ],
+      });
+      expect(qt.quotation_number).toBe('QT-200');
+      expect(qt.igst_amount).toBe('81.00');
+      expect(qt.grand_total).toBe('531.00');
+
+      const acceptedQt = await quotationsService.updateQuotationStatus(qt.id, 'accepted');
+      expect(acceptedQt.status).toBe('accepted');
+
+      const converted = await quotationsService.convertToBill(qt.id, {
+        billType: 'gst',
+        gstRateOverride: 18,
+      });
+      expect(converted.billType).toBe('gst');
+
+      // Double conversion rejected with 409
+      await expect(
+        quotationsService.convertToBill(qt.id, { billType: 'gst' })
+      ).rejects.toMatchObject({ status: 409 });
+
+      // Concurrent real service invoice creation
+      const parallelInvoices = await Promise.all([
+        gstInvoicesService.createInvoice({
+          customerName: 'Parallel Inv A',
+          customerState: 'Bihar',
+          customerStateCode: '10',
+          gstRate: 18,
+          items: [{ description: 'Item', quantity: 1, rate: 100 }],
+        }),
+        gstInvoicesService.createInvoice({
+          customerName: 'Parallel Inv B',
+          customerState: 'Uttar Pradesh',
+          customerStateCode: '09',
+          gstRate: 18,
+          items: [{ description: 'Item', quantity: 1, rate: 100 }],
+        }),
+      ]);
+      expect(parallelInvoices[0].invoice_number).not.toBe(parallelInvoices[1].invoice_number);
+
+      // Concurrent real normal bill creation with notes-hash conflict test
+      const nbKey = 'real-pg-nb-idemp-1';
+      const nb1 = await normalBillsService.createBill({
+        customerName: 'Parallel NB',
+        notes: 'Note One',
+        items: [{ description: 'Item', quantity: 1, rate: 250 }],
+        idempotencyKey: nbKey,
+      });
+      expect(nb1.total_amount).toBe('250.00');
+      await expect(
+        normalBillsService.createBill({
+          customerName: 'Parallel NB',
+          notes: 'Note Changed',
+          items: [{ description: 'Item', quantity: 1, rate: 250 }],
+          idempotencyKey: nbKey,
+        })
+      ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_CONFLICT' });
+
+      // Rollback safety on item insertion error inside TX (no leaked quotation header!)
+      const beforeCountRes = await pool.query(`SELECT COUNT(*)::INT AS c FROM quotations`);
+      const beforeCount = beforeCountRes.rows[0].c;
+
+      const rbClient = await pool.connect();
+      try {
+        await rbClient.query('BEGIN');
+        await rbClient.query(
+          `INSERT INTO quotations (
+             quotation_number, quotation_date, customer_name, company_snapshot, subtotal, taxable_amount, grand_total, amount_in_words
+           ) VALUES (
+             'QT-ROLLBACK-TEST', '2026-11-11', 'Rollback Client', '{}'::jsonb, 100.00, 100.00, 100.00, 'Rupees One Hundred Only'
+           )`
+        );
+        // Attempt invalid item violating CHECK constraint -> roll back transaction
+        await expect(
+          rbClient.query(
+            `INSERT INTO quotation_items (quotation_id, item_index, description, quantity, rate, amount)
+             VALUES (currval('quotations_id_seq'), 1, 'Invalid Scale', 1.234, 100.00, 123.40)`
+          )
+        ).rejects.toThrow();
+        await rbClient.query('ROLLBACK');
+      } finally {
+        rbClient.release();
+      }
+
+      const afterCountRes = await pool.query(`SELECT COUNT(*)::INT AS c FROM quotations`);
+      expect(afterCountRes.rows[0].c).toBe(beforeCount);
+    } finally {
+      vi.restoreAllMocks();
     }
   });
 });

@@ -1,19 +1,30 @@
-import crypto from 'crypto';
 import Decimal from 'decimal.js';
 import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
+import { env } from '../../config/env.js';
+import { getBusinessDateISO } from '../../utils/businessDate.js';
 import {
   allocateDocumentNumber,
   getSuggestedNextDocumentNumber,
   GST_INVOICE_NUMBERING_CONFIG,
 } from '../billing/numbering.js';
-import { normalizeGstStateCode, validateGstinForState } from '../../utils/indianTax.js';
+import { resolveValidatedState, validateGstinForState } from '../../utils/indianTax.js';
+import { getCompanyTaxProfile } from '../../services/companyTaxProfile.service.js';
+import {
+  acquireIdempotencyLock,
+  checkIdempotencyRecord,
+  cleanupExpiredIdempotencyKeys,
+  hashIdempotencyPayload,
+  storeIdempotencyRecord,
+  updateIdempotencyResponse,
+} from '../../services/idempotency.service.js';
 import { StorageService } from '../../services/storage.service.js';
 import { AppError } from '../../utils/errors.js';
 import { validateMoneyInput, validateDecimalQuantityInput } from '../../utils/validation.js';
 import {
   generateTaxInvoicePdf,
   numberToIndianWords,
+  GstInvoicePdfCompany,
   GstInvoicePdfData,
 } from './gstInvoices.pdf.js';
 
@@ -30,8 +41,8 @@ export interface CreateGstInvoiceItemInput {
 export interface CreateGstInvoiceInput {
   invoiceNumber?: string;
   invoiceDate?: string;
-  state?: string;
-  stateCode?: string;
+  state?: string | null;
+  stateCode?: string | null;
   transportationMode?: string | null;
   vehicleNumber?: string | null;
   dateOfSupply?: string | null;
@@ -41,8 +52,8 @@ export interface CreateGstInvoiceInput {
   customerAddress?: string | null;
   customerGstin?: string | null;
   customerPhone?: string | null;
-  customerState?: string;
-  customerStateCode?: string;
+  customerState?: string | null;
+  customerStateCode?: string | null;
   gstRate: number | string; // e.g. 18 for 18% GST, 5, 12, 28, or 0
   subtotalAmount?: number | string;
   discountType?: 'percentage' | 'fixed' | null;
@@ -106,6 +117,44 @@ export interface GstInvoiceItemRecord {
   created_at: string;
 }
 
+function buildNormalizedInvoiceHashPayload(input: CreateGstInvoiceInput) {
+  return {
+    invoiceNumber: input.invoiceNumber?.trim() || null,
+    invoiceDate: input.invoiceDate?.trim() || null,
+    state: input.state?.trim() || null,
+    stateCode: input.stateCode?.trim() || null,
+    transportationMode: input.transportationMode?.trim() || null,
+    vehicleNumber: input.vehicleNumber?.trim() || null,
+    dateOfSupply: input.dateOfSupply?.trim() || null,
+    placeOfSupply: input.placeOfSupply?.trim() || null,
+    customerId: input.customerId ?? null,
+    customerName: input.customerName?.trim() || '',
+    customerAddress: input.customerAddress?.trim() || null,
+    customerPhone: input.customerPhone?.trim() || null,
+    customerGstin: input.customerGstin?.trim()?.toUpperCase() || null,
+    customerState: input.customerState?.trim() || null,
+    customerStateCode: input.customerStateCode?.trim() || null,
+    gstRate: String(input.gstRate ?? ''),
+    subtotalAmount:
+      input.subtotalAmount !== undefined && input.subtotalAmount !== null ? String(input.subtotalAmount) : null,
+    discountType: input.discountType ?? null,
+    discountValue:
+      input.discountValue !== undefined && input.discountValue !== null ? String(input.discountValue) : null,
+    discountAmount:
+      input.discountAmount !== undefined && input.discountAmount !== null ? String(input.discountAmount) : null,
+    notes: input.notes?.trim() || null,
+    items: (input.items || []).map((item) => ({
+      productId: item.productId ?? null,
+      description: item.description?.trim() || '',
+      hsnCode: item.hsnCode?.trim() || null,
+      quantity: String(item.quantity ?? ''),
+      unit: item.unit?.trim() || null,
+      rate: String(item.rate ?? ''),
+      rateUnit: item.rateUnit?.trim() || null,
+    })),
+  };
+}
+
 export class GstInvoicesService {
   private storageService: StorageService;
 
@@ -113,7 +162,7 @@ export class GstInvoicesService {
     this.storageService = storageService || new StorageService();
   }
 
-    /**
+  /**
    * Generates the next sequential invoice number suggestion from the database.
    * Pure, read-only, idempotent, and non-destructive. Never calls setval() or nextval().
    */
@@ -121,30 +170,61 @@ export class GstInvoicesService {
     return getSuggestedNextDocumentNumber(appPool, GST_INVOICE_NUMBERING_CONFIG);
   }
 
-  private hashPayload(payload: unknown): string {
-    return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  private async getOptionalPdfCompany(dbClient?: PoolClient): Promise<GstInvoicePdfCompany | undefined> {
+    try {
+      const profile = await getCompanyTaxProfile(dbClient);
+      return {
+        companyName: profile.companyName,
+        address: profile.address,
+        gstin: profile.gstin,
+        phone: profile.phone,
+        state: profile.state,
+        stateCode: profile.stateCode,
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   /**
    * Creates a GST Tax Invoice within an existing database transaction client.
-   * Atomically allocates invoice number, calculates Decimal finances, and inserts line items.
-   * Does NOT commit the transaction and does NOT upload to R2, enabling transactional composition.
+   * Atomically validates seller/buyer state & GSTIN, computes Decimal finances,
+   * allocates invoice number, and inserts line items.
    */
   public async createInvoiceInTransaction(client: PoolClient, input: CreateGstInvoiceInput): Promise<GstInvoiceRecord> {
     if (!input.items || input.items.length === 0) {
       throw new AppError('At least one line item is required.', 400, 'ITEMS_REQUIRED');
     }
 
-    // 1. Resolve invoice number atomically using sequence advisory lock allocator
-    const invoiceNumber = await allocateDocumentNumber(client, GST_INVOICE_NUMBERING_CONFIG, input.invoiceNumber);
-
-    // Auto-update customer address if linked customer lacks one
-    if (input.customerId && input.customerAddress?.trim()) {
-      await client.query(
-        `UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2 AND (address IS NULL OR address = '')`,
-        [input.customerAddress.trim(), input.customerId]
-      );
+    // 1. Validate supplier & buyer tax states cleanly BEFORE allocating invoice number
+    let supplierState: string;
+    let supplierStateCode: string;
+    if (input.state || input.stateCode) {
+      const resolvedSupplier = resolveValidatedState({
+        state: input.state,
+        stateCode: input.stateCode,
+        required: true,
+        fieldLabel: 'Company',
+      });
+      supplierState = resolvedSupplier.state!;
+      supplierStateCode = resolvedSupplier.stateCode!;
+    } else {
+      const companyProfile = await getCompanyTaxProfile(client);
+      supplierState = companyProfile.state;
+      supplierStateCode = companyProfile.stateCode;
     }
+
+    const resolvedCustomer = resolveValidatedState({
+      state: input.customerState,
+      stateCode: input.customerStateCode,
+      required: true,
+      fieldLabel: 'Customer',
+    });
+    const customerState = resolvedCustomer.state!;
+    const customerStateCode = resolvedCustomer.stateCode!;
+
+    const validatedCustomerGstin = validateGstinForState(input.customerGstin, customerStateCode);
+    const isIntraState = supplierStateCode === customerStateCode;
 
     // 2. Calculate item amounts and subtotal using Decimal.js with 2-decimal scale
     let subtotalDec = new Decimal(0);
@@ -152,7 +232,7 @@ export class GstInvoicesService {
 
     for (const item of input.items) {
       const qtyDec = validateDecimalQuantityInput(item.quantity, `Item "${item.description}" quantity`);
-      const rateDec = validateMoneyInput(item.rate, `Item "${item.description}" rate`);
+      const rateDec = validateMoneyInput(item.rate, `Item "${item.description}" rate`, { allowZero: true });
 
       const lineAmountDec = qtyDec.times(rateDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
       subtotalDec = subtotalDec.plus(lineAmountDec);
@@ -167,7 +247,7 @@ export class GstInvoicesService {
 
     // 3. Discount calculations
     const discountType = input.discountType || null;
-    let discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     let discountAmountDec = new Decimal(0);
 
     if (discountType === 'percentage') {
@@ -181,19 +261,14 @@ export class GstInvoicesService {
       }
       discountAmountDec = Decimal.min(discountValDec, subtotalDec);
     } else if (input.discountAmount) {
-      discountAmountDec = validateMoneyInput(input.discountAmount, 'Discount amount');
+      discountAmountDec = validateMoneyInput(input.discountAmount, 'Discount amount', { allowZero: true });
       discountAmountDec = Decimal.min(discountAmountDec, subtotalDec);
     }
 
     // Taxable amount is subtotal minus discount
     const taxableAmountDec = subtotalDec.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 
-    // 4. Tax calculations (Intra-state vs Inter-state)
-    const shopStateCode = normalizeGstStateCode(input.stateCode || '10');
-    const customerStateCode = normalizeGstStateCode(input.customerStateCode);
-    validateGstinForState(input.customerGstin, customerStateCode);
-    const isIntraState = shopStateCode === customerStateCode;
-
+    // 4. GST calculations (Intra-state vs Inter-state)
     const gstRateDec = new Decimal(input.gstRate || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     if (gstRateDec.isNegative() || !gstRateDec.isFinite() || gstRateDec.greaterThan(100)) {
       throw new AppError('GST rate must be between 0 and 100 with at most 2 decimal places.', 400, 'INVALID_GST_RATE');
@@ -207,13 +282,11 @@ export class GstInvoicesService {
     let igstAmountDec = new Decimal(0);
 
     if (isIntraState) {
-      // Intra-state: CGST (half) + SGST (half)
       cgstRateDec = gstRateDec.dividedBy(2).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
       sgstRateDec = gstRateDec.minus(cgstRateDec);
       cgstAmountDec = taxableAmountDec.times(cgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
       sgstAmountDec = taxableAmountDec.times(sgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     } else {
-      // Inter-state: IGST (full)
       igstRateDec = gstRateDec;
       igstAmountDec = taxableAmountDec.times(igstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     }
@@ -222,8 +295,20 @@ export class GstInvoicesService {
     const grandTotalDec = taxableAmountDec.plus(totalTaxDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     const amountInWords = numberToIndianWords(grandTotalDec.toFixed(2));
 
-    // 5. Insert into gst_invoices
-    const invoiceDate = input.invoiceDate || new Date().toISOString().slice(0, 10);
+    // 5. Resolve invoice number atomically AFTER validation passes
+    const invoiceNumber = await allocateDocumentNumber(client, GST_INVOICE_NUMBERING_CONFIG, input.invoiceNumber);
+
+    // Auto-update customer address if linked customer lacks one
+    if (input.customerId && input.customerAddress?.trim()) {
+      await client.query(
+        `UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2 AND (address IS NULL OR address = '')`,
+        [input.customerAddress.trim(), input.customerId]
+      );
+    }
+
+    // 6. Insert into gst_invoices using configured business date (IST)
+    const invoiceDate = input.invoiceDate || getBusinessDateISO(env.BUSINESS_TIME_ZONE);
+    const placeOfSupply = input.placeOfSupply?.trim() || customerState;
     const insertInvoiceSql = `
       INSERT INTO gst_invoices (
         invoice_number, invoice_date, state, state_code,
@@ -249,17 +334,17 @@ export class GstInvoicesService {
     const invoiceRes = await client.query(insertInvoiceSql, [
       invoiceNumber,
       invoiceDate,
-      input.state || 'Bihar',
-      shopStateCode,
+      supplierState,
+      supplierStateCode,
       input.transportationMode || null,
       input.vehicleNumber || null,
       input.dateOfSupply || invoiceDate,
-      input.placeOfSupply || 'Bihar',
+      placeOfSupply,
       input.customerId || null,
       input.customerName.trim(),
       input.customerAddress?.trim() || null,
-      input.customerGstin?.trim() || null,
-      input.customerState || 'Bihar',
+      validatedCustomerGstin,
+      customerState,
       customerStateCode,
       subtotalDec.toFixed(2),
       discountType,
@@ -280,7 +365,7 @@ export class GstInvoicesService {
 
     const createdInvoice: GstInvoiceRecord = invoiceRes.rows[0];
 
-    // 6. Insert Line Items
+    // 7. Insert Line Items
     const insertedItems: GstInvoiceItemRecord[] = [];
     for (let i = 0; i < computedItems.length; i++) {
       const itm = computedItems[i];
@@ -311,92 +396,67 @@ export class GstInvoicesService {
   }
 
   /**
-   * Creates a GST Tax Invoice, manages transaction boundaries, and generates PDF.
+   * Creates a GST Tax Invoice, manages transaction boundaries + 24h TTL idempotency, and generates PDF.
    */
   public async createInvoice(input: CreateGstInvoiceInput): Promise<GstInvoiceRecord> {
-    const idempotencyPayload = {
-      customerId: input.customerId,
-      customerName: input.customerName?.trim(),
-      customerAddress: input.customerAddress,
-      customerPhone: input.customerPhone,
-      customerGstin: input.customerGstin,
-      customerStateCode: input.customerStateCode,
-      gstRate: input.gstRate,
-      items: input.items,
-      discountType: input.discountType,
-      discountValue: input.discountValue,
-      discountAmount: input.discountAmount,
-      invoiceNumber: input.invoiceNumber,
-      invoiceDate: input.invoiceDate,
-    };
-    const currentHash = this.hashPayload(idempotencyPayload);
+    const idempotencyKey = input.idempotencyKey?.trim() || null;
+    const requestHash = idempotencyKey
+      ? hashIdempotencyPayload(buildNormalizedInvoiceHashPayload(input))
+      : null;
 
     const client = await appPool.connect();
     let createdInvoice: GstInvoiceRecord;
+    let companyForPdf: GstInvoicePdfCompany | undefined;
 
     try {
       await client.query('BEGIN');
 
-      if (input.idempotencyKey) {
-        const idempRes = await client.query(
-          'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
-          [input.idempotencyKey]
+      if (idempotencyKey && requestHash) {
+        await acquireIdempotencyLock(client, idempotencyKey);
+        const existingIdemp = await checkIdempotencyRecord<GstInvoiceRecord>(
+          client,
+          idempotencyKey,
+          'CREATE_GST_INVOICE',
+          requestHash
         );
-        if (idempRes.rows.length > 0) {
-          const row = idempRes.rows[0];
-          if (row.request_hash === currentHash) {
-            await client.query('COMMIT');
-            return row.response_body;
-          } else {
-            throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
+        if (existingIdemp.found && !existingIdemp.expired) {
+          await client.query('COMMIT');
+          const replayed = existingIdemp.responseBody;
+          if (replayed && typeof replayed.id === 'number') {
+            const fresh = await this.getInvoiceById(replayed.id).catch(() => null);
+            if (fresh) return fresh;
           }
+          return replayed;
         }
+        await cleanupExpiredIdempotencyKeys(client, 100);
       }
 
+      companyForPdf = await this.getOptionalPdfCompany(client);
       createdInvoice = await this.createInvoiceInTransaction(client, input);
 
-      if (input.idempotencyKey) {
-        await client.query(
-          `INSERT INTO idempotency_keys (key, action, request_hash, response_status, response_body, created_at)
-           VALUES ($1, $2, $3, $4, $5, NOW())`,
-          [input.idempotencyKey, 'CREATE_GST_INVOICE', currentHash, 201, JSON.stringify(createdInvoice)]
-        );
+      if (idempotencyKey && requestHash) {
+        await storeIdempotencyRecord(client, {
+          key: idempotencyKey,
+          action: 'CREATE_GST_INVOICE',
+          requestHash,
+          responseStatus: 201,
+          responseBody: createdInvoice,
+        });
       }
 
       await client.query('COMMIT');
-    } catch (err: any) {
+    } catch (err) {
       try {
         await client.query('ROLLBACK');
       } catch {
         // Ignore rollback failure
       }
-
-      if (input.idempotencyKey && err?.code === '23505' && err?.constraint?.includes('idempotency')) {
-        try {
-          const checkRes = await appPool.query(
-            'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
-            [input.idempotencyKey]
-          );
-          if (checkRes.rows.length > 0) {
-            const row = checkRes.rows[0];
-            if (row.request_hash === currentHash) {
-              return row.response_body;
-            } else {
-              throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
-            }
-          }
-        } catch (innerErr) {
-          if (innerErr instanceof AppError) throw innerErr;
-        }
-        throw new AppError('A request with this idempotency key is currently processing. Please retry in a moment.', 409, 'IDEMPOTENCY_IN_FLIGHT');
-      }
-
       throw err;
     } finally {
       client.release();
     }
 
-    // 7. Generate PDF and upload to Cloudflare R2 outside database transaction
+    // Generate PDF and upload to Cloudflare R2 outside database transaction
     let pdfStatus: 'uploaded' | 'local_only' | 'failed' = 'local_only';
     let r2ObjectKey: string | null = null;
 
@@ -410,6 +470,7 @@ export class GstInvoicesService {
         vehicleNumber: createdInvoice.vehicle_number,
         dateOfSupply: createdInvoice.date_of_supply,
         placeOfSupply: createdInvoice.place_of_supply,
+        company: companyForPdf,
         customer: {
           name: createdInvoice.customer_name,
           address: createdInvoice.customer_address,
@@ -446,8 +507,7 @@ export class GstInvoicesService {
       });
 
       if (this.storageService.isConfigured()) {
-        const year = new Date().getFullYear();
-        const month = String(new Date().getMonth() + 1).padStart(2, '0');
+        const [year, month] = getBusinessDateISO(env.BUSINESS_TIME_ZONE).split('-');
         r2ObjectKey = `gst-invoices/${year}/${month}/${createdInvoice.id}.pdf`;
 
         try {
@@ -474,6 +534,16 @@ export class GstInvoicesService {
       );
       createdInvoice.pdf_status = pdfStatus;
       createdInvoice.r2_object_key = r2ObjectKey;
+
+      if (idempotencyKey && requestHash) {
+        await updateIdempotencyResponse(appPool, {
+          key: idempotencyKey,
+          action: 'CREATE_GST_INVOICE',
+          requestHash,
+          responseStatus: 201,
+          responseBody: createdInvoice,
+        });
+      }
     } catch (updateErr) {
       console.error('[GST INVOICE DB UPDATE] Failed to update pdf_status:', updateErr);
     }
@@ -514,10 +584,7 @@ export class GstInvoicesService {
 
     const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    const countRes = await appPool.query(
-      `SELECT COUNT(*)::INT AS total FROM gst_invoices i ${whereSql}`,
-      params
-    );
+    const countRes = await appPool.query(`SELECT COUNT(*)::INT AS total FROM gst_invoices i ${whereSql}`, params);
     const total = countRes.rows[0]?.total || 0;
 
     const listSql = `
@@ -609,7 +676,6 @@ export class GstInvoicesService {
 
     const filename = `Invoice_${invoice.invoice_number}.pdf`;
 
-    // Try fetching from R2 if uploaded
     if (invoice.r2_object_key && this.storageService.isConfigured()) {
       try {
         const streamObj = await this.storageService.getObjectStream(invoice.r2_object_key);
@@ -623,7 +689,7 @@ export class GstInvoicesService {
       }
     }
 
-    // Generate from snapshot
+    const company = await this.getOptionalPdfCompany();
     const pdfData: GstInvoicePdfData = {
       invoiceNumber: invoice.invoice_number,
       invoiceDate: invoice.invoice_date,
@@ -633,6 +699,7 @@ export class GstInvoicesService {
       vehicleNumber: invoice.vehicle_number,
       dateOfSupply: invoice.date_of_supply,
       placeOfSupply: invoice.place_of_supply,
+      company,
       customer: {
         name: invoice.customer_name,
         address: invoice.customer_address,
@@ -680,12 +747,32 @@ export class GstInvoicesService {
       throw new AppError('At least one line item is required.', 400, 'ITEMS_REQUIRED');
     }
 
+    const companyProfile = await getCompanyTaxProfile();
+    const resolvedSupplier =
+      input.state || input.stateCode
+        ? resolveValidatedState({
+            state: input.state,
+            stateCode: input.stateCode,
+            required: true,
+            fieldLabel: 'Company',
+          })
+        : { state: companyProfile.state, stateCode: companyProfile.stateCode };
+
+    const resolvedCustomer = resolveValidatedState({
+      state: input.customerState,
+      stateCode: input.customerStateCode,
+      required: true,
+      fieldLabel: 'Customer',
+    });
+
+    const validatedCustomerGstin = validateGstinForState(input.customerGstin, resolvedCustomer.stateCode!);
+
     let subtotalDec = new Decimal(0);
     const pdfItems: GstInvoicePdfData['items'] = [];
 
     for (const item of input.items) {
-      const qtyDec = validateDecimalQuantityInput(item.quantity || 1, 'Quantity');
-      const rateDec = validateMoneyInput(item.rate || 0, 'Rate');
+      const qtyDec = validateDecimalQuantityInput(item.quantity, 'Quantity');
+      const rateDec = validateMoneyInput(item.rate, 'Rate', { allowZero: true });
       const lineAmountDec = qtyDec.times(rateDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
       subtotalDec = subtotalDec.plus(lineAmountDec);
 
@@ -701,12 +788,18 @@ export class GstInvoicesService {
     }
 
     const discountType = input.discountType || null;
-    let discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     let discountAmountDec = new Decimal(0);
 
     if (discountType === 'percentage') {
+      if (discountValDec.isNegative() || discountValDec.greaterThan(100)) {
+        throw new AppError('Discount percentage must be between 0 and 100.', 400, 'INVALID_DISCOUNT');
+      }
       discountAmountDec = subtotalDec.times(discountValDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     } else if (discountType === 'fixed') {
+      if (discountValDec.isNegative()) {
+        throw new AppError('Discount fixed amount cannot be negative.', 400, 'INVALID_DISCOUNT');
+      }
       discountAmountDec = Decimal.min(discountValDec, subtotalDec);
     } else if (input.discountAmount) {
       discountAmountDec = Decimal.min(new Decimal(input.discountAmount || 0), subtotalDec);
@@ -714,8 +807,8 @@ export class GstInvoicesService {
 
     const taxableAmountDec = subtotalDec.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 
-    const shopStateCode = (input.stateCode || '10').trim();
-    const customerStateCode = (input.customerStateCode || '10').trim();
+    const shopStateCode = resolvedSupplier.stateCode!;
+    const customerStateCode = resolvedCustomer.stateCode!;
     const isIntraState = shopStateCode === customerStateCode;
     const gstRateDec = new Decimal(input.gstRate || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     if (gstRateDec.isNegative() || !gstRateDec.isFinite() || gstRateDec.greaterThan(100)) {
@@ -746,18 +839,26 @@ export class GstInvoicesService {
 
     const pdfData: GstInvoicePdfData = {
       invoiceNumber,
-      invoiceDate: input.invoiceDate || new Date().toISOString().slice(0, 10),
-      state: input.state || 'Bihar',
+      invoiceDate: input.invoiceDate || getBusinessDateISO(env.BUSINESS_TIME_ZONE),
+      state: resolvedSupplier.state!,
       stateCode: shopStateCode,
       transportationMode: input.transportationMode || null,
       vehicleNumber: input.vehicleNumber || null,
       dateOfSupply: input.dateOfSupply || null,
-      placeOfSupply: input.placeOfSupply || 'Bihar',
+      placeOfSupply: input.placeOfSupply?.trim() || resolvedCustomer.state!,
+      company: {
+        companyName: companyProfile.companyName,
+        address: companyProfile.address,
+        gstin: companyProfile.gstin,
+        phone: companyProfile.phone,
+        state: companyProfile.state,
+        stateCode: companyProfile.stateCode,
+      },
       customer: {
         name: input.customerName || 'Valued Customer',
         address: input.customerAddress || null,
-        gstin: input.customerGstin || null,
-        state: input.customerState || 'Bihar',
+        gstin: validatedCustomerGstin,
+        state: resolvedCustomer.state!,
         stateCode: customerStateCode,
       },
       items: pdfItems,

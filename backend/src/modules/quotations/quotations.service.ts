@@ -4,8 +4,25 @@ import { appPool } from '../../config/database.js';
 import { env } from '../../config/env.js';
 import { AppError } from '../../utils/errors.js';
 import { getBusinessDateISO } from '../../utils/businessDate.js';
-import { normalizeGstStateCode, validateGstinForState, getStateNameByCode } from '../../utils/indianTax.js';
-import { validateMoneyInput, validateDecimalQuantityInput, escapeLike } from '../../utils/validation.js';
+import {
+  normalizeGstStateCode,
+  resolveValidatedState,
+  validateGstin,
+  validateGstinForState,
+  getStateNameByCode,
+} from '../../utils/indianTax.js';
+import {
+  FinancialValidationError,
+  validateMoneyInput,
+  validateDecimalQuantityInput,
+  escapeLike,
+} from '../../utils/validation.js';
+import { getCompanyTaxProfile } from '../../services/companyTaxProfile.service.js';
+import {
+  allocateDocumentNumber,
+  getSuggestedNextDocumentNumber,
+  QUOTATION_NUMBERING_CONFIG,
+} from '../billing/numbering.js';
 import { numberToIndianWords } from '../gstInvoices/gstInvoices.pdf.js';
 import { normalBillsService } from '../normalBills/normalBills.service.js';
 import { gstInvoicesService } from '../gstInvoices/gstInvoices.service.js';
@@ -111,8 +128,8 @@ export interface CreateQuotationInput {
   customerAddress?: string | null;
   customerPhone?: string | null;
   customerGstin?: string | null;
-  customerState?: string;
-  customerStateCode?: string;
+  customerState?: string | null;
+  customerStateCode?: string | null;
   projectTitle?: string | null;
   subject?: string | null;
   items: QuotationItemInput[];
@@ -126,28 +143,45 @@ export interface CreateQuotationInput {
 
 export class QuotationsService {
   /**
-   * Retrieves active company profile & quotation defaults from quotation_settings
+   * Retrieves active company profile & quotation defaults from quotation_settings (id = 1).
+   * Fails explicitly when configuration row is missing rather than inventing default state data.
    */
   public async getSettings(): Promise<QuotationSettingsRecord> {
     const res = await appPool.query('SELECT * FROM quotation_settings WHERE id = 1');
     if (res.rows.length === 0) {
-      const fallback = await appPool.query(`
-        INSERT INTO quotation_settings (id)
-        VALUES (1)
-        ON CONFLICT (id) DO NOTHING
-        RETURNING *
-      `);
-      if (fallback.rows.length > 0) return fallback.rows[0];
-      const recheck = await appPool.query('SELECT * FROM quotation_settings WHERE id = 1');
-      return recheck.rows[0];
+      throw new AppError(
+        'Company tax profile is not configured in quotation_settings.',
+        500,
+        'COMPANY_TAX_PROFILE_MISSING'
+      );
     }
     return res.rows[0];
   }
 
   /**
-   * Updates company quotation configuration profile
+   * Updates company quotation configuration profile after validating state, code, and GSTIN.
    */
   public async updateSettings(data: Record<string, any>): Promise<QuotationSettingsRecord> {
+    const resolvedState = resolveValidatedState({
+      state: data.state,
+      stateCode: data.stateCode,
+      required: true,
+      fieldLabel: 'Company',
+    });
+
+    const normalizedGstin = data.gstin && String(data.gstin).trim()
+      ? validateGstinForState(String(data.gstin), resolvedState.stateCode!)
+      : null;
+
+    const normalizedPayload: Record<string, any> = {
+      ...data,
+      state: resolvedState.state,
+      stateCode: resolvedState.stateCode,
+      gstin: normalizedGstin,
+      email: typeof data.email === 'string' && data.email.trim() === '' ? null : data.email,
+      logoUrl: typeof data.logoUrl === 'string' && data.logoUrl.trim() === '' ? null : data.logoUrl,
+    };
+
     const fields: string[] = [];
     const params: any[] = [];
 
@@ -174,9 +208,9 @@ export class QuotationsService {
       signatoryTitle: 'signatory_title',
     };
 
-    Object.entries(data).forEach(([key, val]) => {
-      const dbCol = fieldMap[key] || key;
-      if (val !== undefined) {
+    Object.entries(normalizedPayload).forEach(([key, val]) => {
+      const dbCol = fieldMap[key];
+      if (dbCol && val !== undefined) {
         params.push(val);
         fields.push(`"${dbCol}" = $${params.length}`);
       }
@@ -196,39 +230,22 @@ export class QuotationsService {
     `;
 
     const res = await appPool.query(sql, params);
+    if ((res.rowCount ?? 0) === 0) {
+      throw new AppError(
+        'Company tax profile is not configured in quotation_settings.',
+        500,
+        'COMPANY_TAX_PROFILE_MISSING'
+      );
+    }
     return res.rows[0];
   }
 
   /**
-   * Generates next sequential quotation number in QT-001 format.
-   * Concurrency-safe and sequence backed.
+   * Read-only preview of the next sequential quotation number in QT-001 format.
+   * Never advances quotation_number_seq during previews or page loads.
    */
   public async getNextQuotationNumber(): Promise<string> {
-    try {
-      const seqRes = await appPool.query("SELECT nextval('quotation_number_seq') AS seq_num");
-      const seqVal = seqRes.rows[0]?.seq_num;
-      if (seqVal) {
-        return `QT-${String(seqVal).padStart(3, '0')}`;
-      }
-    } catch {
-      // Sequence call failed, fall back to MAX check
-    }
-
-    try {
-      const maxRes = await appPool.query(`
-        SELECT COALESCE(MAX(
-          CASE
-            WHEN quotation_number ~ '^QT-\\d+$' THEN SUBSTRING(quotation_number FROM 4)::BIGINT
-            WHEN quotation_number ~ '^\\d+$' THEN quotation_number::BIGINT
-            ELSE 0
-          END
-        ), 0) AS max_num FROM quotations
-      `);
-      const currentMax = Number(maxRes.rows[0]?.max_num || 0);
-      return `QT-${String(currentMax + 1).padStart(3, '0')}`;
-    } catch {
-      return 'QT-001';
-    }
+    return getSuggestedNextDocumentNumber(appPool, QUOTATION_NUMBERING_CONFIG);
   }
 
   /**
@@ -241,8 +258,8 @@ export class QuotationsService {
     discountValue?: number | string,
     gstEnabled: boolean = false,
     gstRate: number | string = 18,
-    supplierStateCode: string = '10',
-    customerStateCode: string = '10'
+    supplierStateCode?: string | null,
+    customerStateCode?: string | null
   ) {
     if (!items || items.length === 0) {
       throw new AppError('At least one line item is required.', 400, 'VALIDATION_ERROR');
@@ -252,7 +269,7 @@ export class QuotationsService {
     let subtotalDec = new Decimal(0);
     const calculatedItems = items.map((item, idx) => {
       const qtyDec = validateDecimalQuantityInput(item.quantity, `Item ${idx + 1} quantity`);
-      const rateDec = validateMoneyInput(item.rate, `Item ${idx + 1} rate`);
+      const rateDec = validateMoneyInput(item.rate, `Item ${idx + 1} rate`, { allowZero: true });
       const amountDec = qtyDec.times(rateDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
       subtotalDec = subtotalDec.plus(amountDec);
 
@@ -291,7 +308,22 @@ export class QuotationsService {
     const gstRateDec = new Decimal(gstRate || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 
     if (gstEnabled && gstRateDec.greaterThan(0)) {
-      const isIntraState = supplierStateCode.trim() === customerStateCode.trim();
+      if (!supplierStateCode || !supplierStateCode.trim()) {
+        throw new FinancialValidationError(
+          'Company state code is required when GST is enabled.',
+          'INVALID_STATE_CODE'
+        );
+      }
+      if (!customerStateCode || !customerStateCode.trim()) {
+        throw new FinancialValidationError(
+          'Customer state code is required when GST is enabled.',
+          'STATE_CODE_REQUIRED'
+        );
+      }
+
+      const normalizedSupplierCode = normalizeGstStateCode(supplierStateCode);
+      const normalizedCustomerCode = normalizeGstStateCode(customerStateCode);
+      const isIntraState = normalizedSupplierCode === normalizedCustomerCode;
 
       if (isIntraState) {
         const halfRateDec = gstRateDec.dividedBy(2);
@@ -338,16 +370,29 @@ export class QuotationsService {
     customerStateCode?: string;
     isIntraState?: boolean;
   }) {
-    const supplier = options.supplierStateCode || '10';
+    const gstEnabled = options.gstEnabled ?? false;
+    let supplier = options.supplierStateCode;
     let customer = options.customerStateCode;
-    if (!customer) {
-      customer = options.isIntraState === false ? '09' : supplier;
+
+    if (gstEnabled) {
+      if (supplier && !customer && typeof options.isIntraState === 'boolean') {
+        const normalizedSupplier = normalizeGstStateCode(supplier);
+        customer = options.isIntraState
+          ? normalizedSupplier
+          : normalizedSupplier === '27'
+            ? '29'
+            : '27';
+      } else if (!supplier && !customer && typeof options.isIntraState === 'boolean') {
+        supplier = '27';
+        customer = options.isIntraState ? '27' : '29';
+      }
     }
+
     return this.calculateQuotationTotals(
       options.items,
       options.discountType,
       options.discountValue,
-      options.gstEnabled ?? false,
+      gstEnabled,
       options.gstRate ?? 18,
       supplier,
       customer
@@ -355,24 +400,37 @@ export class QuotationsService {
   }
 
   /**
-   * Creates a new professional quotation with independent recalculated totals,
-   * snapshot of company profile, and authoritative sequential numbering.
+   * Creates a new professional quotation with validated state/GSTIN before financial calculations,
+   * authoritative snapshot of company profile, and concurrency-safe sequential numbering.
    */
   public async createQuotation(input: CreateQuotationInput): Promise<QuotationRecord> {
-    const settings = await this.getSettings();
+    // 1. Load & validate company tax profile (no hidden state defaults)
+    const companyProfile = await getCompanyTaxProfile();
 
-    const customerState = input.customerState?.trim() || settings.state || 'Bihar';
-    const customerStateCode = input.customerStateCode?.trim() || settings.state_code || '10';
+    // 2. Validate & normalize buyer state before totals; required when GST is enabled
+    const resolvedCustomerState = resolveValidatedState({
+      state: input.customerState,
+      stateCode: input.customerStateCode,
+      required: Boolean(input.gstEnabled),
+      fieldLabel: 'Customer',
+    });
 
-    // Calculate totals safely
+    // 3. Validate customer GSTIN format, Luhn mod-36 checksum, and state prefix match
+    const validatedCustomerGstin = input.customerGstin
+      ? resolvedCustomerState.stateCode
+        ? validateGstinForState(input.customerGstin, resolvedCustomerState.stateCode)
+        : validateGstin(input.customerGstin)
+      : null;
+
+    // 4. Calculate financial totals cleanly BEFORE opening DB transaction / consuming sequence
     const calc = this.calculateQuotationTotals(
       input.items,
       input.discountType,
       input.discountValue,
       input.gstEnabled,
       input.gstRate,
-      settings.state_code,
-      customerStateCode
+      companyProfile.stateCode,
+      resolvedCustomerState.stateCode
     );
 
     const client = await appPool.connect();
@@ -380,73 +438,53 @@ export class QuotationsService {
     try {
       await client.query('BEGIN');
 
-      // Resolve quotation number using authoritative sequence
-      let quotationNumber = input.quotationNumber?.trim();
-      if (!quotationNumber) {
-        try {
-          const seqRes = await client.query("SELECT nextval('quotation_number_seq') AS seq_num");
-          const seqVal = seqRes.rows[0]?.seq_num;
-          quotationNumber = `QT-${String(seqVal).padStart(3, '0')}`;
-        } catch {
-          quotationNumber = await this.getNextQuotationNumber();
-        }
-      }
-
-      // Check collision
-      const checkExists = await client.query(
-        'SELECT 1 FROM quotations WHERE quotation_number = $1',
-        [quotationNumber]
+      // 5. Allocate authoritative sequential or validated manual quotation number inside transaction
+      const quotationNumber = await allocateDocumentNumber(
+        client,
+        QUOTATION_NUMBERING_CONFIG,
+        input.quotationNumber
       );
-      if ((checkExists.rowCount ?? 0) > 0) {
-        throw new AppError(`Quotation number "${quotationNumber}" already exists.`, 409, 'DUPLICATE_QUOTATION_NUMBER');
-      }
 
-      // Snapshot company profile
+      // Snapshot company profile from single authoritative source
       const companySnapshot: QuotationCompanySnapshot = {
-        companyName: settings.company_name,
-        logoUrl: settings.logo_url,
-        cin: settings.cin,
-        gstin: settings.gstin,
-        address: settings.address,
-        email: settings.email,
-        phone: settings.phone,
-        website: settings.website,
-        state: settings.state,
-        stateCode: settings.state_code,
-        bankName: settings.bank_name,
-        bankAccountNumber: settings.bank_account_number,
-        bankIfsc: settings.bank_ifsc,
-        bankBranch: settings.bank_branch,
-        signatoryTitle: settings.signatory_title,
+        companyName: companyProfile.companyName,
+        logoUrl: companyProfile.logoUrl,
+        cin: companyProfile.cin,
+        gstin: companyProfile.gstin,
+        address: companyProfile.address,
+        email: companyProfile.email,
+        phone: companyProfile.phone,
+        website: companyProfile.website,
+        state: companyProfile.state,
+        stateCode: companyProfile.stateCode,
+        bankName: companyProfile.bankName,
+        bankAccountNumber: companyProfile.bankAccountNumber,
+        bankIfsc: companyProfile.bankIfsc,
+        bankBranch: companyProfile.bankBranch,
+        signatoryTitle: companyProfile.signatoryTitle,
       };
 
       const quotationDate = input.quotationDate || getBusinessDateISO(env.BUSINESS_TIME_ZONE);
 
       // Default validity if not specified: quotationDate + standardValidityDays
       let validUntil = input.validUntil || null;
-      if (!validUntil && settings.standard_validity_days > 0) {
+      if (!validUntil && companyProfile.standardValidityDays > 0) {
         const [y, m, d] = quotationDate.split('-').map(Number);
         const dt = new Date(Date.UTC(y, m - 1, d));
-        dt.setUTCDate(dt.getUTCDate() + settings.standard_validity_days);
+        dt.setUTCDate(dt.getUTCDate() + companyProfile.standardValidityDays);
         validUntil = dt.toISOString().split('T')[0];
       }
 
-      let customerState = input.customerState?.trim() || null;
-      let customerStateCode = input.customerStateCode ? normalizeGstStateCode(input.customerStateCode) : null;
-      if (customerStateCode && !customerState) {
-        customerState = getStateNameByCode(customerStateCode) || null;
-      }
-      if (input.customerGstin && customerStateCode) {
-        validateGstinForState(input.customerGstin, customerStateCode);
-      }
-
-      const termsAndConditions = input.termsAndConditions !== undefined
-        ? input.termsAndConditions
-        : [
-            settings.standard_payment_terms ? `Payment: ${settings.standard_payment_terms}` : null,
-            settings.standard_delivery_terms ? `Delivery: ${settings.standard_delivery_terms}` : null,
-            settings.standard_warranty_terms ? `Warranty: ${settings.standard_warranty_terms}` : null,
-          ].filter(Boolean).join('\n');
+      const termsAndConditions =
+        input.termsAndConditions !== undefined
+          ? input.termsAndConditions
+          : [
+              companyProfile.standardPaymentTerms ? `Payment: ${companyProfile.standardPaymentTerms}` : null,
+              companyProfile.standardDeliveryTerms ? `Delivery: ${companyProfile.standardDeliveryTerms}` : null,
+              companyProfile.standardWarrantyTerms ? `Warranty: ${companyProfile.standardWarrantyTerms}` : null,
+            ]
+              .filter(Boolean)
+              .join('\n');
 
       const initialStatus = input.initialStatus === 'sent' ? 'sent' : 'draft';
 
@@ -478,9 +516,9 @@ export class QuotationsService {
           input.customerName.trim(),
           input.customerAddress?.trim() || null,
           input.customerPhone?.trim() || null,
-          input.customerGstin?.trim() || null,
-          customerState,
-          customerStateCode,
+          validatedCustomerGstin,
+          resolvedCustomerState.state,
+          resolvedCustomerState.stateCode,
           input.projectTitle?.trim() || null,
           input.subject?.trim() || null,
           JSON.stringify(companySnapshot),
@@ -707,8 +745,8 @@ export class QuotationsService {
       billType: 'normal' | 'gst';
       force?: boolean;
       gstRateOverride?: number | string;
-      customerState?: string;
-      customerStateCode?: string;
+      customerState?: string | null;
+      customerStateCode?: string | null;
     }
   ): Promise<{ quotation: QuotationRecord; billType: 'normal' | 'gst'; billId: number; billNumber: string }> {
     const client = await appPool.connect();
@@ -763,19 +801,46 @@ export class QuotationsService {
       let billNumber: string;
       let updatedQuotation: QuotationRecord;
 
-      const companySnapshot = (quotation.company_snapshot || {}) as any;
-      const supplierState = companySnapshot?.state || 'Bihar';
-      const supplierStateCode = normalizeGstStateCode(companySnapshot?.stateCode || '10');
+      const companySnapshot = (quotation.company_snapshot || {}) as Partial<QuotationCompanySnapshot>;
+      let supplierState: string;
+      let supplierStateCode: string;
 
-      let buyerStateCode: string | null = null;
+      if (companySnapshot.state || companySnapshot.stateCode) {
+        const resolvedSupplier = resolveValidatedState({
+          state: companySnapshot.state,
+          stateCode: companySnapshot.stateCode,
+          required: true,
+          fieldLabel: 'Company',
+        });
+        supplierState = resolvedSupplier.state!;
+        supplierStateCode = resolvedSupplier.stateCode!;
+      } else {
+        const companyProfile = await getCompanyTaxProfile(client);
+        supplierState = companyProfile.state;
+        supplierStateCode = companyProfile.stateCode;
+      }
+
       let buyerState: string | null = null;
+      let buyerStateCode: string | null = null;
 
-      if (quotation.customer_state_code) {
-        buyerStateCode = normalizeGstStateCode(quotation.customer_state_code);
-        buyerState = quotation.customer_state || getStateNameByCode(buyerStateCode) || null;
-      } else if (input.customerStateCode) {
-        buyerStateCode = normalizeGstStateCode(input.customerStateCode);
-        buyerState = input.customerState || getStateNameByCode(buyerStateCode) || null;
+      if (input.customerState || input.customerStateCode) {
+        const resolvedInputBuyer = resolveValidatedState({
+          state: input.customerState,
+          stateCode: input.customerStateCode,
+          required: input.billType === 'gst',
+          fieldLabel: 'Customer',
+        });
+        buyerState = resolvedInputBuyer.state;
+        buyerStateCode = resolvedInputBuyer.stateCode;
+      } else if (quotation.customer_state || quotation.customer_state_code) {
+        const resolvedQuoteBuyer = resolveValidatedState({
+          state: quotation.customer_state,
+          stateCode: quotation.customer_state_code,
+          required: input.billType === 'gst',
+          fieldLabel: 'Customer',
+        });
+        buyerState = resolvedQuoteBuyer.state;
+        buyerStateCode = resolvedQuoteBuyer.stateCode;
       }
 
       if (input.billType === 'normal') {
@@ -787,8 +852,8 @@ export class QuotationsService {
           customerAddress: quotation.customer_address,
           customerPhone: quotation.customer_phone,
           customerId: quotation.customer_id,
-          customerState: buyerState || undefined,
-          customerStateCode: buyerStateCode || undefined,
+          customerState: buyerState,
+          customerStateCode: buyerStateCode,
           subtotalAmount: quotation.subtotal,
           discountType: quotation.discount_type,
           discountValue: quotation.discount_value,
@@ -847,6 +912,19 @@ export class QuotationsService {
           );
         }
 
+        const resolvedCustomerStateName = buyerState || getStateNameByCode(buyerStateCode);
+        if (!resolvedCustomerStateName) {
+          throw new AppError(
+            'Customer state code is invalid for GST conversion.',
+            400,
+            'INVALID_STATE_CODE'
+          );
+        }
+
+        if (quotation.customer_gstin) {
+          validateGstinForState(quotation.customer_gstin, buyerStateCode);
+        }
+
         const gstInvoice = await gstInvoicesService.createInvoiceInTransaction(client, {
           state: supplierState,
           stateCode: supplierStateCode,
@@ -854,7 +932,7 @@ export class QuotationsService {
           customerAddress: quotation.customer_address,
           customerGstin: quotation.customer_gstin,
           customerPhone: quotation.customer_phone,
-          customerState: buyerState || getStateNameByCode(buyerStateCode) || 'Bihar',
+          customerState: resolvedCustomerStateName,
           customerStateCode: buyerStateCode,
           customerId: quotation.customer_id,
           gstRate: appliedGstRate,

@@ -31,6 +31,18 @@ import {
   GstInvoiceRecord,
 } from './gstInvoicesApi.js';
 import { apiClient } from '../../lib/apiClient.js';
+import { fetchQuotationSettings } from '../quotations/quotationApi.js';
+import {
+  INDIAN_STATES,
+  getStateByCode,
+  resolveCustomerStateSelection,
+} from '../../lib/indianStates.js';
+import { getBusinessDateISO } from '../../utils/businessDate.js';
+import {
+  applyCatalogProductToDraftLine,
+  validateQuantityInput,
+  validateSellingRateInput,
+} from '../../utils/lineItemDraft.js';
 
 interface ProductItem {
   id: number;
@@ -44,6 +56,9 @@ interface CustomerItem {
   name: string;
   phone?: string | null;
   address?: string | null;
+  gstin?: string | null;
+  state?: string | null;
+  state_code?: string | null;
 }
 
 interface FormLineItem {
@@ -57,35 +72,37 @@ interface FormLineItem {
   rateUnit: string;
 }
 
-export const getTodayLocalDate = (): string => {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
+export const getTodayLocalDate = (): string => getBusinessDateISO();
 
 export const GstBillingView: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<'create' | 'history'>('create');
 
-  // Form states (Pre-filled with device local today's date)
+  // Form states (Pre-filled with business timezone IST today's date)
+  const [companyProfile, setCompanyProfile] = useState<{
+    name: string;
+    address: string;
+    gstin: string | null;
+    phone: string | null;
+    state: string;
+    stateCode: string;
+  } | null>(null);
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [isManualInvoiceNumber, setIsManualInvoiceNumber] = useState(false);
-  const [invoiceDate, setInvoiceDate] = useState<string>(() => getTodayLocalDate());
-  const [state] = useState('Bihar');
-  const [stateCode] = useState('10');
+  const [invoiceDate, setInvoiceDate] = useState<string>(() => getBusinessDateISO());
+  const [state, setState] = useState('');
+  const [stateCode, setStateCode] = useState('');
   const [transportationMode, setTransportationMode] = useState('');
   const [vehicleNumber, setVehicleNumber] = useState('');
-  const [dateOfSupply, setDateOfSupply] = useState<string>(() => getTodayLocalDate());
-  const [placeOfSupply, setPlaceOfSupply] = useState('Bihar');
+  const [dateOfSupply, setDateOfSupply] = useState<string>(() => getBusinessDateISO());
+  const [placeOfSupply, setPlaceOfSupply] = useState('');
 
   // Customer states
   const [customerId, setCustomerId] = useState<number | null>(null);
   const [customerName, setCustomerName] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [customerGstin, setCustomerGstin] = useState('');
-  const [customerState, setCustomerState] = useState('Bihar');
-  const [customerStateCode, setCustomerStateCode] = useState('10');
+  const [customerState, setCustomerState] = useState('');
+  const [customerStateCode, setCustomerStateCode] = useState('');
 
   // Line items
   const [items, setItems] = useState<FormLineItem[]>([
@@ -116,7 +133,7 @@ export const GstBillingView: React.FC = () => {
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
   const handleDirectPrint = (inv: GstInvoiceRecord) => {
-    setPreviewInvoice(mapRecordToInvoiceProps(inv));
+    setPreviewInvoice(mapRecordToInvoiceProps(inv, companyProfile || undefined));
     setAutoPrintAfterPreview(true);
   };
 
@@ -171,12 +188,34 @@ export const GstBillingView: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Fetch initial data (next invoice number, products, customers)
+  // Fetch initial data (company tax profile, next invoice number, products, customers)
   useEffect(() => {
+    loadCompanyProfile();
     fetchNextNumber();
     fetchProducts();
     fetchCustomers();
   }, []);
+
+  const loadCompanyProfile = async () => {
+    try {
+      const settings = await fetchQuotationSettings();
+      if (settings) {
+        setCompanyProfile({
+          name: settings.company_name,
+          address: settings.address,
+          gstin: settings.gstin,
+          phone: settings.phone,
+          state: settings.state,
+          stateCode: settings.state_code,
+        });
+        setState(settings.state || '');
+        setStateCode(settings.state_code || '');
+        setPlaceOfSupply((prev) => prev || settings.state || '');
+      }
+    } catch (err) {
+      console.warn('Could not load company tax profile:', err);
+    }
+  };
 
   const fetchNextNumber = async () => {
     try {
@@ -283,7 +322,9 @@ export const GstBillingView: React.FC = () => {
 
   // Safe Financial Calculation
   const isIntraState = useMemo(() => {
-    return stateCode.trim() === customerStateCode.trim();
+    return Boolean(
+      stateCode.trim() && customerStateCode.trim() && stateCode.trim() === customerStateCode.trim()
+    );
   }, [stateCode, customerStateCode]);
 
   const calculations = useMemo(() => {
@@ -350,6 +391,7 @@ export const GstBillingView: React.FC = () => {
       vehicleNumber,
       dateOfSupply,
       placeOfSupply,
+      company: companyProfile || { state, stateCode },
       customer: {
         name: customerName || 'Receiver Name',
         address: customerAddress || '',
@@ -392,6 +434,9 @@ export const GstBillingView: React.FC = () => {
     customerGstin,
     customerState,
     customerStateCode,
+    companyProfile,
+    state,
+    stateCode,
     calculations,
   ]);
 
@@ -427,20 +472,16 @@ export const GstBillingView: React.FC = () => {
 
   // Handle selecting an existing product
   const handleSelectProduct = (itemId: string, product: ProductItem) => {
-    const rawHsn = product.hsn_code || (product as any).hsnCode;
-    const cleanHsn = rawHsn ? String(rawHsn).trim() : null;
-
     setItems((prev) =>
       prev.map((i) => {
         if (i.id === itemId) {
+          const updated = applyCatalogProductToDraftLine(i, product);
           return {
             ...i,
-            productId: Number(product.id),
-            description: product.name,
-            // If product has HSN available, autofill it; shopkeeper can still freely edit it
-            hsnCode: cleanHsn !== null && cleanHsn !== '' ? cleanHsn : i.hsnCode || '',
-            // Autofill rate with product price if available, or keep existing
-            rate: product.buying_price ? String(product.buying_price) : i.rate || '',
+            productId: updated.productId,
+            description: updated.description,
+            hsnCode: updated.hsnCode,
+            rate: updated.rate,
           };
         }
         return i;
@@ -453,21 +494,43 @@ export const GstBillingView: React.FC = () => {
     setCustomerId(Number(c.id));
     setCustomerName(c.name);
     setCustomerAddress(c.address || '');
+    setCustomerGstin(c.gstin || '');
+    const resolvedState = resolveCustomerStateSelection(c);
+    setCustomerState(resolvedState.state);
+    setCustomerStateCode(resolvedState.stateCode);
     setIsCustomerDropdownOpen(false);
+  };
+
+  const validateGstForm = (requireCustomerName: boolean): string | null => {
+    if (!state.trim() || !stateCode.trim()) {
+      return 'Company tax profile is incomplete. Please configure your Seller State in Quotations Company Settings.';
+    }
+    if (requireCustomerName && !customerName.trim()) {
+      return 'Please enter the customer / receiver name.';
+    }
+    if (!customerState.trim() || !customerStateCode.trim()) {
+      return 'Please select the Customer State & State Code for GST calculation.';
+    }
+    for (let idx = 0; idx < items.length; idx++) {
+      const itm = items[idx];
+      if (!itm.description.trim()) {
+        return `Item #${idx + 1}: Description is required.`;
+      }
+      const qtyErr = validateQuantityInput(itm.quantity, `Item #${idx + 1} quantity`);
+      if (qtyErr) return qtyErr;
+      const rateErr = validateSellingRateInput(itm.rate, `Item #${idx + 1} selling rate`);
+      if (rateErr) return rateErr;
+    }
+    return null;
   };
 
   // Save Invoice
   const handleSaveInvoice = async () => {
     setErrorMessage(null);
 
-    if (!customerName.trim()) {
-      setErrorMessage('Please enter the customer / receiver name.');
-      return;
-    }
-
-    const hasEmptyItem = items.some((i) => !i.description.trim());
-    if (hasEmptyItem) {
-      setErrorMessage('Every line item must have a description.');
+    const validationErr = validateGstForm(true);
+    if (validationErr) {
+      setErrorMessage(validationErr);
       return;
     }
 
@@ -487,8 +550,8 @@ export const GstBillingView: React.FC = () => {
         customerName: customerName.trim(),
         customerAddress: customerAddress.trim() || null,
         customerGstin: customerGstin.trim() || null,
-        customerState,
-        customerStateCode,
+        customerState: customerState.trim(),
+        customerStateCode: customerStateCode.trim(),
         gstRate,
         items: items.map((i) => ({
           productId: i.productId ? Number(i.productId) : null,
@@ -496,7 +559,7 @@ export const GstBillingView: React.FC = () => {
           hsnCode: i.hsnCode.trim() || null,
           quantity: i.quantity,
           unit: i.unit.trim() || null,
-          rate: i.rate || '0',
+          rate: i.rate,
           rateUnit: i.rateUnit.trim() || null,
         })),
         notes: notes.trim() || null,
@@ -516,11 +579,13 @@ export const GstBillingView: React.FC = () => {
   const handleResetForm = () => {
     idempotencyKeyRef.current = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
     setSuccessRecord(null);
-    setInvoiceDate(getTodayLocalDate());
-    setDateOfSupply(getTodayLocalDate());
+    setInvoiceDate(getBusinessDateISO());
+    setDateOfSupply(getBusinessDateISO());
     setCustomerName('');
     setCustomerAddress('');
     setCustomerGstin('');
+    setCustomerState('');
+    setCustomerStateCode('');
     setCustomerId(null);
     setItems([
       {
@@ -552,6 +617,11 @@ export const GstBillingView: React.FC = () => {
 
   // Download draft vector PDF helper
   const handleDownloadDraftPdf = async () => {
+    const validationErr = validateGstForm(false);
+    if (validationErr) {
+      setErrorMessage(validationErr);
+      return;
+    }
     try {
       setIsDownloadingPdf(true);
       await downloadDraftPdf({
@@ -567,8 +637,8 @@ export const GstBillingView: React.FC = () => {
         customerName: customerName.trim() || 'Customer / Receiver',
         customerAddress: customerAddress.trim() || null,
         customerGstin: customerGstin.trim() || null,
-        customerState,
-        customerStateCode,
+        customerState: customerState.trim(),
+        customerStateCode: customerStateCode.trim(),
         gstRate,
         items: items.map((i) => ({
           productId: i.productId ? Number(i.productId) : null,
@@ -576,7 +646,7 @@ export const GstBillingView: React.FC = () => {
           hsnCode: i.hsnCode.trim() || null,
           quantity: i.quantity || '1',
           unit: i.unit.trim() || null,
-          rate: i.rate || '0',
+          rate: i.rate,
           rateUnit: i.rateUnit.trim() || null,
         })),
         notes: notes.trim() || null,
@@ -604,13 +674,13 @@ export const GstBillingView: React.FC = () => {
             <FileText className="w-6 h-6" />
           </div>
           <div>
-            <h2 className="text-lg sm:text-xl font-bold tracking-tight text-[var(--khata-text)] flex items-center gap-2">
+            <h2 className="text-lg sm:text-xl font-bold tracking-tight text-[var(--khata-text)] flex flex-wrap items-center gap-2">
               <span>GST Tax Invoices</span>
               <span
                 className="text-xs px-2.5 py-0.5 rounded-md font-mono font-bold border border-[var(--khata-border)]"
                 style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-accent)' }}
               >
-                Algions AI Labs Private Limited
+                {companyProfile?.name || 'Company Tax Profile'}
               </span>
             </h2>
             <p className="text-xs text-[var(--khata-text-muted)] mt-0.5">
@@ -743,9 +813,9 @@ export const GstBillingView: React.FC = () => {
                       </label>
                       <button
                         type="button"
-                        onClick={() => setInvoiceDate(getTodayLocalDate())}
+                        onClick={() => setInvoiceDate(getBusinessDateISO())}
                         className="text-[10px] font-semibold text-[var(--khata-accent)] hover:underline flex items-center gap-1 cursor-pointer"
-                        title="Set to today's local date"
+                        title="Set to today's IST business date"
                       >
                         <span>Today</span>
                       </button>
@@ -764,7 +834,7 @@ export const GstBillingView: React.FC = () => {
                     </label>
                     <input
                       type="text"
-                      value="Bihar (10)"
+                      value={state && stateCode ? `${state} (${stateCode})` : 'Configure in Quotations Settings'}
                       readOnly
                       className="neu-input w-full font-bold cursor-default"
                       style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-text)' }}
@@ -816,7 +886,7 @@ export const GstBillingView: React.FC = () => {
                       </label>
                       <button
                         type="button"
-                        onClick={() => setDateOfSupply(getTodayLocalDate())}
+                        onClick={() => setDateOfSupply(getBusinessDateISO())}
                         className="text-[10px] font-semibold text-[var(--khata-accent)] hover:underline flex items-center gap-1 cursor-pointer"
                         title="Set to today's local date"
                       >
@@ -960,22 +1030,38 @@ export const GstBillingView: React.FC = () => {
                       type="text"
                       value={customerAddress}
                       onChange={(e) => setCustomerAddress(e.target.value)}
-                      placeholder="e.g. Ward no 26, Haziyapur, Gopalganj"
+                      placeholder="e.g. Street / Locality, City"
                       className="neu-input w-full"
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div className="sm:col-span-2">
                       <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
-                        State
+                        Customer State <span className="text-rose-500">*</span>
                       </label>
-                      <input
-                        type="text"
-                        value={customerState}
-                        onChange={(e) => setCustomerState(e.target.value)}
-                        className="neu-input w-full"
-                      />
+                      <select
+                        value={customerStateCode}
+                        onChange={(e) => {
+                          const code = e.target.value;
+                          if (!code) {
+                            setCustomerStateCode('');
+                            setCustomerState('');
+                            return;
+                          }
+                          const matched = getStateByCode(code);
+                          setCustomerStateCode(code);
+                          setCustomerState(matched ? matched.name : '');
+                        }}
+                        className="neu-input w-full font-medium"
+                      >
+                        <option value="">Select customer state</option>
+                        {INDIAN_STATES.map((s) => (
+                          <option key={s.code} value={s.code}>
+                            {s.code} – {s.name}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                     <div>
                       <label className="block font-bold text-[var(--khata-text-muted)] mb-1">
@@ -984,16 +1070,22 @@ export const GstBillingView: React.FC = () => {
                       <input
                         type="text"
                         value={customerStateCode}
-                        onChange={(e) => setCustomerStateCode(e.target.value)}
+                        onChange={(e) => {
+                          const code = e.target.value.replace(/\D/g, '').slice(0, 2);
+                          setCustomerStateCode(code);
+                          const matched = getStateByCode(code);
+                          if (matched) setCustomerState(matched.name);
+                          else if (!code) setCustomerState('');
+                        }}
                         maxLength={2}
-                        placeholder="09"
+                        placeholder="--"
                         className="neu-input w-full font-mono text-center font-bold"
                       />
                     </div>
                   </div>
                 </div>
 
-                {!isIntraState && (
+                {customerStateCode && stateCode && !isIntraState && (
                   <div className="text-[11px] p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 font-semibold">
                     ⚡ Inter-State transaction detected (Supplier State Code: {stateCode} ≠ Customer State Code: {customerStateCode}). IGST will be applied automatically instead of CGST + SGST.
                   </div>
@@ -1130,7 +1222,7 @@ export const GstBillingView: React.FC = () => {
                           <datalist id={`product-options-${item.id}`}>
                             {availableProducts.map((p) => (
                               <option key={p.id} value={p.name}>
-                                {p.hsn_code ? `HSN: ${p.hsn_code} | ` : ''}₹{p.buying_price}
+                                {p.hsn_code ? `HSN: ${p.hsn_code} | ` : ''}Ref: ₹{p.buying_price}
                               </option>
                             ))}
                           </datalist>
@@ -1185,8 +1277,8 @@ export const GstBillingView: React.FC = () => {
                                           </span>
                                         )}
                                       </div>
-                                      <span className="text-xs font-bold text-[var(--khata-accent)] font-mono ml-2">
-                                        ₹{p.buying_price}
+                                      <span className="text-xs font-bold text-[var(--khata-text-muted)] font-mono ml-2">
+                                        Ref: ₹{p.buying_price}
                                       </span>
                                     </button>
                                   ))}
@@ -1225,7 +1317,10 @@ export const GstBillingView: React.FC = () => {
                           </label>
                           <input
                             type="number"
-                            step="any"
+                            step="0.01"
+                            min="0.01"
+                            max="1000000"
+                            inputMode="decimal"
                             value={item.quantity}
                             onChange={(e) => handleItemChange(item.id, 'quantity', e.target.value)}
                             placeholder="1"
@@ -1254,7 +1349,9 @@ export const GstBillingView: React.FC = () => {
                           </label>
                           <input
                             type="number"
-                            step="any"
+                            step="0.01"
+                            min="0"
+                            inputMode="decimal"
                             value={item.rate}
                             onChange={(e) => handleItemChange(item.id, 'rate', e.target.value)}
                             placeholder="0.00"
@@ -1327,7 +1424,11 @@ export const GstBillingView: React.FC = () => {
                     </span>
                   </div>
 
-                  {isIntraState ? (
+                  {!customerStateCode ? (
+                    <div className="text-[11px] text-amber-600 dark:text-amber-400 font-semibold">
+                      Select Customer State above to compute CGST/SGST vs IGST.
+                    </div>
+                  ) : isIntraState ? (
                     <>
                       <div className="flex items-center justify-between text-[var(--khata-text-muted)]">
                         <span>CGST @ {calculations.cgstRate}%:</span>
@@ -1516,7 +1617,7 @@ export const GstBillingView: React.FC = () => {
                           <div className="flex items-center justify-end gap-1.5">
                             <button
                               type="button"
-                              onClick={() => setPreviewInvoice(mapRecordToInvoiceProps(inv))}
+                              onClick={() => setPreviewInvoice(mapRecordToInvoiceProps(inv, companyProfile || undefined))}
                               className="p-1.5 rounded-lg border border-[var(--khata-border)] hover:bg-[var(--khata-surface)] text-[var(--khata-text)] cursor-pointer"
                               title="Preview A4 Invoice"
                             >
@@ -1594,7 +1695,7 @@ export const GstBillingView: React.FC = () => {
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <button
                           type="button"
-                          onClick={() => setPreviewInvoice(mapRecordToInvoiceProps(inv))}
+                          onClick={() => setPreviewInvoice(mapRecordToInvoiceProps(inv, companyProfile || undefined))}
                           className="neu-btn-secondary px-2.5 py-1.5 flex items-center gap-1 text-xs font-bold"
                           title="Preview Invoice"
                         >
@@ -1687,7 +1788,7 @@ export const GstBillingView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  setPreviewInvoice(mapRecordToInvoiceProps(successRecord));
+                  setPreviewInvoice(mapRecordToInvoiceProps(successRecord, companyProfile || undefined));
                 }}
                 className="neu-btn-primary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold"
               >

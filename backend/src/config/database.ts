@@ -50,6 +50,7 @@ export const EXPECTED_MIGRATIONS = [
   '016_quotations.sql',
   '017_quotation_conversion_financial_fields.sql',
   '018_numbering_and_legacy_data_integrity.sql',
+  '019_customer_tax_integrity_and_idempotency.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [

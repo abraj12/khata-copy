@@ -14,6 +14,8 @@ const createTransactionSchema = z.object({
     name: z.string().trim().min(1, 'Customer name is required'),
     phone: z.string().nullable().optional(),
     address: z.string().nullable().optional(),
+    state: z.string().trim().max(100).nullable().optional(),
+    stateCode: z.string().trim().max(10).nullable().optional(),
   }),
   items: z
     .array(
@@ -29,6 +31,32 @@ const createTransactionSchema = z.object({
   idempotencyKey: z.string().nullable().optional(),
 });
 
+const customerCreateSchema = z.object({
+  name: z.string().trim().min(1, 'Customer name is required').max(255),
+  phone: z.string().trim().max(20).nullable().optional(),
+  address: z.string().trim().max(500).nullable().optional(),
+  state: z.string().trim().max(100).nullable().optional(),
+  stateCode: z.string().trim().max(10).nullable().optional(),
+});
+
+const customerUpdateSchema = z
+  .object({
+    name: z.string().trim().min(1, 'Customer name cannot be empty').max(255).optional(),
+    phone: z.string().trim().max(20).nullable().optional(),
+    address: z.string().trim().max(500).nullable().optional(),
+    state: z.string().trim().max(100).nullable().optional(),
+    stateCode: z.string().trim().max(10).nullable().optional(),
+  })
+  .refine(
+    (obj) =>
+      obj.name !== undefined ||
+      obj.phone !== undefined ||
+      obj.address !== undefined ||
+      obj.state !== undefined ||
+      obj.stateCode !== undefined,
+    'At least one customer field must be provided for update.'
+  );
+
 const recordPaymentSchema = z.object({
   amount: z.union([z.number(), z.string()]),
   note: z.string().nullable().optional(),
@@ -40,6 +68,20 @@ const customerSearchQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(25),
   offset: z.coerce.number().int().min(0).default(0),
 });
+
+function handleStructuredKhataError(err: unknown, res: Response, next: NextFunction) {
+  const errorObj = err as { status?: number; code?: string; candidates?: unknown[]; message?: string };
+  if (errorObj.status) {
+    res.status(errorObj.status).json({
+      success: false,
+      code: errorObj.code,
+      message: errorObj.message,
+      candidates: errorObj.candidates,
+    });
+    return;
+  }
+  next(err);
+}
 
 /**
  * GET /api/v1/khata / GET /api/v1/ledger - Backward-compatible root endpoint
@@ -58,7 +100,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 /**
  * GET /api/v1/khata/summary - Dashboard KPIs
  */
-router.get('/summary', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/summary', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const summary = await khataService.getSummary();
     res.json({ success: true, summary });
@@ -90,19 +132,41 @@ router.get('/customers', async (req: Request, res: Response, next: NextFunction)
 });
 
 /**
+ * POST /api/v1/khata/customers - Create a customer profile with optional validated state
+ */
+router.post('/customers', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = customerCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        message: parsed.error.errors[0]?.message || 'Invalid customer payload.',
+      });
+      return;
+    }
+
+    const customer = await khataService.createCustomer(parsed.data);
+    res.status(201).json({ success: true, customer });
+  } catch (err) {
+    handleStructuredKhataError(err, res, next);
+  }
+});
+
+/**
  * GET /api/v1/khata/customers/:customerId - Customer details & balance
  */
 router.get('/customers/:customerId', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);
     if (isNaN(customerId) || customerId <= 0) {
-      res.status(400).json({ success: false, message: 'Invalid customer ID.' });
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Invalid customer ID.' });
       return;
     }
 
     const customer = await khataService.getCustomerDetail(customerId);
     if (!customer) {
-      res.status(404).json({ success: false, message: 'Customer not found.' });
+      res.status(404).json({ success: false, code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found.' });
       return;
     }
 
@@ -113,19 +177,47 @@ router.get('/customers/:customerId', async (req: Request, res: Response, next: N
 });
 
 /**
+ * PATCH /api/v1/khata/customers/:customerId - Update customer details including nullable state/stateCode
+ */
+router.patch('/customers/:customerId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    if (isNaN(customerId) || customerId <= 0) {
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Invalid customer ID.' });
+      return;
+    }
+
+    const parsed = customerUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        message: parsed.error.errors[0]?.message || 'Invalid customer update payload.',
+      });
+      return;
+    }
+
+    const customer = await khataService.updateCustomer(customerId, parsed.data);
+    res.json({ success: true, customer });
+  } catch (err) {
+    handleStructuredKhataError(err, res, next);
+  }
+});
+
+/**
  * GET /api/v1/khata/customers/:customerId/history - Complete chronological ledger history
  */
 router.get('/customers/:customerId/history', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);
     if (isNaN(customerId) || customerId <= 0) {
-      res.status(400).json({ success: false, message: 'Invalid customer ID.' });
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Invalid customer ID.' });
       return;
     }
 
     const history = await khataService.getCustomerHistory(customerId);
     if (!history) {
-      res.status(404).json({ success: false, message: 'Customer not found.' });
+      res.status(404).json({ success: false, code: 'CUSTOMER_NOT_FOUND', message: 'Customer not found.' });
       return;
     }
 
@@ -144,6 +236,7 @@ router.post('/transactions', async (req: Request, res: Response, next: NextFunct
     if (!parsed.success) {
       res.status(400).json({
         success: false,
+        code: 'VALIDATION_ERROR',
         message: parsed.error.errors[0]?.message || 'Invalid transaction payload.',
       });
       return;
@@ -158,17 +251,7 @@ router.post('/transactions', async (req: Request, res: Response, next: NextFunct
     });
     res.status(201).json(result);
   } catch (err: unknown) {
-    const errorObj = err as { status?: number; code?: string; candidates?: unknown[]; message?: string };
-    if (errorObj.status) {
-      res.status(errorObj.status).json({
-        success: false,
-        code: errorObj.code,
-        message: errorObj.message,
-        candidates: errorObj.candidates,
-      });
-      return;
-    }
-    next(err);
+    handleStructuredKhataError(err, res, next);
   }
 });
 
@@ -179,7 +262,7 @@ router.post('/customers/:customerId/payments', async (req: Request, res: Respons
   try {
     const customerId = parseInt(req.params.customerId, 10);
     if (isNaN(customerId) || customerId <= 0) {
-      res.status(400).json({ success: false, message: 'Invalid customer ID.' });
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Invalid customer ID.' });
       return;
     }
 
@@ -187,6 +270,7 @@ router.post('/customers/:customerId/payments', async (req: Request, res: Respons
     if (!parsed.success) {
       res.status(400).json({
         success: false,
+        code: 'VALIDATION_ERROR',
         message: parsed.error.errors[0]?.message || 'Invalid payment payload.',
       });
       return;
@@ -203,16 +287,7 @@ router.post('/customers/:customerId/payments', async (req: Request, res: Respons
     );
     res.status(201).json(result);
   } catch (err: unknown) {
-    const errorObj = err as { status?: number; code?: string; message?: string };
-    if (errorObj.status) {
-      res.status(errorObj.status).json({
-        success: false,
-        code: errorObj.code,
-        message: errorObj.message,
-      });
-      return;
-    }
-    next(err);
+    handleStructuredKhataError(err, res, next);
   }
 });
 

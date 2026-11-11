@@ -44,10 +44,13 @@ describe('Billing Numbering, Indian Tax & Business Date Suite', () => {
 
     it('4. Validates GSTIN structure and enforces prefix match with state code', () => {
       // Valid UP GSTIN matching '09'
-      expect(() => validateGstinForState('09AAAAA0000A1Z5', '09')).not.toThrow();
+      expect(() => validateGstinForState('09AAAAA0000A1Z0', '09')).not.toThrow();
 
       // Valid Bihar GSTIN matching '10'
       expect(() => validateGstinForState('10ABGCA8624E1Z3', '10')).not.toThrow();
+
+      // Invalid Luhn mod-36 GSTIN checksum digit
+      expect(() => validateGstinForState('09AAAAA0000A1Z5', '09')).toThrow(/Invalid GSTIN checksum digit/);
 
       // GSTIN state prefix mismatch: '10' GSTIN supplied for '09' UP customer
       expect(() => validateGstinForState('10ABGCA8624E1Z3', '09')).toThrow(/GSTIN state code prefix/);

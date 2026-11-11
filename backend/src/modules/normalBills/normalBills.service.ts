@@ -1,7 +1,18 @@
-import crypto from 'crypto';
 import Decimal from 'decimal.js';
 import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
+import { env } from '../../config/env.js';
+import { getBusinessDateISO } from '../../utils/businessDate.js';
+import { resolveValidatedState } from '../../utils/indianTax.js';
+import { getCompanyTaxProfile } from '../../services/companyTaxProfile.service.js';
+import {
+  acquireIdempotencyLock,
+  checkIdempotencyRecord,
+  cleanupExpiredIdempotencyKeys,
+  hashIdempotencyPayload,
+  storeIdempotencyRecord,
+  updateIdempotencyResponse,
+} from '../../services/idempotency.service.js';
 import {
   allocateDocumentNumber,
   getSuggestedNextDocumentNumber,
@@ -12,6 +23,7 @@ import { AppError } from '../../utils/errors.js';
 import { validateMoneyInput, validateDecimalQuantityInput } from '../../utils/validation.js';
 import {
   generateTaxInvoicePdf,
+  GstInvoicePdfCompany,
   numberToIndianWords,
 } from '../gstInvoices/gstInvoices.pdf.js';
 
@@ -28,8 +40,8 @@ export interface CreateNormalBillItemInput {
 export interface CreateNormalBillInput {
   billNumber?: string;
   billDate?: string;
-  state?: string;
-  stateCode?: string;
+  state?: string | null;
+  stateCode?: string | null;
   transportationMode?: string | null;
   vehicleNumber?: string | null;
   dateOfSupply?: string | null;
@@ -38,8 +50,8 @@ export interface CreateNormalBillInput {
   customerName: string;
   customerAddress?: string | null;
   customerPhone?: string | null;
-  customerState?: string;
-  customerStateCode?: string;
+  customerState?: string | null;
+  customerStateCode?: string | null;
   subtotalAmount?: number | string;
   discountType?: 'percentage' | 'fixed' | null;
   discountValue?: number | string;
@@ -63,8 +75,8 @@ export interface NormalBillRecord {
   customer_name: string;
   customer_address: string | null;
   customer_phone: string | null;
-  customer_state: string;
-  customer_state_code: string;
+  customer_state: string | null;
+  customer_state_code: string | null;
   subtotal_amount?: string | null;
   discount_type?: 'percentage' | 'fixed' | null;
   discount_value?: string;
@@ -94,6 +106,42 @@ export interface NormalBillItemRecord {
   created_at: string;
 }
 
+function buildNormalizedBillHashPayload(input: CreateNormalBillInput) {
+  return {
+    billNumber: input.billNumber?.trim() || null,
+    billDate: input.billDate?.trim() || null,
+    state: input.state?.trim() || null,
+    stateCode: input.stateCode?.trim() || null,
+    transportationMode: input.transportationMode?.trim() || null,
+    vehicleNumber: input.vehicleNumber?.trim() || null,
+    dateOfSupply: input.dateOfSupply?.trim() || null,
+    placeOfSupply: input.placeOfSupply?.trim() || null,
+    customerId: input.customerId ?? null,
+    customerName: input.customerName?.trim() || '',
+    customerAddress: input.customerAddress?.trim() || null,
+    customerPhone: input.customerPhone?.trim() || null,
+    customerState: input.customerState?.trim() || null,
+    customerStateCode: input.customerStateCode?.trim() || null,
+    subtotalAmount:
+      input.subtotalAmount !== undefined && input.subtotalAmount !== null ? String(input.subtotalAmount) : null,
+    discountType: input.discountType ?? null,
+    discountValue:
+      input.discountValue !== undefined && input.discountValue !== null ? String(input.discountValue) : null,
+    discountAmount:
+      input.discountAmount !== undefined && input.discountAmount !== null ? String(input.discountAmount) : null,
+    notes: input.notes?.trim() || null,
+    items: (input.items || []).map((item) => ({
+      productId: item.productId ?? null,
+      description: item.description?.trim() || '',
+      hsnCode: item.hsnCode?.trim() || null,
+      quantity: String(item.quantity ?? ''),
+      unit: item.unit?.trim() || null,
+      rate: String(item.rate ?? ''),
+      rateUnit: item.rateUnit?.trim() || null,
+    })),
+  };
+}
+
 export class NormalBillsService {
   private storageService: StorageService;
 
@@ -101,7 +149,7 @@ export class NormalBillsService {
     this.storageService = storageService || new StorageService();
   }
 
-    /**
+  /**
    * Generates the next sequential normal bill number suggestion from the database.
    * Pure, read-only, idempotent, and non-destructive. Never calls setval() or nextval().
    */
@@ -109,38 +157,64 @@ export class NormalBillsService {
     return getSuggestedNextDocumentNumber(appPool, NORMAL_BILL_NUMBERING_CONFIG);
   }
 
-  private hashPayload(payload: unknown): string {
-    return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  private async getOptionalPdfCompany(dbClient?: PoolClient): Promise<GstInvoicePdfCompany | undefined> {
+    try {
+      const profile = await getCompanyTaxProfile(dbClient);
+      return {
+        companyName: profile.companyName,
+        address: profile.address,
+        gstin: profile.gstin,
+        phone: profile.phone,
+        state: profile.state,
+        stateCode: profile.stateCode,
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   /**
    * Creates a Normal Bill within an existing database transaction client.
-   * Atomically allocates bill number, calculates Decimal finances, and inserts line items.
-   * Does NOT commit the transaction and does NOT upload to R2, enabling transactional composition.
+   * Atomically validates seller/buyer state, calculates Decimal finances,
+   * allocates bill number, and inserts line items.
    */
   public async createBillInTransaction(client: PoolClient, input: CreateNormalBillInput): Promise<NormalBillRecord> {
     if (!input.items || input.items.length === 0) {
       throw new AppError('At least one line item is required.', 400, 'ITEMS_REQUIRED');
     }
 
-    // 1. Resolve bill number atomically using sequence advisory lock allocator
-    const billNumber = await allocateDocumentNumber(client, NORMAL_BILL_NUMBERING_CONFIG, input.billNumber);
-
-    // Auto-update customer address if linked customer lacks one
-    if (input.customerId && input.customerAddress?.trim()) {
-      await client.query(
-        `UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2 AND (address IS NULL OR address = '')`,
-        [input.customerAddress.trim(), input.customerId]
-      );
+    // 1. Validate supplier & optional buyer state cleanly BEFORE consuming sequence
+    let supplierState: string;
+    let supplierStateCode: string;
+    if (input.state || input.stateCode) {
+      const resolvedSupplier = resolveValidatedState({
+        state: input.state,
+        stateCode: input.stateCode,
+        required: true,
+        fieldLabel: 'Company',
+      });
+      supplierState = resolvedSupplier.state!;
+      supplierStateCode = resolvedSupplier.stateCode!;
+    } else {
+      const companyProfile = await getCompanyTaxProfile(client);
+      supplierState = companyProfile.state;
+      supplierStateCode = companyProfile.stateCode;
     }
 
-    // 2. Calculate item amounts and subtotal value using Decimal.js with 2-decimal scale
+    const resolvedCustomer = resolveValidatedState({
+      state: input.customerState,
+      stateCode: input.customerStateCode,
+      required: false,
+      fieldLabel: 'Customer',
+    });
+
+    // 2. Calculate item amounts and subtotal using Decimal.js with 2-decimal scale
     let subtotalDec = new Decimal(0);
     const computedItems: Array<CreateNormalBillItemInput & { amount: string }> = [];
 
     for (const item of input.items) {
       const qtyDec = validateDecimalQuantityInput(item.quantity, `Item "${item.description}" quantity`);
-      const rateDec = validateMoneyInput(item.rate, `Item "${item.description}" rate`);
+      const rateDec = validateMoneyInput(item.rate, `Item "${item.description}" rate`, { allowZero: true });
 
       const lineAmountDec = qtyDec.times(rateDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
       subtotalDec = subtotalDec.plus(lineAmountDec);
@@ -155,7 +229,7 @@ export class NormalBillsService {
 
     // 3. Discount calculations
     const discountType = input.discountType || null;
-    let discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     let discountAmountDec = new Decimal(0);
 
     if (discountType === 'percentage') {
@@ -169,14 +243,26 @@ export class NormalBillsService {
       }
       discountAmountDec = Decimal.min(discountValDec, subtotalDec);
     } else if (input.discountAmount) {
-      discountAmountDec = validateMoneyInput(input.discountAmount, 'Discount amount');
+      discountAmountDec = validateMoneyInput(input.discountAmount, 'Discount amount', { allowZero: true });
       discountAmountDec = Decimal.min(discountAmountDec, subtotalDec);
     }
 
     const totalAmountDec = subtotalDec.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    const amountInWords = numberToIndianWords(totalAmountDec.toNumber());
+    const amountInWords = numberToIndianWords(totalAmountDec.toFixed(2));
 
-    // 4. Insert Normal Bill Header
+    // 4. Resolve bill number atomically AFTER validation passes
+    const billNumber = await allocateDocumentNumber(client, NORMAL_BILL_NUMBERING_CONFIG, input.billNumber);
+
+    // Auto-update customer address if linked customer lacks one
+    if (input.customerId && input.customerAddress?.trim()) {
+      await client.query(
+        `UPDATE customers SET address = $1, updated_at = NOW() WHERE id = $2 AND (address IS NULL OR address = '')`,
+        [input.customerAddress.trim(), input.customerId]
+      );
+    }
+
+    // 5. Insert Normal Bill Header using configured business date (IST) & nullable buyer state
+    const billDate = input.billDate || getBusinessDateISO(env.BUSINESS_TIME_ZONE);
     const insertBillSql = `
       INSERT INTO normal_bills (
         bill_number,
@@ -203,9 +289,9 @@ export class NormalBillsService {
         notes
       ) VALUES (
         $1,
-        COALESCE($2::DATE, CURRENT_DATE),
-        COALESCE($3, 'Bihar'),
-        COALESCE($4, '10'),
+        $2::DATE,
+        $3,
+        $4,
         $5,
         $6,
         $7::DATE,
@@ -214,8 +300,8 @@ export class NormalBillsService {
         $10,
         $11,
         $12,
-        COALESCE($13, 'Bihar'),
-        COALESCE($14, '10'),
+        $13,
+        $14,
         $15,
         $16,
         $17,
@@ -255,19 +341,19 @@ export class NormalBillsService {
 
     const billRes = await client.query(insertBillSql, [
       billNumber,
-      input.billDate || null,
-      input.state || 'Bihar',
-      input.stateCode || '10',
+      billDate,
+      supplierState,
+      supplierStateCode,
       input.transportationMode || null,
       input.vehicleNumber || null,
       input.dateOfSupply || null,
-      input.placeOfSupply || null,
+      input.placeOfSupply?.trim() || null,
       input.customerId || null,
       input.customerName.trim(),
-      input.customerAddress || null,
-      input.customerPhone || null,
-      input.customerState || 'Bihar',
-      input.customerStateCode || '10',
+      input.customerAddress?.trim() || null,
+      input.customerPhone?.trim() || null,
+      resolvedCustomer.state,
+      resolvedCustomer.stateCode,
       subtotalDec.toFixed(2),
       discountType,
       discountValDec.toFixed(2),
@@ -279,7 +365,7 @@ export class NormalBillsService {
 
     const billRecord: NormalBillRecord = billRes.rows[0];
 
-    // 5. Insert line items
+    // 6. Insert line items
     const insertedItems: NormalBillItemRecord[] = [];
     for (let i = 0; i < computedItems.length; i++) {
       const item = computedItems[i];
@@ -320,89 +406,67 @@ export class NormalBillsService {
   }
 
   /**
-   * Creates a Normal Bill without GST calculations, manages transaction boundaries, and generates PDF.
+   * Creates a Normal Bill without GST calculations, manages transaction boundaries + 24h TTL idempotency, and generates PDF.
    */
   public async createBill(input: CreateNormalBillInput): Promise<NormalBillRecord> {
-    const idempotencyPayload = {
-      customerId: input.customerId,
-      customerName: input.customerName?.trim(),
-      customerAddress: input.customerAddress,
-      customerPhone: input.customerPhone,
-      items: input.items,
-      discountType: input.discountType,
-      discountValue: input.discountValue,
-      discountAmount: input.discountAmount,
-      billNumber: input.billNumber,
-      billDate: input.billDate,
-    };
-    const currentHash = this.hashPayload(idempotencyPayload);
+    const idempotencyKey = input.idempotencyKey?.trim() || null;
+    const requestHash = idempotencyKey
+      ? hashIdempotencyPayload(buildNormalizedBillHashPayload(input))
+      : null;
 
     const client = await appPool.connect();
     let billRecord: NormalBillRecord;
+    let companyForPdf: GstInvoicePdfCompany | undefined;
 
     try {
       await client.query('BEGIN');
 
-      if (input.idempotencyKey) {
-        const idempRes = await client.query(
-          'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
-          [input.idempotencyKey]
+      if (idempotencyKey && requestHash) {
+        await acquireIdempotencyLock(client, idempotencyKey);
+        const existingIdemp = await checkIdempotencyRecord<NormalBillRecord>(
+          client,
+          idempotencyKey,
+          'CREATE_NORMAL_BILL',
+          requestHash
         );
-        if (idempRes.rows.length > 0) {
-          const row = idempRes.rows[0];
-          if (row.request_hash === currentHash) {
-            await client.query('COMMIT');
-            return row.response_body;
-          } else {
-            throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
+        if (existingIdemp.found && !existingIdemp.expired) {
+          await client.query('COMMIT');
+          const replayed = existingIdemp.responseBody;
+          if (replayed && typeof replayed.id === 'number') {
+            const fresh = await this.getBillById(replayed.id).catch(() => null);
+            if (fresh) return fresh;
           }
+          return replayed;
         }
+        await cleanupExpiredIdempotencyKeys(client, 100);
       }
 
+      companyForPdf = await this.getOptionalPdfCompany(client);
       billRecord = await this.createBillInTransaction(client, input);
 
-      if (input.idempotencyKey) {
-        await client.query(
-          `INSERT INTO idempotency_keys (key, action, request_hash, response_status, response_body, created_at)
-           VALUES ($1, $2, $3, $4, $5, NOW())`,
-          [input.idempotencyKey, 'CREATE_NORMAL_BILL', currentHash, 201, JSON.stringify(billRecord)]
-        );
+      if (idempotencyKey && requestHash) {
+        await storeIdempotencyRecord(client, {
+          key: idempotencyKey,
+          action: 'CREATE_NORMAL_BILL',
+          requestHash,
+          responseStatus: 201,
+          responseBody: billRecord,
+        });
       }
 
       await client.query('COMMIT');
-    } catch (err: any) {
+    } catch (err) {
       try {
         await client.query('ROLLBACK');
       } catch {
         // Ignore rollback failure
       }
-
-      if (input.idempotencyKey && err?.code === '23505' && err?.constraint?.includes('idempotency')) {
-        try {
-          const checkRes = await appPool.query(
-            'SELECT request_hash, response_status, response_body FROM idempotency_keys WHERE key = $1',
-            [input.idempotencyKey]
-          );
-          if (checkRes.rows.length > 0) {
-            const row = checkRes.rows[0];
-            if (row.request_hash === currentHash) {
-              return row.response_body;
-            } else {
-              throw new AppError('Idempotency key reused with different request payload.', 409, 'IDEMPOTENCY_CONFLICT');
-            }
-          }
-        } catch (innerErr) {
-          if (innerErr instanceof AppError) throw innerErr;
-        }
-        throw new AppError('A request with this idempotency key is currently processing. Please retry in a moment.', 409, 'IDEMPOTENCY_IN_FLIGHT');
-      }
-
       throw err;
     } finally {
       client.release();
     }
 
-    // 6. Generate Normal Bill PDF (No GST calculations) outside of database transaction
+    // Generate Normal Bill PDF (No GST calculations) outside of database transaction
     let pdfStatus: 'uploaded' | 'local_only' | 'failed' = 'local_only';
     let r2Key: string | null = null;
 
@@ -416,6 +480,7 @@ export class NormalBillsService {
         vehicleNumber: billRecord.vehicle_number,
         dateOfSupply: billRecord.date_of_supply,
         placeOfSupply: billRecord.place_of_supply,
+        company: companyForPdf,
         customer: {
           name: billRecord.customer_name,
           address: billRecord.customer_address,
@@ -446,10 +511,8 @@ export class NormalBillsService {
         billTitle: 'NORMAL BILL',
       });
 
-      // 7. Upload PDF to Cloudflare R2
       if (this.storageService.isConfigured()) {
-        const year = new Date().getFullYear();
-        const month = String(new Date().getMonth() + 1).padStart(2, '0');
+        const [year, month] = getBusinessDateISO(env.BUSINESS_TIME_ZONE).split('-');
         r2Key = `normal-bills/${year}/${month}/${billRecord.id}.pdf`;
 
         try {
@@ -469,7 +532,7 @@ export class NormalBillsService {
       pdfStatus = 'failed';
     }
 
-    // Update PDF status in DB
+    // Update PDF status in DB and sync stored idempotency response
     try {
       await appPool.query(
         `UPDATE normal_bills SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3`,
@@ -477,6 +540,16 @@ export class NormalBillsService {
       );
       billRecord.pdf_status = pdfStatus;
       billRecord.r2_object_key = r2Key;
+
+      if (idempotencyKey && requestHash) {
+        await updateIdempotencyResponse(appPool, {
+          key: idempotencyKey,
+          action: 'CREATE_NORMAL_BILL',
+          requestHash,
+          responseStatus: 201,
+          responseBody: billRecord,
+        });
+      }
     } catch (statusUpdateErr) {
       console.warn('[NORMAL BILL STATUS UPDATE NON-FATAL]', (statusUpdateErr as Error).message);
     }
@@ -488,12 +561,34 @@ export class NormalBillsService {
    * Generates a preview PDF buffer for normal bills on-the-fly without database writes.
    */
   public async generateDraftPdf(input: CreateNormalBillInput): Promise<{ buffer: Buffer; filename: string }> {
+    if (!input.items || input.items.length === 0) {
+      throw new AppError('At least one line item is required.', 400, 'ITEMS_REQUIRED');
+    }
+
+    const companyProfile = await getCompanyTaxProfile();
+    const resolvedSupplier =
+      input.state || input.stateCode
+        ? resolveValidatedState({
+            state: input.state,
+            stateCode: input.stateCode,
+            required: true,
+            fieldLabel: 'Company',
+          })
+        : { state: companyProfile.state, stateCode: companyProfile.stateCode };
+
+    const resolvedCustomer = resolveValidatedState({
+      state: input.customerState,
+      stateCode: input.customerStateCode,
+      required: false,
+      fieldLabel: 'Customer',
+    });
+
     let subtotalDec = new Decimal(0);
     const computedItems: Array<CreateNormalBillItemInput & { amount: string }> = [];
 
-    for (const item of input.items || []) {
-      const qtyDec = validateDecimalQuantityInput(item.quantity || 1, 'Quantity');
-      const rateDec = validateMoneyInput(item.rate || 0, 'Rate');
+    for (const item of input.items) {
+      const qtyDec = validateDecimalQuantityInput(item.quantity, 'Quantity');
+      const rateDec = validateMoneyInput(item.rate, 'Rate', { allowZero: true });
       const lineAmountDec = qtyDec.times(rateDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
       subtotalDec = subtotalDec.plus(lineAmountDec);
 
@@ -506,12 +601,18 @@ export class NormalBillsService {
     }
 
     const discountType = input.discountType || null;
-    let discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     let discountAmountDec = new Decimal(0);
 
     if (discountType === 'percentage') {
+      if (discountValDec.isNegative() || discountValDec.greaterThan(100)) {
+        throw new AppError('Discount percentage must be between 0 and 100.', 400, 'INVALID_DISCOUNT');
+      }
       discountAmountDec = subtotalDec.times(discountValDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     } else if (discountType === 'fixed') {
+      if (discountValDec.isNegative()) {
+        throw new AppError('Discount fixed amount cannot be negative.', 400, 'INVALID_DISCOUNT');
+      }
       discountAmountDec = Decimal.min(discountValDec, subtotalDec);
     } else if (input.discountAmount) {
       discountAmountDec = Decimal.min(new Decimal(input.discountAmount || 0), subtotalDec);
@@ -519,23 +620,31 @@ export class NormalBillsService {
 
     const totalAmountDec = subtotalDec.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     const billNumber = input.billNumber || 'Draft';
-    const amountInWords = numberToIndianWords(totalAmountDec.toNumber());
+    const amountInWords = numberToIndianWords(totalAmountDec.toFixed(2));
 
     const buffer = await generateTaxInvoicePdf({
       invoiceNumber: billNumber,
-      invoiceDate: input.billDate || new Date().toISOString().slice(0, 10),
-      state: input.state || 'Bihar',
-      stateCode: input.stateCode || '10',
+      invoiceDate: input.billDate || getBusinessDateISO(env.BUSINESS_TIME_ZONE),
+      state: resolvedSupplier.state!,
+      stateCode: resolvedSupplier.stateCode!,
       transportationMode: input.transportationMode || null,
       vehicleNumber: input.vehicleNumber || null,
       dateOfSupply: input.dateOfSupply || null,
-      placeOfSupply: input.placeOfSupply || null,
+      placeOfSupply: input.placeOfSupply?.trim() || null,
+      company: {
+        companyName: companyProfile.companyName,
+        address: companyProfile.address,
+        gstin: companyProfile.gstin,
+        phone: companyProfile.phone,
+        state: companyProfile.state,
+        stateCode: companyProfile.stateCode,
+      },
       customer: {
         name: input.customerName || 'Valued Customer',
         address: input.customerAddress || null,
         phone: input.customerPhone || null,
-        state: input.customerState || 'Bihar',
-        stateCode: input.customerStateCode || '10',
+        state: resolvedCustomer.state,
+        stateCode: resolvedCustomer.stateCode,
       },
       items: computedItems.map((item) => ({
         name: item.description,
@@ -606,14 +715,12 @@ export class NormalBillsService {
 
     const whereClause = conditions.join(' AND ');
 
-    // 1. Total count query
     const countRes = await appPool.query(
       `SELECT COUNT(*)::INT AS total FROM normal_bills b WHERE ${whereClause}`,
       params
     );
     const totalCount = countRes.rows[0]?.total || 0;
 
-    // 2. Data rows query
     const dataSql = `
       SELECT
         b.id,
@@ -735,7 +842,6 @@ export class NormalBillsService {
     const bill = await this.getBillById(id);
     const filename = `Normal_Bill_${bill.bill_number}.pdf`;
 
-    // If already stored in R2, attempt to stream
     if (bill.r2_object_key && this.storageService.isConfigured()) {
       try {
         const streamObj = await this.storageService.getObjectStream(bill.r2_object_key);
@@ -749,7 +855,7 @@ export class NormalBillsService {
       }
     }
 
-    // Regenerate on demand
+    const company = await this.getOptionalPdfCompany();
     const buffer = await generateTaxInvoicePdf({
       invoiceNumber: bill.bill_number,
       invoiceDate: bill.bill_date,
@@ -759,6 +865,7 @@ export class NormalBillsService {
       vehicleNumber: bill.vehicle_number,
       dateOfSupply: bill.date_of_supply,
       placeOfSupply: bill.place_of_supply,
+      company,
       customer: {
         name: bill.customer_name,
         address: bill.customer_address,

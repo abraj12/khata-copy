@@ -70,6 +70,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '016_quotations.sql' },
             { version: '017_quotation_conversion_financial_fields.sql' },
             { version: '018_numbering_and_legacy_data_integrity.sql' },
+            { version: '019_customer_tax_integrity_and_idempotency.sql' },
             {
             version: '011_gst_invoices.sql',
           },
@@ -77,7 +78,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             version: '012_normal_bills.sql',
           },
           ],
-          rowCount: 18,
+          rowCount: 19,
         } as any;
       }
       return { rows: [], rowCount: 0 } as any;

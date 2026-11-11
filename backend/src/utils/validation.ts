@@ -2,9 +2,11 @@ import { Decimal } from 'decimal.js';
 
 export class FinancialValidationError extends Error {
   public status = 400;
-  constructor(message: string) {
+  public code = 'VALIDATION_ERROR';
+  constructor(message: string, code = 'VALIDATION_ERROR') {
     super(message);
     this.name = 'FinancialValidationError';
+    this.code = code;
   }
 }
 
@@ -19,7 +21,11 @@ export function escapeLike(str: string): string {
  * Validates that money inputs (buying price, selling price, payments) are non-negative,
  * have AT MOST 2 decimal places, and contain no malformed characters, exponents, or excess precision.
  */
-export function validateMoneyInput(value: unknown, fieldName = 'Amount'): Decimal {
+export function validateMoneyInput(
+  value: unknown,
+  fieldName = 'Amount',
+  options?: { allowZero?: boolean }
+): Decimal {
   if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
     throw new FinancialValidationError(`${fieldName} is required.`);
   }
@@ -41,6 +47,9 @@ export function validateMoneyInput(value: unknown, fieldName = 'Amount'): Decima
   if (d.isNegative()) {
     throw new FinancialValidationError(`${fieldName} cannot be negative.`);
   }
+  if (options?.allowZero === false && d.isZero()) {
+    throw new FinancialValidationError(`${fieldName} must be greater than zero.`);
+  }
   if (d.decimalPlaces() > 2) {
     throw new FinancialValidationError(`${fieldName} cannot have more than 2 decimal places.`);
   }
@@ -60,7 +69,7 @@ export function validateMoneyInput(value: unknown, fieldName = 'Amount'): Decima
  */
 export function validateDecimalQuantityInput(value: unknown, fieldName = 'Quantity'): Decimal {
   if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
-    throw new FinancialValidationError(`${fieldName} is required.`);
+    throw new FinancialValidationError(`${fieldName} is required.`, 'INVALID_QUANTITY');
   }
 
   const str = String(value).trim();
@@ -69,24 +78,26 @@ export function validateDecimalQuantityInput(value: unknown, fieldName = 'Quanti
   const quantityRegex = /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/;
   if (!quantityRegex.test(str)) {
     throw new FinancialValidationError(
-      `${fieldName} must be greater than 0 and may have up to 2 decimal places (e.g. 1, 1.5, 2.25).`
+      `${fieldName} must be greater than 0 and may have up to 2 decimal places (e.g. 1, 1.5, 2.25).`,
+      'INVALID_QUANTITY'
     );
   }
 
   const d = new Decimal(str);
   if (!d.isFinite() || d.isNaN()) {
-    throw new FinancialValidationError(`${fieldName} must be a finite number.`);
+    throw new FinancialValidationError(`${fieldName} must be a finite number.`, 'INVALID_QUANTITY');
   }
   if (d.lessThanOrEqualTo(0)) {
     throw new FinancialValidationError(
-      `${fieldName} must be greater than 0 and may have up to 2 decimal places (e.g. 1, 1.5, 2.25).`
+      `${fieldName} must be greater than 0 and may have up to 2 decimal places (e.g. 1, 1.5, 2.25).`,
+      'INVALID_QUANTITY'
     );
   }
   if (d.decimalPlaces() > 2) {
-    throw new FinancialValidationError(`${fieldName} cannot have more than 2 decimal places.`);
+    throw new FinancialValidationError(`${fieldName} cannot have more than 2 decimal places.`, 'INVALID_QUANTITY');
   }
   if (d.greaterThan(1000000)) {
-    throw new FinancialValidationError(`${fieldName} cannot exceed 1,000,000 units.`);
+    throw new FinancialValidationError(`${fieldName} cannot exceed 1,000,000 units.`, 'INVALID_QUANTITY');
   }
 
   return d;

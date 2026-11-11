@@ -55,7 +55,7 @@ describe('GST Billing Module (Frontend Calculation & Invoice Mapping)', () => {
       customer_id: null,
       customer_name: 'Sharma Construction Co.',
       customer_address: 'Station Road, Bilaspur',
-      customer_gstin: '09AABCS1429B1ZB',
+      customer_gstin: '09AABCS1429B1ZS',
       customer_state: 'Uttar Pradesh',
       customer_state_code: '09',
       taxable_amount: '8120.00',

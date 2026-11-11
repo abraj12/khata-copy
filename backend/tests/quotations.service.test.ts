@@ -109,8 +109,8 @@ describe('Professional Quotations Module Test Suite', () => {
   it('1. Suggests next sequential quotation number via /api/v1/quotations/next-number', async () => {
     vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
       const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
-      if (sqlText.includes('nextval')) {
-        return { rows: [{ seq_num: '5' }], rowCount: 1 } as any;
+      if (sqlText.includes('MAX(') || sqlText.includes('max_num')) {
+        return { rows: [{ seq_last: 4, seq_called: true, max_num: '4' }], rowCount: 1 } as any;
       }
       return { rows: [], rowCount: 0 } as any;
     });
@@ -214,7 +214,7 @@ describe('Professional Quotations Module Test Suite', () => {
         name: 'Tech Enterprises Pvt Ltd',
         address: 'Sector 62, Noida, Uttar Pradesh',
         phone: '9876543210',
-        gstin: '09AAACT1234A1Z5',
+        gstin: '09AAACT1234A1ZZ',
       },
       projectTitle: 'AI Infrastructure Implementation',
       subject: 'Supply of Edge AI Hardware and Model Deployment',
@@ -300,6 +300,25 @@ describe('Professional Quotations Module Test Suite', () => {
 
     const mockClient = {
       query: vi.fn().mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM quotation_settings')) {
+          return {
+            rows: [
+              {
+                id: 1,
+                company_name: 'ALGIONS AI LABS PRIVATE LIMITED',
+                cin: 'U62011BR2026PTC088473',
+                gstin: '10ABGCA8624E1Z3',
+                address: 'House No. 145A, Haziyapur, Ward 26, Gopalganj, Bihar – 841428',
+                email: 'contact@algions.in',
+                phone: '94938 40000',
+                website: 'algions.in',
+                state: 'Bihar',
+                state_code: '10',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
         if (sql.includes('SELECT * FROM quotations WHERE id = $1 FOR UPDATE')) {
           return { rows: [mockQuotation], rowCount: 1 };
         }
@@ -331,6 +350,25 @@ describe('Professional Quotations Module Test Suite', () => {
 
     const mockClient = {
       query: vi.fn().mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM quotation_settings')) {
+          return {
+            rows: [
+              {
+                id: 1,
+                company_name: 'ALGIONS AI LABS PRIVATE LIMITED',
+                cin: 'U62011BR2026PTC088473',
+                gstin: '10ABGCA8624E1Z3',
+                address: 'House No. 145A, Haziyapur, Ward 26, Gopalganj, Bihar – 841428',
+                email: 'contact@algions.in',
+                phone: '94938 40000',
+                website: 'algions.in',
+                state: 'Bihar',
+                state_code: '10',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
         if (sql.includes('SELECT * FROM quotations WHERE id = $1 FOR UPDATE')) {
           return { rows: [mockQuotation], rowCount: 1 };
         }
@@ -369,6 +407,25 @@ describe('Professional Quotations Module Test Suite', () => {
 
     const mockClient = {
       query: vi.fn().mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM quotation_settings')) {
+          return {
+            rows: [
+              {
+                id: 1,
+                company_name: 'ALGIONS AI LABS PRIVATE LIMITED',
+                cin: 'U62011BR2026PTC088473',
+                gstin: '10ABGCA8624E1Z3',
+                address: 'House No. 145A, Haziyapur, Ward 26, Gopalganj, Bihar – 841428',
+                email: 'contact@algions.in',
+                phone: '94938 40000',
+                website: 'algions.in',
+                state: 'Bihar',
+                state_code: '10',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
         if (sql.includes('SELECT * FROM quotations WHERE id = $1 FOR UPDATE')) {
           return { rows: [mockQuotation], rowCount: 1 };
         }
@@ -403,6 +460,25 @@ describe('Professional Quotations Module Test Suite', () => {
 
     const mockClient = {
       query: vi.fn().mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM quotation_settings')) {
+          return {
+            rows: [
+              {
+                id: 1,
+                company_name: 'ALGIONS AI LABS PRIVATE LIMITED',
+                cin: 'U62011BR2026PTC088473',
+                gstin: '10ABGCA8624E1Z3',
+                address: 'House No. 145A, Haziyapur, Ward 26, Gopalganj, Bihar – 841428',
+                email: 'contact@algions.in',
+                phone: '94938 40000',
+                website: 'algions.in',
+                state: 'Bihar',
+                state_code: '10',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
         if (sql.includes('SELECT * FROM quotations WHERE id = $1 FOR UPDATE')) {
           return { rows: [mockQuotation], rowCount: 1 };
         }
@@ -483,6 +559,25 @@ describe('Professional Quotations Module Test Suite', () => {
     const mockClient = {
       query: vi.fn().mockImplementation(async (sql: string, params?: any[]) => {
         queryCalls.push(sql);
+        if (sql.includes('FROM quotation_settings')) {
+          return {
+            rows: [
+              {
+                id: 1,
+                company_name: 'ALGIONS AI LABS PRIVATE LIMITED',
+                cin: 'U62011BR2026PTC088473',
+                gstin: '10ABGCA8624E1Z3',
+                address: 'House No. 145A, Haziyapur, Ward 26, Gopalganj, Bihar – 841428',
+                email: 'contact@algions.in',
+                phone: '94938 40000',
+                website: 'algions.in',
+                state: 'Bihar',
+                state_code: '10',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
         if (sql.includes('SELECT * FROM quotations WHERE id = $1 FOR UPDATE')) {
           return { rows: [mockQuotation], rowCount: 1 };
         }

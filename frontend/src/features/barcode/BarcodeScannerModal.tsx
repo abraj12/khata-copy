@@ -479,7 +479,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                         <div>
                           <div className="font-bold text-[var(--khata-text)]">{p.name}</div>
                           <div className="text-[10px] text-[var(--khata-text-muted)]">
-                            ₹{p.buying_price} {p.barcode ? `• Barcode: ${p.barcode}` : '• No Barcode'}
+                            Ref buying cost: ₹{p.buying_price} {p.barcode ? `• Barcode: ${p.barcode}` : '• No Barcode'}
                           </div>
                         </div>
                         <span className="text-[11px] font-bold text-[var(--khata-accent)]">

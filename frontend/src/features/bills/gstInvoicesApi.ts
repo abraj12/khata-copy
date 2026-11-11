@@ -209,7 +209,10 @@ export async function downloadDraftPdf(payload: CreateGstInvoicePayload): Promis
   window.URL.revokeObjectURL(blobUrl);
 }
 
-export function mapRecordToInvoiceProps(record: GstInvoiceRecord): MannatInvoiceProps {
+export function mapRecordToInvoiceProps(
+  record: GstInvoiceRecord,
+  company?: { name?: string; address?: string | null; gstin?: string | null; phone?: string | null }
+): MannatInvoiceProps {
   return {
     id: record.id,
     invoiceNumber: record.invoice_number,
@@ -218,6 +221,14 @@ export function mapRecordToInvoiceProps(record: GstInvoiceRecord): MannatInvoice
     vehicleNumber: record.vehicle_number,
     dateOfSupply: record.date_of_supply,
     placeOfSupply: record.place_of_supply,
+    company: {
+      name: company?.name,
+      address: company?.address,
+      gstin: company?.gstin,
+      phone: company?.phone,
+      state: record.state,
+      stateCode: record.state_code,
+    },
     customer: {
       name: record.customer_name,
       address: record.customer_address,

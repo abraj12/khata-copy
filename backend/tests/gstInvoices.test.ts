@@ -58,6 +58,25 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
           rowCount: 3,
         } as any;
       }
+      if (sqlText.includes('FROM quotation_settings')) {
+        return {
+          rows: [
+            {
+              id: 1,
+              company_name: 'ALGIONS AI LABS PRIVATE LIMITED',
+              cin: 'U62011BR2026PTC088473',
+              gstin: '09AAAAA0000A1Z0',
+              address: 'House No. 145A, Haziyapur',
+              email: 'contact@algions.in',
+              phone: '94938 40000',
+              website: 'algions.in',
+              state: 'Uttar Pradesh',
+              state_code: '09',
+            },
+          ],
+          rowCount: 1,
+        } as any;
+      }
       return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] } as any;
     });
 
@@ -139,7 +158,7 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
       customer_id: null,
       customer_name: 'Sharma Construction Co.',
       customer_address: 'Station Road, Bilaspur, Rampur',
-      customer_gstin: '09AABCS1429B1ZB',
+      customer_gstin: '09AABCS1429B1ZS',
       customer_state: 'Uttar Pradesh',
       customer_state_code: '09',
       taxable_amount: '8120.00',
@@ -179,6 +198,20 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
         if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') {
           return { rows: [], rowCount: 0 };
         }
+        if (sql.includes('FROM quotation_settings')) {
+          return {
+            rows: [
+              {
+                id: 1,
+                company_name: 'ALGIONS AI LABS PRIVATE LIMITED',
+                gstin: '09AAAAA0000A1Z0',
+                state: 'Uttar Pradesh',
+                state_code: '09',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
         if (sql.includes('SELECT 1 FROM gst_invoices WHERE invoice_number')) {
           return { rows: [], rowCount: 0 };
         }
@@ -209,7 +242,7 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
         stateCode: '09',
         customerName: 'Sharma Construction Co.',
         customerAddress: 'Station Road, Bilaspur, Rampur',
-        customerGstin: '09AABCS1429B1ZB',
+        customerGstin: '09AABCS1429B1ZS',
         customerState: 'Uttar Pradesh',
         customerStateCode: '09',
         gstRate: 18,
@@ -278,6 +311,20 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
       query: vi.fn().mockImplementation(async (sql: string) => {
         if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') {
           return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes('FROM quotation_settings')) {
+          return {
+            rows: [
+              {
+                id: 1,
+                company_name: 'ALGIONS AI LABS PRIVATE LIMITED',
+                gstin: '09AAAAA0000A1Z0',
+                state: 'Uttar Pradesh',
+                state_code: '09',
+              },
+            ],
+            rowCount: 1,
+          };
         }
         if (sql.includes('SELECT 1 FROM gst_invoices WHERE invoice_number')) {
           return { rows: [], rowCount: 0 };
@@ -367,6 +414,20 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
     const mockClient = {
       query: vi.fn().mockImplementation(async (sql: string) => {
         if (sql === 'BEGIN' || sql === 'ROLLBACK') return { rows: [], rowCount: 0 };
+        if (sql.includes('FROM quotation_settings')) {
+          return {
+            rows: [
+              {
+                id: 1,
+                company_name: 'ALGIONS AI LABS PRIVATE LIMITED',
+                gstin: '09AAAAA0000A1Z0',
+                state: 'Uttar Pradesh',
+                state_code: '09',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
         if (sql.includes('SELECT 1 FROM gst_invoices WHERE invoice_number')) {
           return { rows: [{ '?column?': 1 }], rowCount: 1 };
         }
@@ -384,6 +445,8 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
       .send({
         invoiceNumber: '001',
         customerName: 'Duplicate Test',
+        customerState: 'Uttar Pradesh',
+        customerStateCode: '09',
         gstRate: 18,
         items: [{ description: 'Item A', quantity: 1, rate: 50 }],
       });
@@ -544,6 +607,8 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
       .send({
         invoiceNumber: 'DRAFT-099',
         customerName: 'Mobile User Preview',
+        customerState: 'Uttar Pradesh',
+        customerStateCode: '09',
         gstRate: 18,
         items: [
           {
@@ -577,7 +642,7 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
       customer: {
         name: 'Corporate Customer With Long Multi-line Address',
         address: 'Plot No. 45, Industrial Area Phase II, Near Subhash Chowk, Bilaspur, Rampur, UP',
-        gstin: '09ABCDE1234F1Z5',
+        gstin: '09ABCDE1234F1ZY',
         state: 'Uttar Pradesh',
         stateCode: '09',
       },
@@ -628,6 +693,8 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
       .send({
         customerId: '42',
         customerName: 'Picker Customer',
+        customerState: 'Uttar Pradesh',
+        customerStateCode: '09',
         gstRate: 18,
         items: [
           {

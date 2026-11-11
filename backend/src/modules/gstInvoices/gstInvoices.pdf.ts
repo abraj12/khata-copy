@@ -2,7 +2,6 @@ import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import path from 'path';
 
-
 export interface GstInvoicePdfItem {
   name: string;
   hsn?: string | null;
@@ -13,21 +12,31 @@ export interface GstInvoicePdfItem {
   amount: string | number;
 }
 
+export interface GstInvoicePdfCompany {
+  companyName?: string;
+  address?: string;
+  gstin?: string | null;
+  phone?: string | null;
+  state?: string;
+  stateCode?: string;
+}
+
 export interface GstInvoicePdfData {
   invoiceNumber: string;
   invoiceDate: string | Date;
-  state?: string;
-  stateCode?: string;
+  state?: string | null;
+  stateCode?: string | null;
   transportationMode?: string | null;
   vehicleNumber?: string | null;
   dateOfSupply?: string | Date | null;
   placeOfSupply?: string | null;
+  company?: GstInvoicePdfCompany;
   customer?: {
     name: string;
     address?: string | null;
     gstin?: string | null;
-    state?: string;
-    stateCode?: string;
+    state?: string | null;
+    stateCode?: string | null;
     phone?: string | null;
   };
   items: GstInvoicePdfItem[];
@@ -71,9 +80,12 @@ export function numberToIndianWords(value: number | string): string {
   const indianInteger = (n: number): string => {
     if (!n) return 'Zero';
     const parts: string[] = [];
-    const crore = Math.floor(n / 10000000); n %= 10000000;
-    const lakh = Math.floor(n / 100000); n %= 100000;
-    const thousand = Math.floor(n / 1000); n %= 1000;
+    const crore = Math.floor(n / 10000000);
+    n %= 10000000;
+    const lakh = Math.floor(n / 100000);
+    n %= 100000;
+    const thousand = Math.floor(n / 1000);
+    n %= 1000;
     if (crore) parts.push(`${indianInteger(crore)} Crore`);
     if (lakh) parts.push(`${underThousand(lakh)} Lakh`);
     if (thousand) parts.push(`${underThousand(thousand)} Thousand`);
@@ -120,13 +132,21 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
     try {
       const isNormalBill = Boolean(data.isNormalBill);
       const invoiceTitle = data.billTitle || (isNormalBill ? 'NORMAL BILL' : 'TAX INVOICE');
+      const supplierName = data.company?.companyName || 'ALGIONS AI LABS PRIVATE LIMITED';
+      const supplierGstin = data.company?.gstin ?? '';
+      const supplierPhone = data.company?.phone ?? '';
+      const supplierAddress = (data.company?.address || '').replace(/\r?\n/g, ', ');
+      const supplierState = data.state || data.company?.state || '';
+      const supplierStateCode = data.stateCode || data.company?.stateCode || '';
+      const buyerState = data.customer?.state || '';
+      const buyerStateCode = data.customer?.stateCode || '';
 
       const doc = new PDFDocument({
         size: 'A4',
         margin: 18,
         info: {
-          Title: `${invoiceTitle} ${data.invoiceNumber} - Algions AI Labs Private Limited`,
-          Author: 'Algions AI Labs Private Limited',
+          Title: `${invoiceTitle} ${data.invoiceNumber} - ${supplierName}`,
+          Author: supplierName,
         },
       });
 
@@ -146,13 +166,19 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
 
       // Top Header
       doc.font('Helvetica-Bold').fontSize(9).fillColor('#000000');
-      doc.text('GSTIN : 10ABGCA8624E1Z3', left + 6, top + 6);
+      if (supplierGstin) {
+        doc.text(`GSTIN : ${supplierGstin}`, left + 6, top + 6);
+      }
       doc.fontSize(14).text(invoiceTitle, left, top + 5, { align: 'center', underline: true });
-      doc.fontSize(9).text('Mob.: 94938 40000', left, top + 6, { align: 'right', width: width - 6 });
+      if (supplierPhone) {
+        doc.fontSize(9).text(`Mob.: ${supplierPhone}`, left, top + 6, { align: 'right', width: width - 6 });
+      }
 
       // Company Name & Address
-      doc.fontSize(18).font('Helvetica-Bold').text('ALGIONS AI LABS PRIVATE LIMITED', left, top + 26, { align: 'center' });
-      doc.fontSize(8.5).font('Helvetica-Bold').text('House no 145A, Ward no 26, Haziyapur, Gopalganj, Bihar - 841428', left, top + 52, { align: 'center' });
+      doc.fontSize(18).font('Helvetica-Bold').text(supplierName.toUpperCase(), left, top + 26, { align: 'center' });
+      if (supplierAddress) {
+        doc.fontSize(8.5).font('Helvetica-Bold').text(supplierAddress, left, top + 52, { align: 'center', width });
+      }
 
       // Horizontal line below header
       let y = top + 70;
@@ -170,9 +196,9 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
       doc.font('Helvetica-Bold').fontSize(9).text(formatDateToIndian(data.invoiceDate));
 
       doc.font('Helvetica').fontSize(8).text('State : ', left + 6, y + 26, { continued: true });
-      doc.font('Helvetica-Bold').fontSize(9).text(`${data.state || 'Bihar'}   `, { continued: true });
+      doc.font('Helvetica-Bold').fontSize(9).text(`${supplierState}   `, { continued: true });
       doc.font('Helvetica').fontSize(8).text('State Code : ', { continued: true });
-      doc.font('Helvetica-Bold').fontSize(9).text(data.stateCode || '10');
+      doc.font('Helvetica-Bold').fontSize(9).text(supplierStateCode);
 
       // Right meta
       const rightColLeft = metaMidX + 6;
@@ -209,9 +235,9 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
       doc.font('Helvetica-Bold').fontSize(8.5).text('GSTIN : ', left + 6, bottomLineY, { continued: true });
       doc.font('Helvetica').fontSize(8.5).text(`${data.customer?.gstin || ''}              `, { continued: true });
       doc.font('Helvetica-Bold').fontSize(8.5).text('State : ', { continued: true });
-      doc.font('Helvetica').fontSize(8.5).text(`${data.customer?.state || 'Bihar'}           `, { continued: true });
+      doc.font('Helvetica').fontSize(8.5).text(`${buyerState}           `, { continued: true });
       doc.font('Helvetica-Bold').fontSize(8.5).text('State Code : ', { continued: true });
-      doc.font('Helvetica').fontSize(8.5).text(data.customer?.stateCode || '10');
+      doc.font('Helvetica').fontSize(8.5).text(buyerStateCode);
 
       y += billToHeight;
       // Line below Bill to
@@ -220,12 +246,12 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
       // Table Header
       const tableHeaderHeight = 26;
       const colWidths = [
-        width * 0.06,  // S.No
-        width * 0.39,  // Description
-        width * 0.13,  // HSN
-        width * 0.09,  // Qty
-        width * 0.16,  // Rate
-        width * 0.17,  // Amount
+        width * 0.06, // S.No
+        width * 0.39, // Description
+        width * 0.13, // HSN
+        width * 0.09, // Qty
+        width * 0.16, // Rate
+        width * 0.17, // Amount
       ];
       const colX = [
         left,
@@ -266,42 +292,40 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
       const igstDisplay = totals.igstRate ? `IGST @ ${totals.igstRate}%` : 'IGST @';
 
       const hasDiscount = Boolean(totals.discountAmount && Number(totals.discountAmount) > 0);
-      const discountLabel = totals.discountType === 'percentage'
-        ? `Discount (${totals.discountValue}%)`
-        : 'Discount';
+      const discountLabel = totals.discountType === 'percentage' ? `Discount (${totals.discountValue}%)` : 'Discount';
 
       const taxRows: Array<[string, string]> = isNormalBill
-        ? (hasDiscount
-            ? [
-                ['Subtotal', Number(totals.subtotal || totals.taxableAmount || totals.grandTotal || 0).toFixed(2)],
-                [discountLabel, `-${Number(totals.discountAmount).toFixed(2)}`],
-                ['Grand Total', Number(totals.grandTotal || 0).toFixed(2)],
-              ]
-            : [
-                ['Total Amount', Number(totals.taxableAmount || totals.grandTotal || 0).toFixed(2)],
-                ['Grand Total', Number(totals.grandTotal || 0).toFixed(2)],
-              ])
-        : (hasDiscount
-            ? [
-                ['Subtotal', Number(totals.subtotal || 0).toFixed(2)],
-                [discountLabel, `-${Number(totals.discountAmount).toFixed(2)}`],
-                ['T. Amt. Before Tax', Number(totals.taxableAmount || 0).toFixed(2)],
-                [cgstDisplay, Number(totals.cgstAmount || 0).toFixed(2)],
-                [sgstDisplay, Number(totals.sgstAmount || 0).toFixed(2)],
-                [igstDisplay, Number(totals.igstAmount || 0).toFixed(2)],
-                ['Tax Amount GST', Number(totals.taxAmount || 0).toFixed(2)],
-                ['T. Amount After Tax', Number(totals.grandTotal || 0).toFixed(2)],
-              ]
-            : [
-                ['T. Amt. Before Tax', Number(totals.taxableAmount || 0).toFixed(2)],
-                [cgstDisplay, Number(totals.cgstAmount || 0).toFixed(2)],
-                [sgstDisplay, Number(totals.sgstAmount || 0).toFixed(2)],
-                [igstDisplay, Number(totals.igstAmount || 0).toFixed(2)],
-                ['Tax Amount GST', Number(totals.taxAmount || 0).toFixed(2)],
-                ['T. Amount After Tax', Number(totals.grandTotal || 0).toFixed(2)],
-              ]);
+        ? hasDiscount
+          ? [
+              ['Subtotal', Number(totals.subtotal || totals.taxableAmount || totals.grandTotal || 0).toFixed(2)],
+              [discountLabel, `-${Number(totals.discountAmount).toFixed(2)}`],
+              ['Grand Total', Number(totals.grandTotal || 0).toFixed(2)],
+            ]
+          : [
+              ['Total Amount', Number(totals.taxableAmount || totals.grandTotal || 0).toFixed(2)],
+              ['Grand Total', Number(totals.grandTotal || 0).toFixed(2)],
+            ]
+        : hasDiscount
+          ? [
+              ['Subtotal', Number(totals.subtotal || 0).toFixed(2)],
+              [discountLabel, `-${Number(totals.discountAmount).toFixed(2)}`],
+              ['T. Amt. Before Tax', Number(totals.taxableAmount || 0).toFixed(2)],
+              [cgstDisplay, Number(totals.cgstAmount || 0).toFixed(2)],
+              [sgstDisplay, Number(totals.sgstAmount || 0).toFixed(2)],
+              [igstDisplay, Number(totals.igstAmount || 0).toFixed(2)],
+              ['Tax Amount GST', Number(totals.taxAmount || 0).toFixed(2)],
+              ['T. Amount After Tax', Number(totals.grandTotal || 0).toFixed(2)],
+            ]
+          : [
+              ['T. Amt. Before Tax', Number(totals.taxableAmount || 0).toFixed(2)],
+              [cgstDisplay, Number(totals.cgstAmount || 0).toFixed(2)],
+              [sgstDisplay, Number(totals.sgstAmount || 0).toFixed(2)],
+              [igstDisplay, Number(totals.igstAmount || 0).toFixed(2)],
+              ['Tax Amount GST', Number(totals.taxAmount || 0).toFixed(2)],
+              ['T. Amount After Tax', Number(totals.grandTotal || 0).toFixed(2)],
+            ];
 
-      const taxBoxRowHeight = isNormalBill ? (hasDiscount ? 16 : 22) : (hasDiscount ? 13.5 : 16.5);
+      const taxBoxRowHeight = isNormalBill ? (hasDiscount ? 16 : 22) : hasDiscount ? 13.5 : 16.5;
       const taxBoxRows = taxRows.length;
       const taxBoxHeight = taxBoxRowHeight * taxBoxRows;
       const taxBoxTop = tableBottom - taxBoxHeight;
@@ -351,8 +375,14 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
         doc.text(item.name || '', colX[1] + 4, itemY, { width: colWidths[1] - 8, align: 'left', lineBreak: true });
         doc.text(item.hsn || '', colX[2], itemY, { width: colWidths[2], align: 'center' });
         doc.text(`${item.quantity ?? ''}${item.unit ? ' ' + item.unit : ''}`, colX[3], itemY, { width: colWidths[3], align: 'center' });
-        doc.text(item.rate !== undefined && item.rate !== null ? Number(item.rate).toFixed(2) : '', colX[4], itemY, { width: colWidths[4] - 4, align: 'right' });
-        doc.text(item.amount !== undefined && item.amount !== null ? Number(item.amount).toFixed(2) : '', colX[5], itemY, { width: colWidths[5] - 4, align: 'right' });
+        doc.text(item.rate !== undefined && item.rate !== null ? Number(item.rate).toFixed(2) : '', colX[4], itemY, {
+          width: colWidths[4] - 4,
+          align: 'right',
+        });
+        doc.text(item.amount !== undefined && item.amount !== null ? Number(item.amount).toFixed(2) : '', colX[5], itemY, {
+          width: colWidths[5] - 4,
+          align: 'right',
+        });
         itemY += rowHeight;
         drawnCount++;
       });
@@ -374,8 +404,13 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
         }
         const isTotal = idx === taxRows.length - 1;
         doc.font('Helvetica-Bold').fontSize(isNormalBill ? 9 : isTotal ? 8.5 : 7.5);
-        doc.fillColor('#000000').text(r[0], taxBoxLeft + 4, ry + (taxBoxRowHeight - (isNormalBill ? 10 : 8)) / 2, { width: taxBoxWidth * 0.55 });
-        doc.text(r[1], taxSplitX, ry + (taxBoxRowHeight - (isNormalBill ? 10 : 8)) / 2, { width: taxBoxWidth * 0.42 - 4, align: 'right' });
+        doc.fillColor('#000000').text(r[0], taxBoxLeft + 4, ry + (taxBoxRowHeight - (isNormalBill ? 10 : 8)) / 2, {
+          width: taxBoxWidth * 0.55,
+        });
+        doc.text(r[1], taxSplitX, ry + (taxBoxRowHeight - (isNormalBill ? 10 : 8)) / 2, {
+          width: taxBoxWidth * 0.42 - 4,
+          align: 'right',
+        });
       });
 
       // Line below table
@@ -401,8 +436,14 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
 
       // Footer Right
       const rightW = width - (footerMidX - left);
-      doc.font('Helvetica-Oblique').fontSize(8).text('Certified that the particulars given above are true and correct.', footerMidX, footerY + 6, { align: 'right', width: rightW - 8 });
-      doc.font('Helvetica-Bold').fontSize(10).text('For Algions AI Labs Private Limited', footerMidX, footerY + 18, { align: 'right', width: rightW - 8 });
+      doc.font('Helvetica-Oblique').fontSize(8).text('Certified that the particulars given above are true and correct.', footerMidX, footerY + 6, {
+        align: 'right',
+        width: rightW - 8,
+      });
+      doc.font('Helvetica-Bold').fontSize(10).text(`For ${supplierName}`, footerMidX, footerY + 18, {
+        align: 'right',
+        width: rightW - 8,
+      });
 
       // Embed signature if configured
       try {
@@ -428,7 +469,10 @@ export function generateTaxInvoicePdf(data: GstInvoicePdfData): Promise<Buffer> 
         console.warn('[PDF] Signature image failed to load:', (sigErr as Error).message);
       }
 
-      doc.font('Helvetica-Bold').fontSize(8.5).text('Authorised Signatory', footerMidX, footerY + 58, { align: 'right', width: rightW - 8 });
+      doc.font('Helvetica-Bold').fontSize(8.5).text('Authorised Signatory', footerMidX, footerY + 58, {
+        align: 'right',
+        width: rightW - 8,
+      });
 
       doc.end();
     } catch (err) {
