@@ -305,8 +305,8 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
         style={{ background: 'var(--khata-surface)' }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-[var(--khata-border)] flex-shrink-0">
-          <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 p-4 sm:p-5 border-b border-[var(--khata-border)] flex-shrink-0">
+          <div className="flex flex-wrap items-center gap-2.5 min-w-0">
             <div className="w-9 h-9 rounded-xl bg-[var(--khata-accent)]/10 text-[var(--khata-accent)] flex items-center justify-center">
               <FileText className="w-5 h-5" />
             </div>
@@ -330,7 +330,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Critical Business Clarification Alert Banner */}
-        <div className="px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs flex items-center gap-2 flex-shrink-0">
+        <div className="px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs flex flex-wrap items-center gap-2 flex-shrink-0">
           <AlertCircle className="w-4 h-4 flex-shrink-0 text-amber-500" />
           <span>
             <strong>Reference Only:</strong> Offline bills are archival document records. They do not create udhar transactions, balances, or financial customer accounts.
@@ -338,7 +338,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex border-b border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/40 px-4 pt-2 gap-2 flex-shrink-0">
+        <div className="flex flex-wrap border-b border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/40 px-4 pt-2 gap-2 flex-shrink-0">
           <button
             type="button"
             onClick={() => setActiveTab('upload')}
@@ -371,8 +371,8 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
             /* Upload Tab Content */
             <form onSubmit={handleUploadSubmit} className="space-y-4 max-w-lg mx-auto">
               {uploadSuccess && (
-                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 text-[var(--khata-success)] text-xs rounded-xl flex items-center justify-between font-medium">
-                  <div className="flex items-center gap-2">
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 text-[var(--khata-success)] text-xs rounded-xl flex flex-wrap items-center justify-between gap-2 font-medium">
+                  <div className="flex flex-wrap items-center gap-2 min-w-0">
                     <CheckCircle className="w-4 h-4 flex-shrink-0" />
                     <span>{uploadSuccess}</span>
                   </div>
@@ -387,7 +387,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
               )}
 
               {uploadError && (
-                <div className="p-3 bg-red-500/10 border border-red-500/30 text-[var(--khata-danger)] text-xs rounded-xl flex items-center gap-2 font-medium">
+                <div className="p-3 bg-red-500/10 border border-red-500/30 text-[var(--khata-danger)] text-xs rounded-xl flex flex-wrap items-center gap-2 font-medium">
                   <AlertCircle className="w-4 h-4 flex-shrink-0" />
                   <span>{uploadError}</span>
                 </div>
@@ -446,7 +446,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
 
                 {!selectedFile ? (
                   <div className="border-2 border-dashed border-[var(--khata-border)] rounded-2xl p-6 text-center space-y-3 bg-[var(--khata-surface-inset)]/30">
-                    <div className="flex items-center justify-center gap-3">
+                    <div className="flex flex-wrap items-center justify-center gap-3">
                       <button
                         type="button"
                         onClick={() => cameraInputRef.current?.click()}
@@ -470,7 +470,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
                   </div>
                 ) : (
                   <div className="relative border border-[var(--khata-border)] rounded-2xl p-3 bg-[var(--khata-surface-inset)]/30 space-y-2">
-                    <div className="flex items-center justify-between text-xs text-[var(--khata-text-muted)] mb-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--khata-text-muted)] mb-1">
                       <span className="font-semibold text-[var(--khata-text)] truncate max-w-[200px]">
                         {selectedFile.name}
                       </span>
@@ -487,7 +487,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
                       </div>
                     )}
 
-                    <div className="flex items-center justify-end gap-2 pt-1">
+                    <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
                       <button
                         type="button"
                         onClick={() => cameraInputRef.current?.click()}
@@ -602,7 +602,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
                         </div>
                       </div>
 
-                      <div className="pt-2 border-t border-[var(--khata-border)] flex items-center justify-between text-xs text-[var(--khata-text-muted)]">
+                      <div className="pt-2 border-t border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--khata-text-muted)]">
                         <span>
                           {new Date(bill.created_at).toLocaleDateString('en-IN', {
                             day: 'numeric',
@@ -610,7 +610,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
                             year: 'numeric',
                           })}
                         </span>
-                        <div className="flex items-center gap-1">
+                        <div className="flex flex-wrap items-center gap-1">
                           <button
                             type="button"
                             onClick={() => handleDownloadBill(bill)}
@@ -664,7 +664,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-[var(--khata-border)] bg-[var(--khata-surface)] flex justify-end flex-shrink-0">
+        <div className="p-4 border-t border-[var(--khata-border)] bg-[var(--khata-surface)] flex flex-wrap justify-end gap-2 flex-shrink-0">
           <button
             type="button"
             onClick={onClose}
@@ -682,7 +682,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
           role="dialog"
           aria-modal="true"
         >
-          <div className="w-full max-w-4xl flex items-center justify-between text-white pb-3">
+          <div className="w-full max-w-4xl flex flex-wrap items-center justify-between gap-2 text-white pb-3">
             <div>
               <h3 className="font-bold text-base">{lightboxBill.title}</h3>
               <p className="text-xs text-neutral-300 font-mono">{lightboxBill.phone}</p>
@@ -739,7 +739,7 @@ export const OfflineBillModal: React.FC<OfflineBillModalProps> = ({ isOpen, onCl
               </div>
             )}
 
-            <div className="flex justify-end gap-3 pt-2">
+            <div className="flex flex-wrap justify-end gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => setDeletingBillId(null)}

@@ -119,7 +119,7 @@ export const LoginPage: React.FC = () => {
             <div
               role="alert"
               aria-live="assertive"
-              className={`mb-5 p-4 rounded-xl flex items-start gap-3 text-xs font-medium border ${
+              className={`mb-5 p-4 rounded-xl flex flex-wrap items-start gap-3 text-xs font-medium border ${
                 isLocked
                   ? 'bg-amber-500/10 border-amber-500/30 text-[var(--khata-warning)]'
                   : 'bg-red-500/10 border-red-500/30 text-[var(--khata-danger)]'
@@ -130,7 +130,7 @@ export const LoginPage: React.FC = () => {
               ) : (
                 <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
               )}
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
                 <p className="font-bold">{isLocked ? 'Account Temporarily Locked' : 'Authentication Error'}</p>
                 <p className="mt-0.5">{errorMessage}</p>
                 {isLocked && lockoutRemainingSec > 0 && (

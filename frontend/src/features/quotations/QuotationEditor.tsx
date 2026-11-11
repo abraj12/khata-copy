@@ -596,7 +596,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     <div className="space-y-6">
       {/* Top Action Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[var(--khata-border)]">
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5 min-w-0">
           <div
             className="w-10 h-10 rounded-xl flex items-center justify-center shadow-inner"
             style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-accent)' }}
@@ -654,7 +654,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
       </div>
 
       {error && (
-        <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 text-rose-500 text-xs rounded-xl font-medium flex items-center gap-2">
+        <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 text-rose-500 text-xs rounded-xl font-medium flex flex-wrap items-center gap-2">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           <span>{error}</span>
         </div>
@@ -871,7 +871,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
       {/* Item Builder Card */}
       <div className="neu-card p-4 sm:p-5 rounded-2xl space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-bold uppercase text-[var(--khata-text)]">
               Quotation Line Items
             </h3>
@@ -904,7 +904,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
               key={item.draftKey}
               className="p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/30 space-y-2.5"
             >
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-bold text-xs text-[var(--khata-accent)]">Item #{idx + 1}</span>
                 <button
                   type="button"
@@ -1237,7 +1237,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
 
             {/* GST Settings */}
             <div className="p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-2.5">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <label className="text-xs font-bold uppercase text-[var(--khata-text-muted)]">
                   Include GST In Quotation:
                 </label>
@@ -1271,7 +1271,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                     </select>
                   </div>
 
-                  <div className="flex-1 min-w-[180px]">
+                  <div className="flex-1 min-w-0 sm:min-w-[180px]">
                     <label className="block text-[10px] font-bold text-[var(--khata-text-muted)] mb-1">
                       Supply Type
                     </label>
@@ -1291,13 +1291,13 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
           {/* Totals Breakdown Column */}
           <div className="p-4 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-2 text-xs flex flex-col justify-between">
             <div className="space-y-2">
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-[var(--khata-text-muted)]">Subtotal:</span>
                 <span className="font-semibold">₹{formatCurrency(subtotalDec.toFixed(2))}</span>
               </div>
 
               {discountAmountDec.greaterThan(0) && (
-                <div className="flex justify-between text-rose-500">
+                <div className="flex flex-wrap justify-between gap-1 text-rose-500">
                   <span>
                     Discount {discountType === 'percentage' ? `(${discountValue}%)` : ''}:
                   </span>
@@ -1305,7 +1305,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                 </div>
               )}
 
-              <div className="flex justify-between font-bold border-t border-[var(--khata-border)] pt-1.5">
+              <div className="flex flex-wrap justify-between gap-1 font-bold border-t border-[var(--khata-border)] pt-1.5">
                 <span>Taxable Amount:</span>
                 <span>₹{formatCurrency(taxableAmountDec.toFixed(2))}</span>
               </div>
@@ -1314,17 +1314,17 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                 <>
                   {isIntraState ? (
                     <>
-                      <div className="flex justify-between text-[var(--khata-text-muted)]">
+                      <div className="flex flex-wrap justify-between gap-1 text-[var(--khata-text-muted)]">
                         <span>CGST ({(gstRate / 2).toFixed(1)}%):</span>
                         <span>₹{formatCurrency(cgstDec.toFixed(2))}</span>
                       </div>
-                      <div className="flex justify-between text-[var(--khata-text-muted)]">
+                      <div className="flex flex-wrap justify-between gap-1 text-[var(--khata-text-muted)]">
                         <span>SGST ({(gstRate / 2).toFixed(1)}%):</span>
                         <span>₹{formatCurrency(sgstDec.toFixed(2))}</span>
                       </div>
                     </>
                   ) : (
-                    <div className="flex justify-between text-[var(--khata-text-muted)]">
+                    <div className="flex flex-wrap justify-between gap-1 text-[var(--khata-text-muted)]">
                       <span>IGST ({gstRate}%):</span>
                       <span>₹{formatCurrency(igstDec.toFixed(2))}</span>
                     </div>
@@ -1334,7 +1334,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
             </div>
 
             {/* Grand Total */}
-            <div className="p-3 rounded-xl bg-[var(--khata-accent)] text-white flex items-center justify-between shadow-lg">
+            <div className="p-3 rounded-xl bg-[var(--khata-accent)] text-white flex flex-wrap items-center justify-between gap-2 shadow-lg">
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-wider opacity-90">
                   Grand Total

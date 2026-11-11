@@ -102,7 +102,7 @@ export const SuppliersModuleView: React.FC = () => {
       {/* Module Header & Sub-Navigation (hidden when printing statements/vouchers) */}
       <div className="neu-card p-4 sm:p-5 rounded-2xl space-y-3.5 print:hidden">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5 min-w-0">
             <div className="p-2 rounded-xl bg-[var(--khata-accent)]/12 text-[var(--khata-accent)]">
               <Building2 className="w-5 h-5" />
             </div>

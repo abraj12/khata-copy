@@ -118,7 +118,7 @@ export const DashboardActivityFeed: React.FC<DashboardActivityFeedProps> = React
                   </p>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <span
                     className={`font-mono text-sm font-black ${
                       isVoidedOrCancelled ? 'line-through text-[var(--khata-text-muted)]' : 'text-[var(--khata-text)]'

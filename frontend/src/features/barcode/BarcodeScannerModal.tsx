@@ -476,8 +476,8 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
         style={{ background: 'var(--khata-surface)', color: 'var(--khata-text)' }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 border-b border-[var(--khata-border)]">
-          <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-6 py-3.5 border-b border-[var(--khata-border)]">
+          <div className="flex flex-wrap items-center gap-2.5 min-w-0">
             <div
               className="w-8 h-8 rounded-lg flex items-center justify-center shadow-inner"
               style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-accent)' }}
@@ -495,7 +495,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {continuousScan && (
               <button
                 type="button"
@@ -564,9 +564,9 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
             <div
               role="status"
               aria-live="polite"
-              className="p-3 rounded-xl border border-emerald-500/35 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-between gap-2"
+              className="p-3 rounded-xl border border-emerald-500/35 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex flex-wrap items-center justify-between gap-2"
             >
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <CheckCircle className="w-4 h-4 flex-shrink-0 text-emerald-600 dark:text-emerald-400" />
                 <span>
                   Added &ldquo;{continuousFeedback.productName}&rdquo;{' '}
@@ -581,7 +581,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
           {/* Unknown Barcode Resolution Dialog */}
           {unknownBarcode ? (
             <div className="space-y-4">
-              <div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-500 flex items-start gap-3">
+              <div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-500 flex flex-wrap items-start gap-3">
                 <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
                 <div className="flex-1">
                   <h4 className="text-sm font-bold">Unknown Barcode</h4>
@@ -595,14 +595,14 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
               </div>
 
               {linkSuccess && (
-                <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-500 text-xs font-semibold flex items-center gap-2">
+                <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-500 text-xs font-semibold flex flex-wrap items-center gap-2">
                   <CheckCircle className="w-4 h-4 flex-shrink-0" />
                   <span>{linkSuccess}</span>
                 </div>
               )}
 
               {linkError && (
-                <div className="p-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-500 text-xs font-semibold flex items-center gap-2">
+                <div className="p-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-500 text-xs font-semibold flex flex-wrap items-center gap-2">
                   <AlertCircle className="w-4 h-4 flex-shrink-0" />
                   <span>{linkError}</span>
                 </div>
@@ -617,9 +617,9 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                     onCreateWithBarcode(unknownBarcode);
                     onClose();
                   }}
-                  className="w-full flex items-center justify-between p-3.5 rounded-xl border border-[var(--khata-border)] hover:border-[var(--khata-accent)] bg-[var(--khata-surface-inset)] transition text-left group"
+                  className="w-full flex flex-wrap items-center justify-between gap-2 p-3.5 rounded-xl border border-[var(--khata-border)] hover:border-[var(--khata-accent)] bg-[var(--khata-surface-inset)] transition text-left group"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-3 min-w-0">
                     <div className="w-8 h-8 rounded-lg bg-[var(--khata-accent)]/10 text-[var(--khata-accent)] flex items-center justify-center font-bold">
                       <Plus className="w-4 h-4" />
                     </div>
@@ -638,7 +638,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
               {/* Action 2: Attach to existing product */}
               <div className="p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-3">
-                <div className="flex items-center gap-2 text-xs font-bold text-[var(--khata-text)]">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-[var(--khata-text)]">
                   <LinkIcon className="w-4 h-4 text-[var(--khata-accent)]" />
                   <span>Attach Barcode to an Existing Product</span>
                 </div>
@@ -802,7 +802,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                   </div>
 
                   {/* Camera Controls Bar (Torch, Info) */}
-                  <div className="absolute bottom-3 inset-x-3 z-10 flex items-center justify-between">
+                  <div className="absolute bottom-3 inset-x-3 z-10 flex flex-wrap items-center justify-between gap-2">
                     <span className="text-[10px] font-mono text-white/80 bg-black/60 px-2.5 py-1 rounded-full backdrop-blur-sm">
                       Align barcode inside frame
                     </span>

@@ -44,7 +44,7 @@ export const DashboardMetricCard: React.FC<DashboardMetricCardProps> = React.mem
 
   const body = (
     <div className="flex flex-col justify-between h-full gap-3 text-left">
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-[11px] font-bold uppercase tracking-wider text-[var(--khata-text-muted)]">
             {title}

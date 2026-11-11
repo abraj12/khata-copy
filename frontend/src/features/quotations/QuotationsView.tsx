@@ -177,7 +177,7 @@ export const QuotationsView: React.FC = () => {
     <div className="space-y-6">
       {/* Top Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[var(--khata-border)]">
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5 min-w-0">
           <div
             className="w-10 h-10 rounded-xl flex items-center justify-center shadow-inner"
             style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-accent)' }}
@@ -192,7 +192,7 @@ export const QuotationsView: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => setIsSettingsOpen(true)}
@@ -216,13 +216,13 @@ export const QuotationsView: React.FC = () => {
       {notification && (
         <div
           role="status"
-          className={`p-3.5 rounded-xl border text-xs font-semibold flex items-center justify-between ${
+          className={`p-3.5 rounded-xl border text-xs font-semibold flex flex-wrap items-center justify-between gap-2 ${
             notification.type === 'success'
               ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500'
               : 'bg-rose-500/10 border-rose-500/30 text-rose-500'
           }`}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {notification.type === 'success' ? (
               <CheckCircle className="w-4 h-4 flex-shrink-0" />
             ) : (
@@ -358,7 +358,7 @@ export const QuotationsView: React.FC = () => {
 
       {/* Filter and Search Bar */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[240px]">
+        <div className="relative flex-1 basis-full sm:basis-0 min-w-0 sm:min-w-[240px]">
           <Search className="w-4 h-4 text-[var(--khata-text-muted)] absolute left-3.5 top-3 pointer-events-none" />
           <input
             type="text"
@@ -418,7 +418,7 @@ export const QuotationsView: React.FC = () => {
                   <div key={q.id} className="p-4 space-y-2.5 hover:bg-[var(--khata-surface-inset)]/30 transition">
                     {/* Top Row: Quotation Number + Status + Date */}
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono font-bold text-sm text-[var(--khata-accent)]">
                           {q.quotation_number}
                         </span>
@@ -658,7 +658,7 @@ export const QuotationsView: React.FC = () => {
               <span className="text-[var(--khata-text-muted)] font-medium">
                 Showing {quotations.length > 0 ? page * PAGE_SIZE + 1 : 0}–{page * PAGE_SIZE + quotations.length} of {summaryCounts.total}
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   disabled={page === 0 || isLoading}
@@ -722,7 +722,7 @@ export const QuotationsView: React.FC = () => {
             className="w-full max-w-2xl rounded-2xl border border-[var(--khata-border)] shadow-2xl overflow-hidden p-6 space-y-4 max-h-[90vh] overflow-y-auto"
             style={{ background: 'var(--khata-surface)', color: 'var(--khata-text)' }}
           >
-            <div className="flex items-center justify-between pb-2 border-b border-[var(--khata-border)]">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--khata-border)]">
               <h3 className="text-base font-bold flex items-center gap-2">
                 <Settings className="w-4 h-4 text-[var(--khata-accent)]" />
                 <span>Quotation Company Settings & Defaults</span>

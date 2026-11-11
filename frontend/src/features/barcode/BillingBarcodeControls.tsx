@@ -224,7 +224,7 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
     <div className={compact ? 'space-y-2' : 'space-y-2.5'}>
       {/* USB/Bluetooth/Manual Barcode Entry + Camera Scanner Trigger */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[210px]">
+        <div className="relative flex-1 basis-full sm:basis-0 min-w-0 sm:min-w-[210px]">
           <Barcode className="w-4 h-4 text-[var(--khata-accent)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             ref={inputRef}
@@ -272,7 +272,7 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
               : 'bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300'
           }`}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             {statusMessage.type === 'success' ? (
               <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
             ) : (
@@ -294,7 +294,7 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
       {/* Unknown Barcode Prompt (Confirmation-gated Create Product) */}
       {unknownBarcode && (
         <div className="p-3 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300 flex flex-wrap items-center justify-between gap-2.5 text-xs">
-          <div className="flex items-start gap-2">
+          <div className="flex flex-wrap items-start gap-2 min-w-0">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
             <div>
               <p className="font-bold">Unknown Barcode: Product not found for this barcode.</p>
@@ -339,8 +339,8 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
       {quickCreateOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="neu-card w-full max-w-md rounded-2xl p-5 sm:p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-3">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-3">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
                 <PlusCircle className="w-5 h-5 text-[var(--khata-accent)]" />
                 <h3 className="text-base font-extrabold text-[var(--khata-text)]">
                   Create Product from Barcode

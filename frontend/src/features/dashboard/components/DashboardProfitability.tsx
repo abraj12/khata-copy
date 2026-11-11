@@ -47,7 +47,7 @@ export const DashboardProfitability: React.FC<DashboardProfitabilityProps> = Rea
       {profitability.hasIncompleteCostData && (
         <div
           role="note"
-          className="rounded-xl p-3 border border-amber-500/30 bg-amber-500/10 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2.5"
+          className="rounded-xl p-3 border border-amber-500/30 bg-amber-500/10 text-xs text-amber-800 dark:text-amber-200 flex flex-wrap items-start gap-2.5"
         >
           <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" />
           <div>

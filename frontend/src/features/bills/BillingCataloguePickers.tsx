@@ -33,7 +33,7 @@ export const CustomerPickerDropdown: React.FC<CustomerPickerDropdownProps> = ({
       className="absolute right-0 top-full mt-2 w-72 max-w-[85vw] p-2 rounded-xl border border-[var(--khata-border)] shadow-xl z-30 space-y-2 animate-in fade-in"
       style={{ background: 'var(--khata-surface)' }}
     >
-      <div className="p-1 text-[10px] font-bold text-[var(--khata-text-muted)] border-b border-[var(--khata-border)] flex items-center justify-between">
+      <div className="p-1 text-[10px] font-bold text-[var(--khata-text-muted)] border-b border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-1">
         <span>
           KHATA CUSTOMERS ({customers.length}
           {hasMore ? '+' : ''})
@@ -146,7 +146,7 @@ export const ProductPickerPopover: React.FC<ProductPickerPopoverProps> = ({
       className="absolute left-0 right-0 top-full mt-1.5 p-2 rounded-xl border border-[var(--khata-border)] shadow-2xl z-30 space-y-2 animate-in fade-in"
       style={{ background: 'var(--khata-surface)' }}
     >
-      <div className="flex items-center justify-between text-[10px] font-bold text-[var(--khata-text-muted)] pb-1 border-b border-[var(--khata-border)]">
+      <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] font-bold text-[var(--khata-text-muted)] pb-1 border-b border-[var(--khata-border)]">
         <span className="flex items-center gap-1.5">
           <span>
             SELECT PRODUCT FROM CATALOGUE ({products.length}

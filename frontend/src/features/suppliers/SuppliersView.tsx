@@ -241,13 +241,13 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
     <div className="space-y-4">
       {notice && (
         <div
-          className={`p-3 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 ${
+          className={`p-3 rounded-xl text-xs font-semibold flex flex-wrap items-center justify-between gap-2 ${
             notice.type === 'success'
               ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
               : 'bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300'
           }`}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             {notice.type === 'success' ? (
               <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
             ) : (
@@ -283,7 +283,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          <div className="relative flex-1 min-w-[210px]">
+          <div className="relative flex-1 basis-full sm:basis-0 min-w-0 sm:min-w-[210px]">
             <Search className="w-4 h-4 text-[var(--khata-text-muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
@@ -404,7 +404,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                           {s.lastActivity || 'No activity'}
                         </td>
                         <td className="px-4 py-3">
-                          <div className="flex items-center justify-end gap-1.5">
+                          <div className="flex flex-wrap items-center justify-end gap-1.5">
                             <button
                               type="button"
                               onClick={() => onOpenSupplierDetails(s.id)}
@@ -495,7 +495,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                   key={s.id}
                   className="neu-card p-4 sm:p-5 rounded-2xl flex flex-col justify-between gap-3"
                 >
-                  <div className="flex items-start justify-between gap-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <button
                         type="button"
@@ -578,7 +578,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
                       )}
                     </div>
 
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => openEditModal(s)}
@@ -635,7 +635,7 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
           <div className="neu-card w-full max-w-2xl rounded-2xl p-5 sm:p-6 my-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-3">
               <h3 className="text-base font-extrabold text-[var(--khata-text)]">
                 {editingSupplier ? `Edit Supplier · ${editingSupplier.name}` : 'Register New Supplier'}
               </h3>

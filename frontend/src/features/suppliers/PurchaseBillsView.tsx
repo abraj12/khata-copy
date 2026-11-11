@@ -574,13 +574,13 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
       <div className={detailBill ? 'print:hidden space-y-4' : 'space-y-4'}>
         {notice && (
           <div
-            className={`p-3 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 ${
+            className={`p-3 rounded-xl text-xs font-semibold flex flex-wrap items-center justify-between gap-2 ${
               notice.type === 'success'
                 ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
                 : 'bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300'
             }`}
           >
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
               {notice.type === 'success' ? (
                 <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
               ) : (
@@ -724,7 +724,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                   {bills.map((b) => (
                     <tr key={b.id} className="hover:bg-[var(--khata-surface-inset)]/35">
                       <td className="py-3 px-3 font-bold font-mono text-[var(--khata-text)]">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <span>{b.invoiceNumber}</span>
                           {b.hasAttachment && (
                             <span title="Has document attachment">
@@ -789,9 +789,9 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                   key={b.id}
                   className="p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/25 space-y-2 text-xs"
                 >
-                  <div className="flex items-start justify-between gap-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
-                      <div className="font-bold font-mono text-sm text-[var(--khata-text)] flex items-center gap-1.5">
+                      <div className="font-bold font-mono text-sm text-[var(--khata-text)] flex flex-wrap items-center gap-1.5">
                         <span>{b.invoiceNumber}</span>
                         {b.hasAttachment && (
                           <Paperclip className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
@@ -863,7 +863,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
       {formOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm overflow-y-auto print:hidden">
           <div className="neu-card w-full max-w-4xl rounded-2xl p-4 sm:p-6 my-4 space-y-4 max-h-[92vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-3">
               <h3 className="text-base font-extrabold text-[var(--khata-text)]">
                 {editingBillId ? 'Edit Purchase Bill' : 'Record New Purchase Bill'}
               </h3>
@@ -972,7 +972,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                         key={line.key}
                         className="p-3 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/25 space-y-2.5"
                       >
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="text-[11px] font-extrabold text-[var(--khata-accent)]">
                             Line #{idx + 1}
                           </span>
@@ -1189,31 +1189,31 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
 
                 {/* Totals Preview Card */}
                 <div className="p-4 rounded-xl bg-[var(--khata-surface-inset)]/40 border border-[var(--khata-border)] space-y-2 text-xs">
-                  <div className="flex justify-between">
+                  <div className="flex flex-wrap justify-between gap-1">
                     <span className="text-[var(--khata-text-muted)]">Subtotal</span>
                     <span className="font-mono font-bold">
                       {formatAbsRupees(draftTotals.subtotalAmount)}
                     </span>
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex flex-wrap justify-between gap-1">
                     <span className="text-[var(--khata-text-muted)]">Discount</span>
                     <span className="font-mono">
                       -{formatAbsRupees(draftTotals.discountAmount)}
                     </span>
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex flex-wrap justify-between gap-1">
                     <span className="text-[var(--khata-text-muted)]">Taxable Amount</span>
                     <span className="font-mono font-semibold">
                       {formatAbsRupees(draftTotals.taxableAmount)}
                     </span>
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex flex-wrap justify-between gap-1">
                     <span className="text-[var(--khata-text-muted)]">
                       GST ({safeDecimal(gstRate).toFixed(2)}%)
                     </span>
                     <span className="font-mono">{formatAbsRupees(draftTotals.gstAmount)}</span>
                   </div>
-                  <div className="flex justify-between pt-2 border-t border-[var(--khata-border)] text-sm font-black">
+                  <div className="flex flex-wrap justify-between gap-1 pt-2 border-t border-[var(--khata-border)] text-sm font-black">
                     <span>Grand Total</span>
                     <span className="font-mono text-[var(--khata-accent)]">
                       {formatAbsRupees(draftTotals.grandTotal)}
@@ -1416,36 +1416,36 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                       )}
                     </div>
 
-                    <div className="w-64 space-y-1.5">
-                      <div className="flex justify-between">
+                    <div className="w-full sm:w-64 space-y-1.5">
+                      <div className="flex flex-wrap justify-between gap-1">
                         <span className="text-slate-600">Subtotal</span>
                         <span className="font-mono font-semibold">
                           {formatAbsRupees(detailBill.subtotalAmount)}
                         </span>
                       </div>
-                      <div className="flex justify-between">
+                      <div className="flex flex-wrap justify-between gap-1">
                         <span className="text-slate-600">Discount</span>
                         <span className="font-mono">
                           -{formatAbsRupees(detailBill.discountAmount)}
                         </span>
                       </div>
-                      <div className="flex justify-between">
+                      <div className="flex flex-wrap justify-between gap-1">
                         <span className="text-slate-600">GST ({detailBill.gstRate}%)</span>
                         <span className="font-mono">
                           {formatAbsRupees(detailBill.gstAmount)}
                         </span>
                       </div>
-                      <div className="flex justify-between pt-1.5 border-t border-slate-300 text-sm font-black">
+                      <div className="flex flex-wrap justify-between gap-1 pt-1.5 border-t border-slate-300 text-sm font-black">
                         <span>Grand Total</span>
                         <span className="font-mono">{formatAbsRupees(detailBill.grandTotal)}</span>
                       </div>
-                      <div className="flex justify-between text-emerald-700 font-semibold">
+                      <div className="flex flex-wrap justify-between gap-1 text-emerald-700 font-semibold">
                         <span>Paid / Allocated</span>
                         <span className="font-mono">
                           {formatAbsRupees(detailBill.allocatedAmount)}
                         </span>
                       </div>
-                      <div className="flex justify-between text-rose-700 font-bold">
+                      <div className="flex flex-wrap justify-between gap-1 text-rose-700 font-bold">
                         <span>Balance Due</span>
                         <span className="font-mono">
                           {formatAbsRupees(detailBill.remainingAmount)}

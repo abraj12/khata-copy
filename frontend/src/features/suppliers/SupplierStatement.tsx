@@ -245,7 +245,7 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
             />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => void loadStatement(selectedSupplierId, fromDate, toDate)}
@@ -519,7 +519,7 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
                             : 'bg-[var(--khata-surface-inset)]/25'
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-2">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>
                           <span className="font-mono font-bold">{entry.referenceNumber}</span>
                           <div className="text-[11px] text-[var(--khata-text-muted)]">

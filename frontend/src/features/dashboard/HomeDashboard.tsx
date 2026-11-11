@@ -266,7 +266,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
           role="alert"
           className="neu-card p-4 border-rose-500/40 bg-rose-500/10 flex flex-wrap items-center justify-between gap-3 text-xs text-rose-700 dark:text-rose-300"
         >
-          <div className="flex items-center gap-2 font-bold">
+          <div className="flex flex-wrap items-center gap-2 font-bold min-w-0">
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
             <span>{error}</span>
           </div>
@@ -598,7 +598,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
                     key={prod.productId}
                     className="p-3.5 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] space-y-1.5"
                   >
-                    <div className="flex items-center justify-between gap-1">
+                    <div className="flex flex-wrap items-center justify-between gap-1">
                       <span className="text-[10px] font-mono font-bold text-[var(--khata-accent)]">
                         #{idx + 1} Top Product
                       </span>

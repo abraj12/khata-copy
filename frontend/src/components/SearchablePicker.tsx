@@ -305,8 +305,8 @@ export function SearchablePicker<T>({
                 }}
               >
                 {/* Mobile Header with Title and Accessible Close Button */}
-                <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--khata-border)]">
-                  <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-[var(--khata-border)]">
+                  <div className="flex flex-wrap items-center gap-2 min-w-0">
                     <span className="text-sm font-bold text-[var(--khata-text)] uppercase tracking-wider">
                       {mode === 'customer' ? 'Select Customer' : 'Select Product'}
                     </span>
@@ -502,7 +502,7 @@ export function SearchablePicker<T>({
               id={`option-${componentId}-${itemKey}`}
               onClick={() => handleItemSelect(item)}
               onMouseEnter={() => setActiveIndex(index)}
-              className={`p-2.5 rounded-xl cursor-pointer text-sm transition flex items-center justify-between min-h-[44px] ${
+              className={`p-2.5 rounded-xl cursor-pointer text-sm transition flex flex-wrap items-center justify-between gap-2 min-h-[44px] ${
                 isSelected
                   ? 'border border-[var(--khata-accent)] bg-[var(--khata-surface-inset)] font-bold'
                   : isKeyboardActive

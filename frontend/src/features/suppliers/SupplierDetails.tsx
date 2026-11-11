@@ -250,7 +250,7 @@ export const SupplierDetails: React.FC<SupplierDetailsProps> = ({
       {/* Recent Purchase Bills & Payments Side by Side */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="neu-card p-4 sm:p-5 rounded-2xl space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-extrabold text-[var(--khata-text)] flex items-center gap-1.5">
               <Receipt className="w-4 h-4 text-[var(--khata-accent)]" />
               <span>Recent Purchase Bills ({supplier.purchaseBillCount})</span>
@@ -272,7 +272,7 @@ export const SupplierDetails: React.FC<SupplierDetailsProps> = ({
               {bills.slice(0, 8).map((b) => (
                 <div
                   key={b.id}
-                  className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/30 border border-[var(--khata-border)]/60 flex items-center justify-between gap-2 text-xs"
+                  className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/30 border border-[var(--khata-border)]/60 flex flex-wrap items-center justify-between gap-2 text-xs"
                 >
                   <div>
                     <div className="font-bold text-[var(--khata-text)]">{b.invoiceNumber}</div>
@@ -295,7 +295,7 @@ export const SupplierDetails: React.FC<SupplierDetailsProps> = ({
         </div>
 
         <div className="neu-card p-4 sm:p-5 rounded-2xl space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-extrabold text-[var(--khata-text)] flex items-center gap-1.5">
               <CreditCard className="w-4 h-4 text-emerald-600" />
               <span>Recent Payments ({supplier.paymentCount})</span>
@@ -319,7 +319,7 @@ export const SupplierDetails: React.FC<SupplierDetailsProps> = ({
                 return (
                   <div
                     key={p.id}
-                    className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/30 border border-[var(--khata-border)]/60 flex items-center justify-between gap-2 text-xs"
+                    className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/30 border border-[var(--khata-border)]/60 flex flex-wrap items-center justify-between gap-2 text-xs"
                   >
                     <div>
                       <div className="flex flex-wrap items-center gap-1.5">

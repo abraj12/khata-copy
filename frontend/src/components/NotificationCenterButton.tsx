@@ -154,10 +154,10 @@ export const NotificationCenterButton: React.FC = () => {
         <div
           role="dialog"
           aria-label="Business notifications"
-          className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl border border-[var(--khata-border)] shadow-xl z-50 overflow-hidden"
+          className="absolute right-0 mt-2 w-[min(24rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-[var(--khata-border)] shadow-xl z-50 overflow-hidden"
           style={{ backgroundColor: 'var(--khata-surface)', color: 'var(--khata-text)' }}
         >
-          <div className="px-4 py-3 border-b border-[var(--khata-border)] flex items-center justify-between gap-2">
+          <div className="px-4 py-3 border-b border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-2">
             <div>
               <h3 className="text-xs font-bold uppercase tracking-wider text-[var(--khata-text)]">
                 Notifications
@@ -166,7 +166,7 @@ export const NotificationCenterButton: React.FC = () => {
                 {unreadCount > 0 ? `${unreadCount} unread alert${unreadCount === 1 ? '' : 's'}` : 'All caught up'}
               </p>
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               {unreadCount > 0 && (
                 <button
                   type="button"
@@ -207,20 +207,20 @@ export const NotificationCenterButton: React.FC = () => {
               notifications.map((item) => (
                 <div
                   key={item.id}
-                  className={`p-3.5 flex items-start gap-2.5 transition ${
+                  className={`p-3.5 flex flex-wrap items-start gap-2.5 transition ${
                     item.isRead ? 'opacity-75' : 'bg-[var(--khata-surface-inset)]/60'
                   }`}
                 >
                   {renderSeverityIcon(item.severity)}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="text-xs font-bold text-[var(--khata-text)] truncate">{item.title}</span>
                       <span className="text-[10px] font-mono text-[var(--khata-text-muted)] shrink-0">
                         {formatRelativeTime(item.createdAt)}
                       </span>
                     </div>
                     <p className="text-xs text-[var(--khata-text-muted)] mt-0.5 break-words">{item.message}</p>
-                    <div className="flex items-center justify-between gap-2 mt-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mt-1.5">
                       <span className="text-[10px] uppercase tracking-wider font-semibold text-[var(--khata-text-muted)]">
                         {item.category.replace(/_/g, ' ')}
                       </span>

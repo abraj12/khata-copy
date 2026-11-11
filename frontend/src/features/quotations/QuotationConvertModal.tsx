@@ -78,8 +78,8 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
         style={{ background: 'var(--khata-surface)', color: 'var(--khata-text)' }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between pb-3 border-b border-[var(--khata-border)]">
-          <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[var(--khata-border)]">
+          <div className="flex flex-wrap items-center gap-2.5 min-w-0">
             <div
               className="w-9 h-9 rounded-xl flex items-center justify-center shadow-inner"
               style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-accent)' }}
@@ -107,15 +107,15 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
 
         {/* Quotation Info Summary */}
         <div className="p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-1.5 text-xs">
-          <div className="flex justify-between">
+          <div className="flex flex-wrap justify-between gap-1">
             <span className="text-[var(--khata-text-muted)]">Customer:</span>
             <span className="font-bold">{quotation.customer_name}</span>
           </div>
-          <div className="flex justify-between">
+          <div className="flex flex-wrap justify-between gap-1">
             <span className="text-[var(--khata-text-muted)]">Grand Total:</span>
             <span className="font-bold text-[var(--khata-accent)]">₹{formatCurrency(quotation.grand_total)}</span>
           </div>
-          <div className="flex justify-between">
+          <div className="flex flex-wrap justify-between gap-1">
             <span className="text-[var(--khata-text-muted)]">Status:</span>
             <span
               className={`font-bold capitalize px-2 py-0.5 rounded text-[10px] ${
@@ -128,7 +128,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
             </span>
           </div>
           {quotation.valid_until && (
-            <div className="flex justify-between">
+            <div className="flex flex-wrap justify-between gap-1">
               <span className="text-[var(--khata-text-muted)]">Valid Until:</span>
               <span className={`font-medium ${isExpired ? 'text-rose-500 font-bold' : ''}`}>
                 {quotation.valid_until} {isExpired ? '(Expired)' : ''}
@@ -140,7 +140,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
         {/* Warning if expired or not accepted */}
         {requiresForce && (
           <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-500 text-xs space-y-2">
-            <div className="flex items-start gap-2">
+            <div className="flex flex-wrap items-start gap-2">
               <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
               <div>
                 {!isAccepted && (
@@ -182,7 +182,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
                   : 'border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-[var(--khata-text-muted)]'
               }`}
             >
-              <div className="flex items-center justify-between mb-1">
+              <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
                 <span className="font-bold text-xs text-[var(--khata-text)]">Normal Bill</span>
                 {billType === 'normal' && <CheckCircle className="w-3.5 h-3.5 text-[var(--khata-accent)]" />}
               </div>
@@ -200,7 +200,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
                   : 'border-[var(--khata-border)] bg-[var(--khata-surface-inset)] text-[var(--khata-text-muted)]'
               }`}
             >
-              <div className="flex items-center justify-between mb-1">
+              <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
                 <span className="font-bold text-xs text-[var(--khata-text)]">GST Tax Invoice</span>
                 {billType === 'gst' && <CheckCircle className="w-3.5 h-3.5 text-[var(--khata-accent)]" />}
               </div>
@@ -214,7 +214,7 @@ export const QuotationConvertModal: React.FC<QuotationConvertModalProps> = ({
         {/* Buyer State selector for legacy quotations missing state code */}
         {billType === 'gst' && !quotation.customer_state_code && (
           <div className="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs space-y-2">
-            <div className="flex items-center gap-2 text-amber-500 font-bold">
+            <div className="flex flex-wrap items-center gap-2 text-amber-500 font-bold">
               <AlertTriangle className="w-4 h-4 flex-shrink-0" />
               <span>Legacy Quotation: Buyer State Required</span>
             </div>

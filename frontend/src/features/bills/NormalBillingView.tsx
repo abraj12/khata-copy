@@ -679,7 +679,7 @@ export const NormalBillingView: React.FC = () => {
         {/* Page Title & Subtitle Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[var(--khata-border)] pb-4">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             <h2 className="text-xl sm:text-2xl font-black text-[var(--khata-text)] tracking-tight">
               Normal Billing · Standard Bill
             </h2>
@@ -693,11 +693,11 @@ export const NormalBillingView: React.FC = () => {
         </div>
 
         {/* View Switcher: Create Bill vs Bill History */}
-        <div className="flex items-center gap-1.5 p-1 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)]">
+        <div className="w-full sm:w-auto flex flex-wrap items-center gap-1.5 p-1 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)]">
           <button
             type="button"
             onClick={() => setActiveTab('create')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
               activeTab === 'create'
                 ? 'bg-[var(--khata-accent)] text-white shadow-sm'
                 : 'text-[var(--khata-text-muted)] hover:text-[var(--khata-text)]'
@@ -709,7 +709,7 @@ export const NormalBillingView: React.FC = () => {
           <button
             type="button"
             onClick={() => setActiveTab('history')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
               activeTab === 'history'
                 ? 'bg-[var(--khata-accent)] text-white shadow-sm'
                 : 'text-[var(--khata-text-muted)] hover:text-[var(--khata-text)]'
@@ -728,7 +728,7 @@ export const NormalBillingView: React.FC = () => {
 
       {/* ERROR BANNER */}
       {errorMessage && (
-        <div className="p-3.5 rounded-xl border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-200 text-xs sm:text-sm flex items-start gap-2.5 animate-in fade-in">
+        <div className="p-3.5 rounded-xl border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-200 text-xs sm:text-sm flex flex-wrap items-start gap-2.5 animate-in fade-in">
           <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
           <div className="flex-1 font-semibold">{errorMessage}</div>
           <button
@@ -747,8 +747,8 @@ export const NormalBillingView: React.FC = () => {
         <div className="space-y-6">
           {/* SECTION A: INVOICE / BILL INFORMATION */}
           <div className="neu-card p-4 sm:p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-2.5">
-              <div className="flex items-center gap-2 font-black text-sm text-[var(--khata-text)] uppercase tracking-wide">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-2.5">
+              <div className="flex flex-wrap items-center gap-2 font-black text-sm text-[var(--khata-text)] uppercase tracking-wide">
                 <FileText className="w-4 h-4 text-[var(--khata-accent)]" />
                 <span>Section A: Bill Information</span>
               </div>
@@ -760,7 +760,7 @@ export const NormalBillingView: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Bill Number */}
               <div>
-                <div className="flex items-center justify-between mb-1">
+                <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
                   <label className="text-xs font-bold text-[var(--khata-text-muted)] flex items-center gap-1">
                     <span>Bill Number *</span>
                   </label>
@@ -796,7 +796,7 @@ export const NormalBillingView: React.FC = () => {
 
               {/* Bill Date */}
               <div>
-                <div className="flex items-center justify-between mb-1">
+                <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
                   <label className="text-xs font-bold text-[var(--khata-text-muted)] flex items-center gap-1">
                     <Calendar className="w-3.5 h-3.5" />
                     <span>Bill Date *</span>
@@ -878,7 +878,7 @@ export const NormalBillingView: React.FC = () => {
 
               {/* Date of Supply */}
               <div>
-                <div className="flex items-center justify-between mb-1">
+                <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
                   <label className="text-xs font-bold text-[var(--khata-text-muted)]">
                     Date of Supply
                   </label>
@@ -916,8 +916,8 @@ export const NormalBillingView: React.FC = () => {
 
           {/* SECTION B: CUSTOMER / RECEIVER DETAILS */}
           <div className="neu-card p-4 sm:p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-2.5">
-              <div className="flex items-center gap-2 font-black text-sm text-[var(--khata-text)] uppercase tracking-wide">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-2.5">
+              <div className="flex flex-wrap items-center gap-2 font-black text-sm text-[var(--khata-text)] uppercase tracking-wide">
                 <User className="w-4 h-4 text-[var(--khata-accent)]" />
                 <span>Section B: Details of Receiver (Bill to Party)</span>
               </div>
@@ -952,12 +952,12 @@ export const NormalBillingView: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Customer Autocomplete Search / Manual Input */}
               <div className="relative md:col-span-2">
-                <div className="flex items-center justify-between mb-1">
+                <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
                   <label className="text-xs font-bold text-[var(--khata-text-muted)]">
                     Customer / Receiver Name *
                   </label>
                   {customerId && (
-                    <div className="flex items-center gap-1.5 text-[10px]">
+                    <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
                       <span className="text-emerald-600 font-bold">✓ Linked Customer</span>
                       <button
                         type="button"
@@ -1071,12 +1071,12 @@ export const NormalBillingView: React.FC = () => {
 
           {/* SECTION C: PRODUCT SELECTION & LINE ITEMS */}
           <div className="neu-card p-4 sm:p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-2.5">
-              <div className="flex items-center gap-2 font-black text-sm text-[var(--khata-text)] uppercase tracking-wide">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-2.5">
+              <div className="flex flex-wrap items-center gap-2 font-black text-sm text-[var(--khata-text)] uppercase tracking-wide">
                 <Package className="w-4 h-4 text-[var(--khata-accent)]" />
                 <span>Section C: Goods / Products Selection</span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
                 <span className="text-[11px] font-bold text-[var(--khata-text-muted)]">
                   {items.length}/{MAX_BILL_LINE_ITEMS} items
                 </span>
@@ -1126,8 +1126,8 @@ export const NormalBillingView: React.FC = () => {
                     key={item.id}
                     className="p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-3 relative group"
                   >
-                    <div className="flex items-center justify-between border-b border-[var(--khata-border)]/60 pb-1.5">
-                      <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)]/60 pb-1.5">
+                      <div className="flex flex-wrap items-center gap-2 min-w-0">
                         <span className="w-5 h-5 rounded-full bg-[var(--khata-accent)] text-white text-[11px] font-black flex items-center justify-center">
                           {index + 1}
                         </span>
@@ -1149,16 +1149,16 @@ export const NormalBillingView: React.FC = () => {
 
                     {/* Description of Goods with Integrated Catalogue Autocomplete */}
                     <div className="space-y-1">
-                      <div className="flex items-center justify-between">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
                         <label className="text-[11px] font-bold text-[var(--khata-text-muted)] flex items-center gap-1">
                           <Package className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
                           <span>Description of Goods</span>
                           <span className="text-rose-500">*</span>
                         </label>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2 min-w-0">
                           {item.productId ? (
-                            <div className="flex items-center gap-1.5 text-[10px]">
+                            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
                               <span className="text-[var(--khata-accent)] font-semibold truncate max-w-[200px]">
                                 ✓ Linked: {availableProducts.find((p) => Number(p.id) === Number(item.productId))?.name || item.description || 'Catalogue Product'}
                               </span>
@@ -1176,7 +1176,7 @@ export const NormalBillingView: React.FC = () => {
                               </button>
                             </div>
                           ) : (
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2 min-w-0">
                               <button
                                 type="button"
                                 onClick={() => {
@@ -1331,8 +1331,8 @@ export const NormalBillingView: React.FC = () => {
 
           {/* SECTION D: BILL SUMMARY (NO GST CALCULATION) */}
           <div className="neu-card p-4 sm:p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-2.5">
-              <div className="flex items-center gap-2 font-black text-sm text-[var(--khata-text)] uppercase tracking-wide">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-2.5">
+              <div className="flex flex-wrap items-center gap-2 font-black text-sm text-[var(--khata-text)] uppercase tracking-wide">
                 <Building className="w-4 h-4 text-emerald-500" />
                 <span>Section D: Bill Summary (No GST)</span>
               </div>
@@ -1358,24 +1358,24 @@ export const NormalBillingView: React.FC = () => {
 
               {/* Right Column: Bill Totals Breakdown */}
               <div className="p-4 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-2.5">
-                <div className="flex items-center justify-between text-xs text-[var(--khata-text-muted)]">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--khata-text-muted)]">
                   <span>Total Line Items:</span>
                   <span className="font-bold text-[var(--khata-text)]">{items.length} items</span>
                 </div>
-                <div className="flex items-center justify-between text-xs text-[var(--khata-text-muted)]">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--khata-text-muted)]">
                   <span>Total Quantity:</span>
                   <span className="font-bold text-[var(--khata-text)]">
                     {calculationSummary.totalQty.toFixed(2)}
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs text-[var(--khata-text-muted)]">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--khata-text-muted)]">
                   <span>Subtotal / Total Amount:</span>
                   <span className="font-bold text-[var(--khata-text)]">
                     ₹{calculationSummary.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </span>
                 </div>
 
-                <div className="border-t border-[var(--khata-border)] pt-2.5 mt-2 flex items-center justify-between">
+                <div className="border-t border-[var(--khata-border)] pt-2.5 mt-2 flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="text-xs font-black text-[var(--khata-text)] uppercase tracking-wide">
                       Final Bill Amount
@@ -1394,7 +1394,7 @@ export const NormalBillingView: React.FC = () => {
 
                 {/* Action Buttons: located on base at the bottom of the bill summary card (matching GST billing) */}
                 <div className="space-y-2.5 pt-3 border-t border-[var(--khata-border)]/60">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2 min-w-0">
                     <button
                       type="button"
                       onClick={handleResetForm}
@@ -1474,7 +1474,7 @@ export const NormalBillingView: React.FC = () => {
                 />
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
                 <input
                   type="date"
                   value={historyDateTo}
@@ -1640,7 +1640,7 @@ export const NormalBillingView: React.FC = () => {
                   {historyBills.map((bill) => (
                     <div key={bill.id} className="p-3.5 space-y-2.5 text-xs">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2 min-w-0">
                           <span className="font-mono font-black text-sm text-[var(--khata-accent)]">
                             #{bill.bill_number}
                           </span>
@@ -1737,12 +1737,12 @@ export const NormalBillingView: React.FC = () => {
 
             {/* Pagination Controls */}
             {historyTotal > 25 && (
-              <div className="p-3 border-t border-[var(--khata-border)] flex items-center justify-between text-xs text-[var(--khata-text-muted)]">
+              <div className="p-3 border-t border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--khata-text-muted)]">
                 <div>
                   Showing {historyPage * 25 + 1} to{' '}
                   {Math.min((historyPage + 1) * 25, historyTotal)} of {historyTotal} bills
                 </div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <button
                     type="button"
                     disabled={historyPage === 0}

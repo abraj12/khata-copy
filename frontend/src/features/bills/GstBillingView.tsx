@@ -684,7 +684,7 @@ export const GstBillingView: React.FC = () => {
         className="p-4 sm:p-6 rounded-2xl border border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-4"
         style={{ background: 'var(--khata-surface)' }}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3 min-w-0">
           <div
             className="w-11 h-11 rounded-xl flex items-center justify-center border border-[var(--khata-border)] shadow-sm"
             style={{ background: 'var(--khata-surface-inset)', color: 'var(--khata-accent)' }}
@@ -708,11 +708,11 @@ export const GstBillingView: React.FC = () => {
         </div>
 
         {/* Sub-tab Navigation */}
-        <div className="w-full sm:w-auto grid grid-cols-2 sm:flex items-center gap-1.5 sm:gap-2 bg-[var(--khata-surface-inset)] p-1 rounded-xl border border-[var(--khata-border)]">
+        <div className="w-full sm:w-auto flex flex-wrap items-center gap-1.5 sm:gap-2 bg-[var(--khata-surface-inset)] p-1 rounded-xl border border-[var(--khata-border)]">
           <button
             type="button"
             onClick={() => setActiveSubTab('create')}
-            className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+            className={`flex-1 sm:flex-initial px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
               activeSubTab === 'create'
                 ? 'bg-[var(--khata-accent)] text-white shadow-sm'
                 : 'text-[var(--khata-text)] hover:text-[var(--khata-accent)]'
@@ -725,7 +725,7 @@ export const GstBillingView: React.FC = () => {
           <button
             type="button"
             onClick={() => setActiveSubTab('history')}
-            className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+            className={`flex-1 sm:flex-initial px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
               activeSubTab === 'history'
                 ? 'bg-[var(--khata-accent)] text-white shadow-sm'
                 : 'text-[var(--khata-text)] hover:text-[var(--khata-accent)]'
@@ -744,8 +744,8 @@ export const GstBillingView: React.FC = () => {
 
       {/* Error alert */}
       {errorMessage && (
-        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 dark:bg-rose-950/30 dark:border-rose-900 flex items-center justify-between text-rose-700 dark:text-rose-400 text-sm">
-          <div className="flex items-center gap-2">
+        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 dark:bg-rose-950/30 dark:border-rose-900 flex flex-wrap items-center justify-between gap-2 text-rose-700 dark:text-rose-400 text-sm">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             <AlertCircle className="w-5 h-5 flex-shrink-0" />
             <span>{errorMessage}</span>
           </div>
@@ -771,7 +771,7 @@ export const GstBillingView: React.FC = () => {
                 className="p-5 rounded-2xl border border-[var(--khata-border)] space-y-4"
                 style={{ background: 'var(--khata-surface)' }}
               >
-                <div className="flex items-center justify-between pb-2 border-b border-[var(--khata-border)]">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--khata-border)]">
                   <h3 className="text-sm font-bold uppercase tracking-wider text-[var(--khata-text-muted)] flex items-center gap-2">
                     <Building2 className="w-4 h-4 text-[var(--khata-accent)]" />
                     <span>A. Invoice Information</span>
@@ -790,7 +790,7 @@ export const GstBillingView: React.FC = () => {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                   <div>
-                    <div className="flex items-center justify-between mb-1">
+                    <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
                       <label className="font-bold text-[var(--khata-text-muted)]">
                         Invoice No. <span className="text-rose-500">*</span>
                       </label>
@@ -825,7 +825,7 @@ export const GstBillingView: React.FC = () => {
                   </div>
 
                   <div>
-                    <div className="flex items-center justify-between mb-1">
+                    <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
                       <label className="font-bold text-[var(--khata-text-muted)]">
                         Invoice Date <span className="text-rose-500">*</span>
                       </label>
@@ -898,7 +898,7 @@ export const GstBillingView: React.FC = () => {
                   </div>
 
                   <div>
-                    <div className="flex items-center justify-between mb-1">
+                    <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
                       <label className="font-bold text-[var(--khata-text-muted)]">
                         Date of Supply
                       </label>
@@ -926,7 +926,7 @@ export const GstBillingView: React.FC = () => {
                 className="p-5 rounded-2xl border border-[var(--khata-border)] space-y-4"
                 style={{ background: 'var(--khata-surface)' }}
               >
-                <div className="flex items-center justify-between pb-2 border-b border-[var(--khata-border)]">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--khata-border)]">
                   <h3 className="text-sm font-bold uppercase tracking-wider text-[var(--khata-text-muted)] flex items-center gap-2">
                     <User className="w-4 h-4 text-[var(--khata-accent)]" />
                     <span>B. Customer / Receiver Details (Bill To Party)</span>
@@ -961,12 +961,12 @@ export const GstBillingView: React.FC = () => {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
                   <div className="sm:col-span-2">
-                    <div className="flex items-center justify-between mb-1">
+                    <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
                       <label className="block font-bold text-[var(--khata-text-muted)]">
                         Customer / Firm Name <span className="text-rose-500">*</span>
                       </label>
                       {customerId && (
-                        <div className="flex items-center gap-1.5 text-[10px]">
+                        <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
                           <span className="text-emerald-600 font-bold">✓ Linked Customer</span>
                           <button
                             type="button"
@@ -1084,12 +1084,12 @@ export const GstBillingView: React.FC = () => {
                 className="p-5 rounded-2xl border border-[var(--khata-border)] space-y-4"
                 style={{ background: 'var(--khata-surface)' }}
               >
-                <div className="flex items-center justify-between pb-2 border-b border-[var(--khata-border)]">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--khata-border)]">
                   <h3 className="text-sm font-bold uppercase tracking-wider text-[var(--khata-text-muted)] flex items-center gap-2">
                     <Package className="w-4 h-4 text-[var(--khata-accent)]" />
                     <span>C. Product Selection &amp; Line Items</span>
                   </h3>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[11px] font-bold text-[var(--khata-text-muted)]">
                       {items.length}/{MAX_BILL_LINE_ITEMS} items
                     </span>
@@ -1138,7 +1138,7 @@ export const GstBillingView: React.FC = () => {
                       key={item.id}
                       className="p-4 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-3 text-xs"
                     >
-                      <div className="flex items-center justify-between pb-1 border-b border-[var(--khata-border)]/50">
+                      <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-[var(--khata-border)]/50">
                         <span className="font-bold text-[var(--khata-text)] text-xs flex items-center gap-2">
                           <span className="w-5 h-5 rounded-full bg-[var(--khata-accent)] text-white flex items-center justify-center text-[10px] font-bold">
                             {idx + 1}
@@ -1161,16 +1161,16 @@ export const GstBillingView: React.FC = () => {
 
                       {/* Description of Goods with Integrated Catalogue Autocomplete */}
                       <div className="space-y-1">
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
                           <label className="text-[11px] font-bold text-[var(--khata-text-muted)] flex items-center gap-1">
                             <Package className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
                             <span>Description of Goods</span>
                             <span className="text-rose-500">*</span>
                           </label>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             {item.productId ? (
-                              <div className="flex items-center gap-1.5 text-[10px]">
+                              <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
                                 <span className="text-[var(--khata-accent)] font-semibold truncate max-w-[200px]">
                                   ✓ Linked: {availableProducts.find((p) => Number(p.id) === Number(item.productId))?.name || item.description || 'Catalogue Product'}
                                 </span>
@@ -1188,7 +1188,7 @@ export const GstBillingView: React.FC = () => {
                                 </button>
                               </div>
                             ) : (
-                              <div className="flex items-center gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -1385,7 +1385,7 @@ export const GstBillingView: React.FC = () => {
 
                 {/* Financial Summary Card */}
                 <div className="p-3.5 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] space-y-2 text-xs">
-                  <div className="flex items-center justify-between text-[var(--khata-text-muted)]">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[var(--khata-text-muted)]">
                     <span>T. Amt. Before Tax:</span>
                     <span className="font-mono font-bold text-[var(--khata-text)]">
                       ₹{calculations.taxableAmount}
@@ -1398,13 +1398,13 @@ export const GstBillingView: React.FC = () => {
                     </div>
                   ) : isIntraState ? (
                     <>
-                      <div className="flex items-center justify-between text-[var(--khata-text-muted)]">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[var(--khata-text-muted)]">
                         <span>CGST @ {calculations.cgstRate}%:</span>
                         <span className="font-mono font-bold text-[var(--khata-text)]">
                           ₹{calculations.cgstAmount}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between text-[var(--khata-text-muted)]">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[var(--khata-text-muted)]">
                         <span>SGST @ {calculations.sgstRate}%:</span>
                         <span className="font-mono font-bold text-[var(--khata-text)]">
                           ₹{calculations.sgstAmount}
@@ -1412,7 +1412,7 @@ export const GstBillingView: React.FC = () => {
                       </div>
                     </>
                   ) : (
-                    <div className="flex items-center justify-between text-[var(--khata-text-muted)]">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[var(--khata-text-muted)]">
                       <span>IGST @ {calculations.igstRate}%:</span>
                       <span className="font-mono font-bold text-[var(--khata-text)]">
                         ₹{calculations.igstAmount}
@@ -1420,14 +1420,14 @@ export const GstBillingView: React.FC = () => {
                     </div>
                   )}
 
-                  <div className="flex items-center justify-between text-[var(--khata-text-muted)]">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[var(--khata-text-muted)]">
                     <span>Total Tax Amount GST:</span>
                     <span className="font-mono font-bold text-[var(--khata-text)]">
                       ₹{calculations.taxAmount}
                     </span>
                   </div>
 
-                  <div className="pt-2 border-t border-[var(--khata-border)] flex items-center justify-between text-sm font-extrabold text-[var(--khata-accent)]">
+                  <div className="pt-2 border-t border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-2 text-sm font-extrabold text-[var(--khata-accent)]">
                     <span>Grand Total:</span>
                     <span className="font-mono text-base">₹{calculations.grandTotal}</span>
                   </div>
@@ -1602,7 +1602,7 @@ export const GstBillingView: React.FC = () => {
                           </div>
                         </td>
                         <td className="py-3 px-4 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
+                          <div className="flex flex-wrap items-center justify-end gap-1.5">
                             <button
                               type="button"
                               onClick={() => openRecordPdfPreview(inv, false)}
@@ -1660,8 +1660,8 @@ export const GstBillingView: React.FC = () => {
                     key={inv.id}
                     className="p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)] space-y-2.5 text-xs"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono font-bold text-sm text-[var(--khata-accent)]">
                           #{inv.invoice_number}
                         </span>
@@ -1693,7 +1693,7 @@ export const GstBillingView: React.FC = () => {
                       )}
                     </div>
 
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <div className="text-[10px] text-[var(--khata-text-muted)]">Grand Total (incl. GST)</div>
                         <div className="font-mono font-extrabold text-base text-[var(--khata-accent)]">
@@ -1771,11 +1771,11 @@ export const GstBillingView: React.FC = () => {
 
           {/* Pagination */}
           {historyTotal > 15 && (
-            <div className="flex items-center justify-between text-xs pt-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs pt-2">
               <span className="text-[var(--khata-text-muted)]">
                 Showing {historyPage * 15 + 1} - {Math.min((historyPage + 1) * 15, historyTotal)} of {historyTotal}
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   disabled={historyPage === 0}

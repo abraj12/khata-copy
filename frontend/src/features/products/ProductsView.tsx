@@ -495,7 +495,7 @@ export const ProductsView: React.FC = () => {
         <div
           role="status"
           aria-live="polite"
-          className={`flex items-center justify-between p-4 rounded-xl text-xs sm:text-sm font-semibold border ${
+          className={`flex flex-wrap items-center justify-between gap-2 p-4 rounded-xl text-xs sm:text-sm font-semibold border ${
             notification.type === 'success'
               ? 'bg-emerald-500/10 border-emerald-500/30 text-[var(--khata-success)]'
               : notification.type === 'info'
@@ -503,7 +503,7 @@ export const ProductsView: React.FC = () => {
               : 'bg-red-500/10 border-red-500/30 text-[var(--khata-danger)]'
           }`}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             {notification.type === 'success' ? (
               <CheckCircle className="w-4 h-4 text-[var(--khata-success)] flex-shrink-0" />
             ) : notification.type === 'info' ? (
@@ -554,7 +554,7 @@ export const ProductsView: React.FC = () => {
           onSubmit={handleAddProduct}
           className="neu-card p-4 sm:p-6 space-y-4 rounded-2xl"
         >
-          <div className="flex items-center justify-between pb-3 border-b border-[var(--khata-border)]">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[var(--khata-border)]">
             <h3 className="text-sm font-bold text-[var(--khata-text)] uppercase tracking-wider">
               Add New Reference Product
             </h3>
@@ -614,14 +614,14 @@ export const ProductsView: React.FC = () => {
               <label className="block text-xs font-bold text-[var(--khata-text-muted)] uppercase mb-1">
                 Barcode <span className="text-neutral-400 font-normal">(Optional)</span>
               </label>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <input
                   type="text"
                   value={newBarcode}
                   onChange={(e) => setNewBarcode(e.target.value)}
                   placeholder="e.g. 8901234567890"
                   maxLength={64}
-                  className="neu-input flex-1 text-sm font-medium font-mono"
+                  className="neu-input flex-1 min-w-0 text-sm font-medium font-mono"
                 />
                 <button
                   type="button"
@@ -659,7 +659,7 @@ export const ProductsView: React.FC = () => {
             />
 
             {!createImageFile ? (
-              <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center gap-2.5">
                 <button
                   type="button"
                   onClick={() => createCameraRef.current?.click()}
@@ -681,7 +681,7 @@ export const ProductsView: React.FC = () => {
                 </span>
               </div>
             ) : (
-              <div className="flex items-center gap-3 p-2.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/40 max-w-md">
+              <div className="flex flex-wrap items-center gap-3 p-2.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/40 max-w-md">
                 {createImagePreview && (
                   <img
                     src={createImagePreview}
@@ -708,7 +708,7 @@ export const ProductsView: React.FC = () => {
             )}
           </div>
 
-          <div className="flex justify-end gap-3 pt-2">
+          <div className="flex flex-wrap justify-end gap-3 pt-2">
             <button
               type="button"
               onClick={() => {
@@ -769,7 +769,7 @@ export const ProductsView: React.FC = () => {
                   key={item.id}
                   className="p-4 space-y-3 hover:bg-[var(--khata-surface-inset)]/30 transition"
                 >
-                  <div className="flex items-start gap-3">
+                  <div className="flex flex-wrap items-start gap-3">
                     {/* Thumbnail */}
                     {item.image_url ? (
                       <div
@@ -948,7 +948,7 @@ export const ProductsView: React.FC = () => {
                       </td>
 
                       <td className="py-3.5 px-4 sm:px-6 text-center">
-                        <div className="flex items-center justify-center gap-2">
+                        <div className="flex flex-wrap items-center justify-center gap-2">
                           <button
                             onClick={() => handleStartEdit(item)}
                             className="p-1.5 rounded-lg text-[var(--khata-text-muted)] hover:text-[var(--khata-accent)] hover:bg-[var(--khata-surface-inset)] transition"
@@ -1012,7 +1012,7 @@ export const ProductsView: React.FC = () => {
             className="neu-card max-w-md w-full p-6 space-y-4 rounded-2xl"
             style={{ background: 'var(--khata-surface)' }}
           >
-            <div className="flex items-center justify-between pb-2 border-b border-[var(--khata-border)]">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--khata-border)]">
               <h3 id="edit-product-title" className="text-base font-bold text-[var(--khata-text)]">
                 Edit Reference Product
               </h3>
@@ -1081,14 +1081,14 @@ export const ProductsView: React.FC = () => {
                 <label className="block text-xs font-bold text-[var(--khata-text-muted)] uppercase mb-1">
                   Barcode <span className="text-neutral-400 font-normal">(Optional)</span>
                 </label>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <input
                     type="text"
                     value={editBarcode}
                     onChange={(e) => setEditBarcode(e.target.value)}
                     placeholder="e.g. 8901234567890"
                     maxLength={64}
-                    className="neu-input flex-1 text-sm font-medium font-mono"
+                    className="neu-input flex-1 min-w-0 text-sm font-medium font-mono"
                   />
                   <button
                     type="button"
@@ -1142,7 +1142,7 @@ export const ProductsView: React.FC = () => {
 
                 {/* Current or newly chosen preview */}
                 {editImagePreview ? (
-                  <div className="flex items-center gap-3 p-2.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/40">
+                  <div className="flex flex-wrap items-center gap-3 p-2.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/40">
                     <img
                       src={editImagePreview}
                       alt="New preview"
@@ -1165,7 +1165,7 @@ export const ProductsView: React.FC = () => {
                     </button>
                   </div>
                 ) : editingProduct.image_url ? (
-                  <div className="flex items-center gap-3 p-2.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/40">
+                  <div className="flex flex-wrap items-center gap-3 p-2.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/40">
                     <img
                       src={resolveImageUrl(editingProduct.image_url)}
                       alt={editingProduct.name}
@@ -1191,7 +1191,7 @@ export const ProductsView: React.FC = () => {
                       <p className="text-xs font-semibold text-[var(--khata-text)]">
                         Current Image Attached
                       </p>
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
                         <button
                           type="button"
                           onClick={() => editCameraRef.current?.click()}
@@ -1223,7 +1223,7 @@ export const ProductsView: React.FC = () => {
                     </button>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-2.5">
+                  <div className="flex flex-wrap items-center gap-2.5">
                     <button
                       type="button"
                       onClick={() => editCameraRef.current?.click()}
@@ -1247,7 +1247,7 @@ export const ProductsView: React.FC = () => {
                 )}
               </div>
 
-              <div className="flex justify-end gap-3 pt-2">
+              <div className="flex flex-wrap justify-end gap-3 pt-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -1339,7 +1339,7 @@ export const ProductsView: React.FC = () => {
             className="neu-card max-w-md w-full p-6 space-y-4 rounded-2xl"
             style={{ background: 'var(--khata-surface)' }}
           >
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-[var(--khata-danger)]">
                 <AlertTriangle className="w-5 h-5" />
               </div>
@@ -1363,7 +1363,7 @@ export const ProductsView: React.FC = () => {
               </div>
             )}
 
-            <div className="flex justify-end gap-3 pt-2">
+            <div className="flex flex-wrap justify-end gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => setArchivingProduct(null)}

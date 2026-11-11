@@ -241,7 +241,7 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
             {categoryTotals.map((cat) => (
               <div
                 key={cat.category}
-                className="px-3 py-1.5 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] text-xs flex items-center gap-2"
+                className="px-3 py-1.5 rounded-xl bg-[var(--khata-surface-inset)] border border-[var(--khata-border)] text-xs flex flex-wrap items-center gap-2"
               >
                 <span className="font-semibold text-[var(--khata-text-muted)]">
                   {formatExpenseCategoryLabel(cat.category)} ({cat.count})
@@ -296,9 +296,9 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
         {error && (
           <div
             role="alert"
-            className="p-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-xs text-rose-600 dark:text-rose-400 flex items-center justify-between gap-2"
+            className="p-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-xs text-rose-600 dark:text-rose-400 flex flex-wrap items-center justify-between gap-2"
           >
-            <div className="flex items-center gap-2 font-semibold">
+            <div className="flex flex-wrap items-center gap-2 font-semibold min-w-0">
               <AlertCircle className="w-4 h-4 flex-shrink-0" />
               <span>{error}</span>
             </div>
@@ -368,7 +368,7 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span
                         className={`font-mono text-sm font-black ${
                           isVoided ? 'line-through text-[var(--khata-text-muted)]' : 'text-[var(--khata-text)]'
@@ -429,7 +429,7 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
                   Page <span className="font-mono font-bold text-[var(--khata-text)]">{currentPage}</span> /{' '}
                   <span className="font-mono font-bold text-[var(--khata-text)]">{totalPages}</span>
                 </span>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     disabled={offset === 0 || loading}
@@ -477,7 +477,7 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
             className="neu-card w-full max-w-md p-5 sm:p-6 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 id="void-expense-title" className="text-base font-extrabold text-[var(--khata-text)]">
                 Void Operating Expense
               </h3>
@@ -519,7 +519,7 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
                 />
               </label>
 
-              <div className="flex items-center justify-end gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
                 <button
                   type="button"
                   disabled={voiding}
@@ -553,7 +553,7 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
             className="neu-card w-full max-w-lg max-h-[85vh] overflow-y-auto p-5 sm:p-6 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <h3
                   id="expense-history-title"
@@ -583,7 +583,7 @@ export const DashboardExpenses: React.FC<DashboardExpensesProps> = ({
             ) : historyError ? (
               <div
                 role="alert"
-                className="p-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-xs text-rose-600 dark:text-rose-400 font-semibold flex items-center justify-between gap-2"
+                className="p-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-xs text-rose-600 dark:text-rose-400 font-semibold flex flex-wrap items-center justify-between gap-2"
               >
                 <span>{historyError}</span>
                 <button

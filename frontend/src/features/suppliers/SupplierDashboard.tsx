@@ -225,7 +225,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
         </div>
 
         {error && (
-          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 text-xs text-rose-700 dark:text-rose-300 flex items-center gap-2">
+          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/25 text-xs text-rose-700 dark:text-rose-300 flex flex-wrap items-center gap-2">
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
             <span>{error}</span>
           </div>
@@ -237,7 +237,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="neu-card p-4 rounded-2xl space-y-1">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-1">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--khata-text-muted)]">
                   Total Purchases
                 </span>
@@ -252,7 +252,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
             </div>
 
             <div className="neu-card p-4 rounded-2xl space-y-1">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-1">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--khata-text-muted)]">
                   Active Payments Made
                 </span>
@@ -267,7 +267,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
             </div>
 
             <div className="neu-card p-4 rounded-2xl space-y-1">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-1">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--khata-text-muted)]">
                   Total Outstanding Payable
                 </span>
@@ -282,7 +282,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
             </div>
 
             <div className="neu-card p-4 rounded-2xl space-y-1">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-1">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--khata-text-muted)]">
                   Advance Credit
                 </span>
@@ -297,7 +297,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
             </div>
 
             <div className="neu-card p-4 rounded-2xl space-y-1">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-1">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--khata-text-muted)]">
                   Unallocated Advances
                 </span>
@@ -312,7 +312,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
             </div>
 
             <div className="neu-card p-4 rounded-2xl space-y-1">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-1">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--khata-text-muted)]">
                   Reversed Payments
                 </span>
@@ -469,7 +469,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
                         onClick={() => void handleOpenPaymentDetail(p)}
                         className="w-full text-left p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/25 space-y-1.5 text-xs"
                       >
-                        <div className="flex items-start justify-between gap-2">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
                           <div>
                             <div className="font-mono font-bold text-[var(--khata-accent)]">
                               {p.receiptNumber}
@@ -511,7 +511,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
       {selectedPayment && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto print:hidden">
           <div className="neu-card w-full max-w-lg rounded-2xl p-5 space-y-4">
-            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-3">
               <div>
                 <h3 className="text-base font-extrabold text-[var(--khata-text)]">
                   Payment Details — {selectedPayment.receiptNumber}
@@ -583,7 +583,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
                   {selectedPayment.allocations.map((a) => (
                     <div
                       key={a.allocationId}
-                      className="p-2.5 rounded-xl bg-[var(--khata-surface-inset)]/30 border border-[var(--khata-border)]/50 flex items-center justify-between text-xs"
+                      className="p-2.5 rounded-xl bg-[var(--khata-surface-inset)]/30 border border-[var(--khata-border)]/50 flex flex-wrap items-center justify-between gap-2 text-xs"
                     >
                       <div>
                         <div className="font-mono font-bold">{a.invoiceNumber}</div>
@@ -600,7 +600,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
               )}
             </div>
 
-            <div className="flex justify-end gap-2 pt-2 border-t border-[var(--khata-border)]">
+            <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-[var(--khata-border)]">
               {onOpenAllPayments && (
                 <button
                   type="button"

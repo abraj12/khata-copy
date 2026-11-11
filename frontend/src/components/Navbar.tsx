@@ -69,8 +69,8 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
     >
       {/* Logout error banner with retry option */}
       {logoutError && (
-        <div className="bg-rose-500/10 border-b border-rose-500/20 px-4 py-2 flex items-center justify-between text-xs text-rose-500">
-          <div className="flex items-center gap-1.5 font-medium">
+        <div className="bg-rose-500/10 border-b border-rose-500/20 px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs text-rose-500">
+          <div className="flex flex-wrap items-center gap-1.5 font-medium min-w-0">
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
             <span>{logoutError}</span>
           </div>
@@ -88,7 +88,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex flex-wrap items-center justify-between min-h-[64px] sm:h-16 py-2 sm:py-0 gap-y-2">
           {/* Brand Identity / Store Badge */}
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5 min-w-0">
             <div
               className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-inner border border-[var(--khata-border)]"
               style={{ background: 'var(--khata-surface-inset)' }}

@@ -753,13 +753,13 @@ export const KhataLedgerView: React.FC = () => {
         <div
           role="status"
           aria-live="polite"
-          className={`flex items-center justify-between p-4 rounded-xl text-xs sm:text-sm font-semibold border ${
+          className={`flex flex-wrap items-center justify-between gap-2 p-4 rounded-xl text-xs sm:text-sm font-semibold border ${
             notification.type === 'success'
               ? 'bg-emerald-500/10 border-emerald-500/30 text-[var(--khata-success)]'
               : 'bg-red-500/10 border-red-500/30 text-[var(--khata-danger)]'
           }`}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             {notification.type === 'success' ? (
               <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
             ) : (
@@ -781,7 +781,7 @@ export const KhataLedgerView: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {/* Total Outstanding */}
         <div className="neu-card p-5">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
               Total Amount to Receive
             </span>
@@ -797,7 +797,7 @@ export const KhataLedgerView: React.FC = () => {
 
         {/* Total Received */}
         <div className="neu-card p-5">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
               Payments Collected
             </span>
@@ -813,7 +813,7 @@ export const KhataLedgerView: React.FC = () => {
 
         {/* Total Customers */}
         <div className="neu-card p-5">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
               Total Udhar Customers
             </span>
@@ -1058,7 +1058,7 @@ export const KhataLedgerView: React.FC = () => {
             className="neu-card max-w-2xl w-full p-4 sm:p-6 my-4 sm:my-8 max-h-[90vh] flex flex-col space-y-4"
             style={{ background: 'var(--khata-surface)' }}
           >
-            <div className="flex items-start justify-between pb-3 border-b border-[var(--khata-border)] flex-shrink-0">
+            <div className="flex flex-wrap items-start justify-between gap-2 pb-3 border-b border-[var(--khata-border)] flex-shrink-0">
               <div className="min-w-0 flex-1 pr-2">
                 <h3 id="new-udhar-title" className="text-base sm:text-lg font-bold text-[var(--khata-text)]">
                   Record New Udhar Transaction
@@ -1089,7 +1089,7 @@ export const KhataLedgerView: React.FC = () => {
                 className="p-4 rounded-xl border border-[var(--khata-border)] space-y-3"
                 style={{ background: 'var(--khata-surface-raised)' }}
               >
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider block">
                     Customer Identification
                   </span>
@@ -1140,7 +1140,7 @@ export const KhataLedgerView: React.FC = () => {
 
                   {selectedExistingCustomer ? (
                     <div
-                      className="p-3 rounded-xl border border-[var(--khata-accent)]/30 flex items-center justify-between"
+                      className="p-3 rounded-xl border border-[var(--khata-accent)]/30 flex flex-wrap items-center justify-between gap-2"
                       style={{ background: 'var(--khata-surface-inset)' }}
                     >
                       <div>
@@ -1224,7 +1224,7 @@ export const KhataLedgerView: React.FC = () => {
 
               {/* Multi-line Products */}
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-bold text-[var(--khata-text-muted)] uppercase tracking-wider">
                     Purchased Item Lines
                   </span>
@@ -1262,8 +1262,8 @@ export const KhataLedgerView: React.FC = () => {
                           getOptionKey={(p) => p.id}
                           getOptionLabel={(p) => `${p.name}${p.hsn_code ? ` [HSN: ${p.hsn_code}]` : ''} (Ref: ${formatCurrency(p.buying_price)})`}
                           renderOption={(p) => (
-                            <div className="flex items-center justify-between gap-2 w-full">
-                              <div className="flex items-center gap-2 min-w-0">
+                            <div className="flex flex-wrap items-center justify-between gap-2 w-full">
+                              <div className="flex flex-wrap items-center gap-2 min-w-0">
                                 {p.image_url ? (
                                   <img
                                     src={resolveImageUrl(p.image_url)}
@@ -1287,7 +1287,7 @@ export const KhataLedgerView: React.FC = () => {
                           required
                         />
                         {line.selectedProduct && (
-                          <div className="text-[11px] text-[var(--khata-text-muted)] mt-1.5 flex items-center gap-2">
+                          <div className="text-[11px] text-[var(--khata-text-muted)] mt-1.5 flex flex-wrap items-center gap-2">
                             {line.selectedProduct.image_url && (
                               <img
                                 src={resolveImageUrl(line.selectedProduct.image_url)}
@@ -1340,7 +1340,7 @@ export const KhataLedgerView: React.FC = () => {
                       </div>
 
                       {/* Line Total & Remove */}
-                      <div className="col-span-12 sm:col-span-2 flex items-center justify-between sm:justify-end gap-2 pt-2 sm:pt-6 border-t sm:border-t-0 border-[var(--khata-border)]/50">
+                      <div className="col-span-12 sm:col-span-2 flex flex-wrap items-center justify-between sm:justify-end gap-2 pt-2 sm:pt-6 border-t sm:border-t-0 border-[var(--khata-border)]/50">
                         <div className="sm:hidden text-xs text-[var(--khata-text-muted)] font-medium">Line Total:</div>
                         <span className="text-xs font-bold text-[var(--khata-text)] tabular-numbers">
                           {formatCurrency(lineCalculations[idx])}
@@ -1411,7 +1411,7 @@ export const KhataLedgerView: React.FC = () => {
                     Accurate Decimal arithmetic matching backend validation.
                   </span>
                 </div>
-                <div className="flex items-center gap-6 text-right">
+                <div className="flex flex-wrap items-center gap-4 sm:gap-6 text-right">
                   <div>
                     <span className="text-[11px] text-[var(--khata-text-muted)] uppercase block font-semibold">
                       Total
@@ -1474,7 +1474,7 @@ export const KhataLedgerView: React.FC = () => {
             ) : (
               <>
                 {/* Responsive Customer Header: Name + status on left, close button on top-right */}
-                <div className="flex items-start justify-between gap-3 pb-3 border-b border-[var(--khata-border)] flex-shrink-0">
+                <div className="flex flex-wrap items-start justify-between gap-3 pb-3 border-b border-[var(--khata-border)] flex-shrink-0">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 id="customer-detail-title" className="text-lg sm:text-xl font-bold text-[var(--khata-text)] truncate">
@@ -1567,7 +1567,7 @@ export const KhataLedgerView: React.FC = () => {
                     className="p-4 rounded-xl border border-[var(--khata-border)] space-y-3"
                     style={{ background: 'var(--khata-surface-raised)' }}
                   >
-                    <div className="flex items-center gap-2 text-[var(--khata-text)] font-bold text-sm">
+                    <div className="flex flex-wrap items-center gap-2 text-[var(--khata-text)] font-bold text-sm">
                       <DollarSign className="w-4 h-4 text-[var(--khata-success)]" />
                       <span>Record Payment Received</span>
                     </div>
@@ -1662,7 +1662,7 @@ export const KhataLedgerView: React.FC = () => {
                                   }
                                 }}
                               >
-                                <div className="flex items-center gap-2.5">
+                                <div className="flex flex-wrap items-center gap-2.5 min-w-0">
                                   {isExpanded ? (
                                     <ChevronUp className="w-4 h-4 text-[var(--khata-text-muted)] flex-shrink-0" />
                                   ) : (
@@ -1680,7 +1680,7 @@ export const KhataLedgerView: React.FC = () => {
                                   </div>
                                 </div>
 
-                                <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4 text-right pt-1 sm:pt-0 border-t sm:border-t-0 border-[var(--khata-border)]/40">
+                                <div className="flex flex-wrap items-center justify-between sm:justify-end gap-3 sm:gap-4 text-right pt-1 sm:pt-0 border-t sm:border-t-0 border-[var(--khata-border)]/40">
                                   <div>
                                     <span className="text-[10px] text-[var(--khata-text-muted)] uppercase font-semibold block sm:inline mr-1">
                                       Total:
@@ -1778,7 +1778,7 @@ export const KhataLedgerView: React.FC = () => {
                               className="p-3 rounded-xl border border-[var(--khata-border)] space-y-1.5"
                               style={{ background: 'var(--khata-surface-raised)' }}
                             >
-                              <div className="flex items-center justify-between">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
                                 <div>
                                   <span className="text-xs font-bold text-[var(--khata-text)]">
                                     Payment #{p.id} • {payDate}
@@ -1802,7 +1802,7 @@ export const KhataLedgerView: React.FC = () => {
                                     const allocTxId = alloc.transactionId || alloc.udhar_transaction_id;
                                     const allocAmt = alloc.amount || alloc.allocated_amount;
                                     return (
-                                      <div key={alloc.id || aIdx} className="flex justify-between pl-2">
+                                      <div key={alloc.id || aIdx} className="flex flex-wrap justify-between gap-1 pl-2">
                                         <span>Allocated to Tx #{allocTxId}</span>
                                         <span className="tabular-numbers text-[var(--khata-success)] font-semibold">
                                           {formatCurrency(allocAmt)}
@@ -1821,7 +1821,7 @@ export const KhataLedgerView: React.FC = () => {
                 </div>
 
                 {/* Fixed Modal Footer */}
-                <div className="flex justify-end pt-3 border-t border-[var(--khata-border)] flex-shrink-0">
+                <div className="flex flex-wrap justify-end pt-3 border-t border-[var(--khata-border)] flex-shrink-0">
                   <button
                     type="button"
                     onClick={() => setActiveCustomerDetailId(null)}

@@ -545,12 +545,12 @@ export const PdfDocumentPreviewModal: React.FC<PdfDocumentPreviewModalProps> = (
     >
       {/* Top Toolbar */}
       <div className="bg-[var(--khata-surface)] border-b border-[var(--khata-border)] px-3 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-2 shadow-md">
-        <div className="flex items-center gap-2.5 min-w-0">
+        <div className="flex flex-wrap items-center gap-2.5 min-w-0">
           <div className="w-8 h-8 rounded-lg bg-[var(--khata-surface-inset)] flex items-center justify-center shrink-0">
             <FileText className="w-4 h-4 text-[var(--khata-accent)]" />
           </div>
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-sm sm:text-base font-extrabold text-[var(--khata-text)] truncate">
                 {title}
               </h3>
@@ -566,7 +566,7 @@ export const PdfDocumentPreviewModal: React.FC<PdfDocumentPreviewModalProps> = (
         {/* Zoom + Page + Action Controls */}
         <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
           {numPages > 1 && (
-            <div className="flex items-center gap-1 bg-[var(--khata-surface-inset)] rounded-lg p-1 border border-[var(--khata-border)]">
+            <div className="flex flex-wrap items-center gap-1 bg-[var(--khata-surface-inset)] rounded-lg p-1 border border-[var(--khata-border)]">
               <button
                 type="button"
                 disabled={currentPage <= 1}
@@ -594,7 +594,7 @@ export const PdfDocumentPreviewModal: React.FC<PdfDocumentPreviewModalProps> = (
           )}
 
           {numPages > 0 && (
-            <div className="flex items-center gap-1 bg-[var(--khata-surface-inset)] rounded-lg p-1 border border-[var(--khata-border)]">
+            <div className="flex flex-wrap items-center gap-1 bg-[var(--khata-surface-inset)] rounded-lg p-1 border border-[var(--khata-border)]">
               <button
                 type="button"
                 onClick={() => setZoom((z) => Math.max(0.6, Number((z - 0.15).toFixed(2))))}
@@ -676,7 +676,7 @@ export const PdfDocumentPreviewModal: React.FC<PdfDocumentPreviewModalProps> = (
       </div>
 
       {printNotice && (
-        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-xs text-amber-800 flex items-center justify-between gap-2">
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-xs text-amber-800 flex flex-wrap items-center justify-between gap-2">
           <span>{printNotice}</span>
           <button
             type="button"
@@ -706,7 +706,7 @@ export const PdfDocumentPreviewModal: React.FC<PdfDocumentPreviewModalProps> = (
             <AlertCircle className="w-8 h-8 text-rose-500 mx-auto" />
             <h4 className="text-sm font-bold text-[var(--khata-text)]">Unable to render preview</h4>
             <p className="text-xs text-[var(--khata-text-muted)]">{error}</p>
-            <div className="flex items-center justify-center gap-2 pt-2">
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setRetrySeq((s) => s + 1)}

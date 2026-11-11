@@ -106,8 +106,8 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
         style={{ background: 'var(--khata-surface)' }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-[var(--khata-border)]">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[var(--khata-border)]">
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
             <div className="p-2 rounded-lg bg-[var(--khata-surface-raised)] border border-[var(--khata-border)] text-[var(--khata-accent)]">
               <Palette className="w-5 h-5" />
             </div>
@@ -135,7 +135,7 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
 
         {/* Section A: Nine Neumorphic Presets */}
         <div className="mt-6">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <label className="text-sm font-semibold flex items-center gap-2 text-[var(--khata-text)]">
               <Palette className="w-4 h-4 text-[var(--khata-accent)]" />
               Neumorphic Style Presets (9 Styles)
@@ -165,7 +165,7 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
                   }`}
                   style={{ background: 'var(--khata-surface-raised)' }}
                 >
-                  <div className="flex items-center justify-between w-full mb-2">
+                  <div className="flex flex-wrap items-center justify-between gap-1.5 w-full mb-2">
                     <span className="font-semibold text-xs text-[var(--khata-text)]">
                       {p.name}
                     </span>
@@ -322,7 +322,7 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
         </div>
 
         {/* Footer actions: Reset & Close */}
-        <div className="mt-6 pt-4 border-t border-[var(--khata-border)] flex items-center justify-between">
+        <div className="mt-6 pt-4 border-t border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-3">
           <button
             onClick={resetToDefaults}
             className="neu-btn-secondary text-xs px-3 py-2 flex items-center gap-1.5"

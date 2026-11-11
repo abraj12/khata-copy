@@ -63,7 +63,7 @@ export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ childr
         <aside
           role="status"
           aria-live="polite"
-          className="mhi-no-print bg-amber-500/10 border-b border-amber-500/30 px-4 py-2 text-xs font-medium text-amber-700 dark:text-amber-300 flex items-center justify-between gap-2"
+          className="mhi-no-print bg-amber-500/10 border-b border-amber-500/30 px-4 py-2 text-xs font-medium text-amber-700 dark:text-amber-300 flex flex-wrap items-center justify-between gap-2"
         >
           <span>Khata is temporarily reconnecting. You can continue reviewing existing data.</span>
           <button

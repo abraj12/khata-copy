@@ -142,7 +142,7 @@ export const DashboardExpenseForm: React.FC<DashboardExpenseFormProps> = ({
         className="neu-card w-full max-w-lg max-h-[90vh] overflow-y-auto p-5 sm:p-6 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 id="expense-form-title" className="text-lg font-extrabold text-[var(--khata-text)]">
               {editingExpense ? 'Edit Operating Expense' : 'Record Operating Expense'}
@@ -165,7 +165,7 @@ export const DashboardExpenseForm: React.FC<DashboardExpenseFormProps> = ({
         {error && (
           <div
             role="alert"
-            className="p-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-xs text-rose-600 dark:text-rose-400 flex items-center gap-2 font-semibold"
+            className="p-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-xs text-rose-600 dark:text-rose-400 flex flex-wrap items-center gap-2 font-semibold"
           >
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
             <span>{error}</span>
@@ -296,7 +296,7 @@ export const DashboardExpenseForm: React.FC<DashboardExpenseFormProps> = ({
             </label>
           )}
 
-          <div className="flex items-center justify-end gap-2 pt-2">
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
             <button
               type="button"
               disabled={submitting}

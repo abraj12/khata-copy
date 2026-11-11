@@ -573,13 +573,13 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
       <div className={receiptPayment ? 'print:hidden space-y-4' : 'space-y-4'}>
         {notice && (
           <div
-            className={`p-3 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 ${
+            className={`p-3 rounded-xl text-xs font-semibold flex flex-wrap items-center justify-between gap-2 ${
               notice.type === 'success'
                 ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
                 : 'bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300'
             }`}
           >
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
               {notice.type === 'success' ? (
                 <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
               ) : (
@@ -847,7 +847,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                       isReversed ? 'bg-rose-500/5 opacity-85' : 'bg-[var(--khata-surface-inset)]/25'
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
                       <div>
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span className="font-mono font-bold text-sm text-[var(--khata-text)]">
@@ -932,8 +932,8 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
       {createOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm overflow-y-auto print:hidden">
           <div className="neu-card w-full max-w-3xl rounded-2xl p-4 sm:p-6 my-4 space-y-4 max-h-[92vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-3">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-3">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
                 <CreditCard className="w-5 h-5 text-emerald-600" />
                 <h3 className="text-base font-extrabold text-[var(--khata-text)]">
                   Record Supplier Payment
@@ -1146,7 +1146,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                               </div>
                             </div>
 
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2 min-w-0">
                               <input
                                 type="text"
                                 inputMode="decimal"
@@ -1213,7 +1213,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
       {advancePayment && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto print:hidden">
           <div className="neu-card w-full max-w-2xl rounded-2xl p-5 space-y-4">
-            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-3">
               <div>
                 <h3 className="text-base font-extrabold text-[var(--khata-text)]">
                   Allocate Advance · {advancePayment.receiptNumber}
@@ -1278,7 +1278,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                               {b.invoiceDate} · Due: {formatAbsRupees(b.remainingAmount)}
                             </div>
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2 min-w-0">
                             <input
                               type="text"
                               inputMode="decimal"
@@ -1606,7 +1606,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
       {reverseTargetPayment && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto print:hidden">
           <div className="neu-card w-full max-w-md rounded-2xl p-5 space-y-4">
-            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-3">
               <div>
                 <h3 className="text-base font-extrabold text-[var(--khata-text)] flex items-center gap-1.5">
                   <RotateCcw className="w-4 h-4 text-rose-600" />
@@ -1679,7 +1679,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
       {reverseAllocTarget && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto print:hidden">
           <div className="neu-card w-full max-w-md rounded-2xl p-5 space-y-4">
-            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--khata-border)] pb-3">
               <div>
                 <h3 className="text-base font-extrabold text-[var(--khata-text)] flex items-center gap-1.5">
                   <RotateCcw className="w-4 h-4 text-rose-600" />
@@ -1702,7 +1702,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
             </div>
 
             <div className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/40 text-xs space-y-1">
-              <div className="flex justify-between">
+              <div className="flex flex-wrap justify-between gap-1">
                 <span className="text-[var(--khata-text-muted)]">Currently Allocated:</span>
                 <span className="font-mono font-bold">
                   {formatAbsRupees(reverseAllocTarget.allocation.amount)}
@@ -1724,7 +1724,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                 <label className="block text-[11px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
                   Amount to Reverse (₹) <span className="text-rose-500">*</span>
                 </label>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 min-w-0">
                   <input
                     type="text"
                     inputMode="decimal"

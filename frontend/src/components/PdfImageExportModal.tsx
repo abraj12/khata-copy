@@ -151,7 +151,7 @@ export const PdfImageExportModal: React.FC<PdfImageExportModalProps> = ({
     >
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden">
         <div className="px-4 sm:px-6 py-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 bg-slate-50">
-          <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex flex-wrap items-center gap-2.5 min-w-0">
             <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
               <ImageIcon className="w-4 h-4" />
             </div>
@@ -212,11 +212,11 @@ export const PdfImageExportModal: React.FC<PdfImageExportModalProps> = ({
                   key={page.fileName}
                   className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col"
                 >
-                  <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between gap-2 bg-slate-50">
+                  <div className="px-3 py-2 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2 bg-slate-50">
                     <span className="text-xs font-semibold text-slate-700 truncate">
                       Page {page.pageNumber} of {page.totalPages}
                     </span>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
                       <span className="text-[11px] text-slate-500 font-medium">
                         {formatKb(page.sizeBytes)}
                       </span>
