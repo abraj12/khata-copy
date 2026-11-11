@@ -938,4 +938,121 @@ describe('Suppliers Accounting, Validation, Security & API Test Suite', () => {
     expect(payHttp.status).toBe(200);
     expect(paySpy).toHaveBeenCalledWith(expect.objectContaining({ search: 'UTR-42' }));
   });
+
+  it('27. getSupplierStatement runs sequentially inside a single REPEATABLE READ READ ONLY client transaction and commits/releases', async () => {
+    const executedSql: string[] = [];
+    const poolQuerySpy = vi.spyOn(appPool, 'query');
+    const mockClient = {
+      query: vi.fn().mockImplementation(async (sql: any) => {
+        const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
+        executedSql.push(sqlText);
+        if (sqlText.includes('FROM suppliers s')) {
+          return {
+            rows: [
+              {
+                id: 'sup-stmt-1',
+                name: 'Statement Vendor',
+                contact_person: null,
+                phone: '9876543210',
+                email: null,
+                address: null,
+                state: 'Bihar',
+                state_code: '10',
+                gstin: null,
+                notes: null,
+                archived_at: null,
+                created_at: '2026-04-01T00:00:00Z',
+                updated_at: '2026-04-01T00:00:00Z',
+                total_purchases: '1000.00',
+                total_payments: '400.00',
+                allocated_payments: '400.00',
+                purchase_bill_count: '1',
+                payment_count: '1',
+                last_purchase_date: '2026-04-05',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        if (sqlText.includes('prior_purchases')) {
+          return {
+            rows: [{ prior_purchases: '0', prior_payments: '0', prior_reversals: '0', prior_cancellations: '0' }],
+            rowCount: 1,
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    vi.spyOn(appPool, 'connect').mockResolvedValue(mockClient as any);
+
+    const res = await suppliersService.getSupplierStatement('sup-stmt-1', {
+      fromDate: '2026-04-01',
+      toDate: '2026-04-30',
+    });
+
+    expect(res.supplier.id).toBe('sup-stmt-1');
+    expect(executedSql[0]).toBe('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    expect(executedSql[executedSql.length - 1]).toBe('COMMIT');
+    expect(executedSql.some((q) => q.includes('FROM suppliers s'))).toBe(true);
+    expect(executedSql.some((q) => q.includes('FROM supplier_purchase_bills spb'))).toBe(true);
+    expect(executedSql.some((q) => q.includes('FROM supplier_payments sp'))).toBe(true);
+    expect(executedSql.some((q) => q.includes('FROM supplier_payment_reversals spr'))).toBe(true);
+    expect(executedSql.some((q) => q.includes('FROM supplier_purchase_bill_cancellations spbc'))).toBe(true);
+    expect(poolQuerySpy).not.toHaveBeenCalled();
+    expect(mockClient.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('28. getSupplierStatement rolls back and releases client in finally if a mid-snapshot query fails', async () => {
+    const executedSql: string[] = [];
+    const mockClient = {
+      query: vi.fn().mockImplementation(async (sql: any) => {
+        const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
+        executedSql.push(sqlText);
+        if (sqlText.includes('FROM suppliers s')) {
+          return {
+            rows: [
+              {
+                id: 'sup-stmt-err',
+                name: 'Err Vendor',
+                contact_person: null,
+                phone: null,
+                email: null,
+                address: null,
+                state: null,
+                state_code: null,
+                gstin: null,
+                notes: null,
+                archived_at: null,
+                created_at: '2026-04-01T00:00:00Z',
+                updated_at: '2026-04-01T00:00:00Z',
+                total_purchases: '0.00',
+                total_payments: '0.00',
+                allocated_payments: '0.00',
+                purchase_bill_count: '0',
+                payment_count: '0',
+                last_purchase_date: null,
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        if (sqlText.includes('FROM supplier_payment_reversals spr')) {
+          throw new Error('simulated statement snapshot failure');
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    vi.spyOn(appPool, 'connect').mockResolvedValue(mockClient as any);
+
+    await expect(
+      suppliersService.getSupplierStatement('sup-stmt-err')
+    ).rejects.toThrow('simulated statement snapshot failure');
+
+    expect(executedSql[0]).toBe('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    expect(executedSql).toContain('ROLLBACK');
+    expect(executedSql).not.toContain('COMMIT');
+    expect(mockClient.release).toHaveBeenCalledTimes(1);
+  });
 });

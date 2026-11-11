@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import {
   FileText,
   History,
@@ -35,7 +36,6 @@ import {
   mapNormalBillToInvoiceProps,
 } from './normalBillsApi.js';
 import Decimal from 'decimal.js';
-import { apiClient } from '../../lib/apiClient.js';
 import { fetchQuotationSettings } from '../quotations/quotationApi.js';
 import {
   INDIAN_STATES,
@@ -51,23 +51,20 @@ import {
   validateSellingRateInput,
 } from '../../utils/lineItemDraft.js';
 import { BillingBarcodeControls } from '../barcode/BillingBarcodeControls.js';
+import { MAX_BILL_LINE_ITEMS } from '../../utils/billingLimits.js';
+import {
+  usePaginatedProductSearch,
+  usePaginatedCustomerSearch,
+  ProductCatalogOption,
+  CustomerCatalogOption,
+} from './useBillingCatalogueSearch.js';
+import {
+  CustomerPickerDropdown,
+  ProductPickerPopover,
+} from './BillingCataloguePickers.js';
 
-interface ProductItem {
-  id: number;
-  name: string;
-  hsn_code: string | null;
-  buying_price: string;
-  barcode?: string | null;
-}
-
-interface CustomerItem {
-  id: number;
-  name: string;
-  phone: string;
-  address?: string | null;
-  state?: string | null;
-  state_code?: string | null;
-}
+type ProductItem = ProductCatalogOption;
+type CustomerItem = CustomerCatalogOption;
 
 interface FormLineItem {
   id: string;
@@ -173,14 +170,32 @@ export const NormalBillingView: React.FC = () => {
     }
   }, [previewInvoice, autoPrintAfterPreview]);
 
-  // Existing products & customers lookup
-  const [availableProducts, setAvailableProducts] = useState<ProductItem[]>([]);
-  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
-  const [availableCustomers, setAvailableCustomers] = useState<CustomerItem[]>([]);
-  const [customerSearch, setCustomerSearch] = useState('');
+  // Server-side paginated product & customer search
+  const {
+    items: availableProducts,
+    searchQuery: productPickerSearch,
+    setSearchQuery: setProductPickerSearch,
+    isLoading: isLoadingProducts,
+    isLoadingMore: isLoadingMoreProducts,
+    error: productsError,
+    hasMore: hasMoreProducts,
+    loadMore: loadMoreProducts,
+    prependItem: prependCatalogProduct,
+  } = usePaginatedProductSearch();
+
+  const {
+    items: availableCustomers,
+    searchQuery: customerSearch,
+    setSearchQuery: setCustomerSearch,
+    isLoading: isLoadingCustomers,
+    isLoadingMore: isLoadingMoreCustomers,
+    error: customersError,
+    hasMore: hasMoreCustomers,
+    loadMore: loadMoreCustomers,
+  } = usePaginatedCustomerSearch();
+
   const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
   const [openProductPickerItemId, setOpenProductPickerItemId] = useState<string | null>(null);
-  const [productPickerSearch, setProductPickerSearch] = useState('');
 
   // History list states
   const [historyBills, setHistoryBills] = useState<NormalBillRecord[]>([]);
@@ -189,6 +204,8 @@ export const NormalBillingView: React.FC = () => {
   const [historyDateFrom, setHistoryDateFrom] = useState('');
   const [historyDateTo, setHistoryDateTo] = useState('');
   const [historyPage, setHistoryPage] = useState(0);
+  const debouncedHistorySearch = useDebouncedValue(historySearch, 300);
+  const historyRequestIdRef = useRef(0);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const customerDropdownRef = useRef<HTMLDivElement>(null);
@@ -233,80 +250,7 @@ export const NormalBillingView: React.FC = () => {
     })();
   }, []);
 
-  // 2. Load existing products from catalogue for search/selection
-  const fetchProducts = async () => {
-    try {
-      setIsLoadingProducts(true);
-      const all: ProductItem[] = [];
-      let offset = 0;
-      let hasMore = true;
-
-      while (hasMore && offset < 1000) {
-        const res = await apiClient<{
-          success: boolean;
-          data: ProductItem[];
-          pagination?: { hasMore: boolean; nextOffset: number | null };
-        }>(`/api/v1/products?limit=50&offset=${offset}`);
-
-        const items = res.data?.data || (res.data as any)?.products;
-        if (items && Array.isArray(items)) {
-          all.push(...items);
-          if (res.data.pagination?.hasMore && res.data.pagination?.nextOffset) {
-            offset = res.data.pagination.nextOffset;
-          } else {
-            hasMore = false;
-          }
-        } else {
-          hasMore = false;
-        }
-      }
-      setAvailableProducts(all);
-    } catch (err) {
-      console.warn('Could not load products catalogue:', err);
-    } finally {
-      setIsLoadingProducts(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchProducts();
-  }, []);
-
-  // 3. Load customers for autocomplete search
-  const fetchCustomers = async () => {
-    try {
-      const all: CustomerItem[] = [];
-      let offset = 0;
-      let hasMore = true;
-
-      while (hasMore && offset < 1000) {
-        const res = await apiClient<{
-          success: boolean;
-          customers: CustomerItem[];
-          pagination?: { hasMore: boolean; nextOffset: number | null };
-        }>(`/api/v1/khata/customers?limit=200&offset=${offset}`);
-
-        const custs = res.data?.customers || (res.data as any)?.data;
-        if (custs && Array.isArray(custs) && custs.length > 0) {
-          all.push(...custs);
-          if (res.data?.pagination?.hasMore && res.data.pagination.nextOffset) {
-            offset = res.data.pagination.nextOffset;
-          } else {
-            hasMore = false;
-          }
-        } else {
-          hasMore = false;
-        }
-      }
-      setAvailableCustomers(all);
-    } catch (err) {
-      console.warn('Could not load customers for selection:', err);
-    }
-  };
-
-  useEffect(() => {
-    fetchCustomers();
-  }, []);
+  // Products and customers are fetched via server-side paginated search hooks above.
 
   // Close customer & product dropdowns on outside click
   useEffect(() => {
@@ -323,46 +267,53 @@ export const NormalBillingView: React.FC = () => {
   }, []);
 
   // 4. Load History when tab changes or filters change
-  const loadHistory = async () => {
-    try {
-      setIsLoadingHistory(true);
-      const { bills, pagination } = await listNormalBills({
-        search: historySearch || undefined,
-        dateFrom: historyDateFrom || undefined,
-        dateTo: historyDateTo || undefined,
-        limit: 25,
-        offset: historyPage * 25,
-      });
-      setHistoryBills(bills);
-      setHistoryTotal(pagination.total);
-    } catch (err: any) {
-      console.error('Failed to load normal bills history:', err);
-    } finally {
-      setIsLoadingHistory(false);
-    }
-  };
+  const loadHistory = useCallback(
+    async (override?: { page?: number; search?: string }) => {
+      const requestId = ++historyRequestIdRef.current;
+      const targetPage = override?.page !== undefined ? override.page : historyPage;
+      const rawSearch = override?.search !== undefined ? override.search : debouncedHistorySearch;
+      const trimmedSearch = rawSearch.trim();
+      try {
+        setIsLoadingHistory(true);
+        const { bills, pagination } = await listNormalBills({
+          search: trimmedSearch || undefined,
+          dateFrom: historyDateFrom || undefined,
+          dateTo: historyDateTo || undefined,
+          limit: 25,
+          offset: targetPage * 25,
+        });
+        if (requestId !== historyRequestIdRef.current) return;
+        setHistoryBills(bills);
+        setHistoryTotal(pagination.total);
+      } catch (err: any) {
+        if (requestId !== historyRequestIdRef.current) return;
+        console.error('Failed to load normal bills history:', err);
+      } finally {
+        if (requestId === historyRequestIdRef.current) {
+          setIsLoadingHistory(false);
+        }
+      }
+    },
+    [historyPage, debouncedHistorySearch, historyDateFrom, historyDateTo]
+  );
 
   useEffect(() => {
     if (activeTab === 'history') {
-      loadHistory();
+      void loadHistory();
     }
-  }, [activeTab, historyPage, historyDateFrom, historyDateTo]);
+    return () => {
+      historyRequestIdRef.current += 1;
+    };
+  }, [activeTab, loadHistory]);
 
   // Handle Search submit in history
   const handleHistorySearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setHistoryPage(0);
-    loadHistory();
+    void loadHistory({ page: 0, search: historySearch });
   };
 
-  // Filtered customer list for autocomplete & picker
-  const filteredCustomers = useMemo(() => {
-    if (!customerSearch.trim()) return availableCustomers;
-    const query = customerSearch.toLowerCase();
-    return availableCustomers.filter(
-      (c) => c.name.toLowerCase().includes(query) || (c.phone && c.phone.includes(query))
-    );
-  }, [availableCustomers, customerSearch]);
+  // Customers returned by server search are already filtered and ordered deterministically.
 
   const handleSelectCustomer = (customer: CustomerItem) => {
     setCustomerId(Number(customer.id));
@@ -377,19 +328,29 @@ export const NormalBillingView: React.FC = () => {
 
   // Line Items Operations
   const handleAddItem = () => {
-    commitItems((prev) => [
-      ...prev,
-      {
-        id: `item-${Date.now()}`,
-        productId: null,
-        description: '',
-        hsnCode: '',
-        quantity: '1',
-        unit: 'pcs',
-        rate: '',
-        rateUnit: '',
-      },
-    ]);
+    if (itemsRef.current.length >= MAX_BILL_LINE_ITEMS) {
+      setErrorMessage(`A bill can contain a maximum of ${MAX_BILL_LINE_ITEMS} items.`);
+      return;
+    }
+    setErrorMessage(null);
+    commitItems((prev) => {
+      if (prev.length >= MAX_BILL_LINE_ITEMS) {
+        return prev;
+      }
+      return [
+        ...prev,
+        {
+          id: `item-${Date.now()}`,
+          productId: null,
+          description: '',
+          hsnCode: '',
+          quantity: '1',
+          unit: 'pcs',
+          rate: '',
+          rateUnit: '',
+        },
+      ];
+    });
   };
 
   const handleRemoveItem = (id: string) => {
@@ -432,20 +393,31 @@ export const NormalBillingView: React.FC = () => {
 
   const handleBarcodeResolved = useCallback(
     (product: ProductCatalogReference) => {
-      const res = upsertScannedProductLine(itemsRef.current, product, () => ({
-        id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        productId: null,
-        description: '',
-        hsnCode: '',
-        barcode: '',
-        buyingPriceReference: null,
-        quantity: '1',
-        unit: 'pcs',
-        rate: '',
-        rateUnit: '',
-      }));
+      const res = upsertScannedProductLine(
+        itemsRef.current,
+        product,
+        () => ({
+          id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          productId: null,
+          description: '',
+          hsnCode: '',
+          barcode: '',
+          buyingPriceReference: null,
+          quantity: '1',
+          unit: 'pcs',
+          rate: '',
+          rateUnit: '',
+        }),
+        {
+          maxItems: MAX_BILL_LINE_ITEMS,
+          maxItemsErrorMessage: `A bill can contain a maximum of ${MAX_BILL_LINE_ITEMS} items.`,
+        }
+      );
       if (!res.error) {
         commitItems(res.nextLines);
+        setErrorMessage(null);
+      } else {
+        setErrorMessage(res.error);
       }
       return { action: res.action, error: res.error };
     },
@@ -553,6 +525,9 @@ export const NormalBillingView: React.FC = () => {
 
   // Form Validation
   const validateForm = (): string | null => {
+    if (items.length > MAX_BILL_LINE_ITEMS) {
+      return `A bill can contain a maximum of ${MAX_BILL_LINE_ITEMS} items.`;
+    }
     if (!customerName.trim()) {
       return 'Customer / Receiver Name is required.';
     }
@@ -972,52 +947,17 @@ export const NormalBillingView: React.FC = () => {
                 </button>
 
                 {isCustomerDropdownOpen && (
-                  <div
-                    className="absolute right-0 top-full mt-2 w-72 max-w-[85vw] p-2 rounded-xl border border-[var(--khata-border)] shadow-xl z-30 space-y-2 animate-in fade-in"
-                    style={{ background: 'var(--khata-surface)' }}
-                  >
-                    <div className="p-1 text-[10px] font-bold text-[var(--khata-text-muted)] border-b border-[var(--khata-border)] flex items-center justify-between">
-                      <span>KHATA CUSTOMERS ({availableCustomers.length})</span>
-                      <span>Click to autofill</span>
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="Search customer by name or phone..."
-                      value={customerSearch}
-                      onChange={(e) => setCustomerSearch(e.target.value)}
-                      className="neu-input w-full text-xs p-1.5"
-                      autoFocus
-                    />
-                    <div className="max-h-48 overflow-y-auto space-y-1">
-                      {filteredCustomers.map((c) => (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onClick={() => handleSelectCustomer(c)}
-                          className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex items-center justify-between transition"
-                        >
-                          <div>
-                            <span className="font-bold text-[var(--khata-text)] block truncate">{c.name}</span>
-                            {c.address && (
-                              <span className="text-[10px] text-[var(--khata-text-muted)] block truncate max-w-[180px]">
-                                {c.address}
-                              </span>
-                            )}
-                          </div>
-                          {c.phone && (
-                            <span className="text-[10px] text-[var(--khata-text-muted)] font-mono ml-2">
-                              {c.phone}
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                      {filteredCustomers.length === 0 && (
-                        <div className="p-2 text-center text-xs text-[var(--khata-text-muted)]">
-                          No Khata customers found.
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                  <CustomerPickerDropdown
+                    customers={availableCustomers}
+                    search={customerSearch}
+                    onSearchChange={setCustomerSearch}
+                    isLoading={isLoadingCustomers}
+                    isLoadingMore={isLoadingMoreCustomers}
+                    error={customersError}
+                    hasMore={hasMoreCustomers}
+                    onLoadMore={loadMoreCustomers}
+                    onSelectCustomer={handleSelectCustomer}
+                  />
                 )}
               </div>
             </div>
@@ -1051,7 +991,6 @@ export const NormalBillingView: React.FC = () => {
                     value={customerName}
                     onChange={(e) => {
                       setCustomerName(e.target.value);
-                      setCustomerSearch(e.target.value);
                       if (customerId) {
                         setCustomerId(null);
                       }
@@ -1150,30 +1089,43 @@ export const NormalBillingView: React.FC = () => {
                 <Package className="w-4 h-4 text-[var(--khata-accent)]" />
                 <span>Section C: Goods / Products Selection</span>
               </div>
-              <button
-                type="button"
-                onClick={handleAddItem}
-                className="neu-btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5 font-bold"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Item</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-bold text-[var(--khata-text-muted)]">
+                  {items.length}/{MAX_BILL_LINE_ITEMS} items
+                </span>
+                <button
+                  type="button"
+                  onClick={handleAddItem}
+                  disabled={items.length >= MAX_BILL_LINE_ITEMS}
+                  title={
+                    items.length >= MAX_BILL_LINE_ITEMS
+                      ? `Maximum limit of ${MAX_BILL_LINE_ITEMS} items reached`
+                      : 'Add line item'
+                  }
+                  className="neu-btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Item</span>
+                </button>
+              </div>
             </div>
+            {items.length >= MAX_BILL_LINE_ITEMS && (
+              <div className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-1.5">
+                Maximum limit of {MAX_BILL_LINE_ITEMS} line items reached. You can still increase quantity for existing products.
+              </div>
+            )}
 
             <BillingBarcodeControls
               enableGlobalScanner={activeTab === 'create' && !successRecord && !previewInvoice}
               onProductResolved={handleBarcodeResolved}
               onCatalogProductCreated={(created) => {
-                setAvailableProducts((prev) => [
-                  {
-                    id: created.id,
-                    name: created.name,
-                    hsn_code: created.hsn_code ?? null,
-                    buying_price: created.buying_price,
-                    barcode: created.barcode ?? null,
-                  },
-                  ...prev,
-                ]);
+                prependCatalogProduct({
+                  id: created.id,
+                  name: created.name,
+                  hsn_code: created.hsn_code ?? null,
+                  buying_price: created.buying_price,
+                  barcode: created.barcode ?? null,
+                });
               }}
             />
 
@@ -1221,7 +1173,7 @@ export const NormalBillingView: React.FC = () => {
                           {item.productId ? (
                             <div className="flex items-center gap-1.5 text-[10px]">
                               <span className="text-[var(--khata-accent)] font-semibold truncate max-w-[200px]">
-                                ✓ Linked: {availableProducts.find((p) => Number(p.id) === Number(item.productId))?.name || 'Catalogue Product'}
+                                ✓ Linked: {availableProducts.find((p) => Number(p.id) === Number(item.productId))?.name || item.description || 'Catalogue Product'}
                               </span>
                               <button
                                 type="button"
@@ -1259,7 +1211,8 @@ export const NormalBillingView: React.FC = () => {
                                 </span>
                               ) : availableProducts.length > 0 ? (
                                 <span className="text-[10px] text-[var(--khata-text-muted)]">
-                                  {availableProducts.length} in catalogue
+                                  {availableProducts.length}
+                                  {hasMoreProducts ? '+' : ''} loaded
                                 </span>
                               ) : null}
                             </div>
@@ -1270,7 +1223,6 @@ export const NormalBillingView: React.FC = () => {
                       <div className="relative" ref={openProductPickerItemId === item.id ? productPickerRef : undefined}>
                         <input
                           type="text"
-                          list={`normal-product-options-${item.id}`}
                           value={item.description}
                           onChange={(e) => {
                             const val = e.target.value;
@@ -1284,79 +1236,28 @@ export const NormalBillingView: React.FC = () => {
                               handleItemChange(item.id, 'description', val);
                             }
                           }}
-                          placeholder="Type to search product from catalogue or enter custom description..."
+                          placeholder="Enter item description or use Pick Product to search catalogue..."
                           className="neu-input w-full font-medium text-xs"
                         />
-                        <datalist id={`normal-product-options-${item.id}`}>
-                          {availableProducts.map((p) => (
-                            <option key={p.id} value={p.name}>
-                              {p.hsn_code ? `HSN: ${p.hsn_code} | ` : ''}Ref: ₹{p.buying_price}
-                            </option>
-                          ))}
-                        </datalist>
 
-                        {/* Interactive Product Popover Picker */}
+                        {/* Server-Paginated Product Popover Picker */}
                         {openProductPickerItemId === item.id && (
-                          <div
-                            className="absolute left-0 right-0 top-full mt-1.5 p-2 rounded-xl border border-[var(--khata-border)] shadow-2xl z-30 space-y-2 animate-in fade-in"
-                            style={{ background: 'var(--khata-surface)' }}
-                          >
-                            <div className="flex items-center justify-between text-[10px] font-bold text-[var(--khata-text-muted)] pb-1 border-b border-[var(--khata-border)]">
-                              <span>SELECT PRODUCT FROM CATALOGUE ({availableProducts.length})</span>
-                              <button
-                                type="button"
-                                onClick={() => setOpenProductPickerItemId(null)}
-                                className="text-neutral-400 hover:text-neutral-600 p-0.5 cursor-pointer"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                            <input
-                              type="text"
-                              placeholder="Search products by name or HSN..."
-                              value={productPickerSearch}
-                              onChange={(e) => setProductPickerSearch(e.target.value)}
-                              className="neu-input w-full text-xs p-1.5"
-                              autoFocus
-                            />
-                            <div className="max-h-48 overflow-y-auto space-y-1">
-                              {availableProducts
-                                .filter(
-                                  (p) =>
-                                    p.name.toLowerCase().includes(productPickerSearch.toLowerCase()) ||
-                                    (p.hsn_code && p.hsn_code.includes(productPickerSearch))
-                                )
-                                .map((p) => (
-                                  <button
-                                    key={p.id}
-                                    type="button"
-                                    onClick={() => {
-                                      handleSelectProduct(item.id, p);
-                                      setOpenProductPickerItemId(null);
-                                      setProductPickerSearch('');
-                                    }}
-                                    className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex items-center justify-between transition"
-                                  >
-                                    <div>
-                                      <span className="font-bold text-[var(--khata-text)] block truncate">{p.name}</span>
-                                      {p.hsn_code && (
-                                        <span className="text-[10px] text-[var(--khata-text-muted)] font-mono">
-                                          HSN: {p.hsn_code}
-                                        </span>
-                                      )}
-                                    </div>
-                                    <span className="text-xs font-bold text-[var(--khata-text-muted)] font-mono ml-2">
-                                      Ref: ₹{p.buying_price}
-                                    </span>
-                                  </button>
-                                ))}
-                              {availableProducts.length === 0 && (
-                                <div className="p-2 text-center text-xs text-[var(--khata-text-muted)]">
-                                  {isLoadingProducts ? 'Loading catalogue...' : 'No products found.'}
-                                </div>
-                              )}
-                            </div>
-                          </div>
+                          <ProductPickerPopover
+                            products={availableProducts}
+                            search={productPickerSearch}
+                            onSearchChange={setProductPickerSearch}
+                            isLoading={isLoadingProducts}
+                            isLoadingMore={isLoadingMoreProducts}
+                            error={productsError}
+                            hasMore={hasMoreProducts}
+                            onLoadMore={loadMoreProducts}
+                            onSelectProduct={(p) => {
+                              handleSelectProduct(item.id, p);
+                              setOpenProductPickerItemId(null);
+                              setProductPickerSearch('');
+                            }}
+                            onClose={() => setOpenProductPickerItemId(null)}
+                          />
                         )}
                       </div>
                     </div>
@@ -1563,7 +1464,10 @@ export const NormalBillingView: React.FC = () => {
                 <input
                   type="text"
                   value={historySearch}
-                  onChange={(e) => setHistorySearch(e.target.value)}
+                  onChange={(e) => {
+                    setHistorySearch(e.target.value);
+                    setHistoryPage(0);
+                  }}
                   placeholder="Search by bill number or customer name..."
                   className="neu-input w-full text-xs pl-8"
                 />
@@ -1574,7 +1478,10 @@ export const NormalBillingView: React.FC = () => {
                 <input
                   type="date"
                   value={historyDateFrom}
-                  onChange={(e) => setHistoryDateFrom(e.target.value)}
+                  onChange={(e) => {
+                    setHistoryDateFrom(e.target.value);
+                    setHistoryPage(0);
+                  }}
                   className="neu-input w-full text-xs"
                   placeholder="From Date"
                 />
@@ -1584,7 +1491,10 @@ export const NormalBillingView: React.FC = () => {
                 <input
                   type="date"
                   value={historyDateTo}
-                  onChange={(e) => setHistoryDateTo(e.target.value)}
+                  onChange={(e) => {
+                    setHistoryDateTo(e.target.value);
+                    setHistoryPage(0);
+                  }}
                   className="neu-input w-full text-xs flex-1"
                   placeholder="To Date"
                 />

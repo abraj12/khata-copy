@@ -88,6 +88,45 @@ export function validateSellingRateInput(value: unknown, fieldLabel = 'Rate'): s
   }
 }
 
+/**
+ * Safely parses live UI draft numeric inputs (such as incomplete '.', '-', or empty strings)
+ * without throwing during reactive calculation. Submit validation must still use strict validators.
+ */
+export function decimalOrZero(value: unknown, fallback: number | string = 0): Decimal {
+  if (value === null || value === undefined) {
+    return new Decimal(fallback);
+  }
+  const str = String(value).trim();
+  if (!str) {
+    return new Decimal(fallback);
+  }
+  try {
+    const parsed = new Decimal(str);
+    return parsed.isFinite() && !parsed.isNaN() ? parsed : new Decimal(fallback);
+  } catch {
+    return new Decimal(fallback);
+  }
+}
+
+/**
+ * Strictly validates a percentage input (0..100 inclusive, max 2 decimal places) prior to form submit.
+ */
+export function validatePercentageDraftInput(value: unknown, fieldLabel = 'GST Rate'): string | null {
+  try {
+    const dec = parseStrictDecimal(value, {
+      allowNegative: false,
+      maxDecimalPlaces: 2,
+      fieldName: fieldLabel,
+    });
+    if (dec.greaterThan(100)) {
+      return `${fieldLabel} must be between 0 and 100.`;
+    }
+    return null;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
 export interface DraftLineBase {
   productId?: number | null;
   description: string;
@@ -108,7 +147,8 @@ export type BarcodeUpsertAction = 'incremented' | 'filled_empty' | 'added';
 export function upsertScannedProductLine<T extends DraftLineBase>(
   lines: T[],
   product: ProductCatalogReference,
-  createEmptyLine: () => T
+  createEmptyLine: () => T,
+  options?: { maxItems?: number; maxItemsErrorMessage?: string }
 ): {
   nextLines: T[];
   action: BarcodeUpsertAction;
@@ -179,6 +219,15 @@ export function upsertScannedProductLine<T extends DraftLineBase>(
     };
     const nextLines = lines.map((line, idx) => (idx === emptyIdx ? filled : line));
     return { nextLines, action: 'filled_empty', targetIndex: emptyIdx, error: null };
+  }
+
+  if (options?.maxItems !== undefined && lines.length >= options.maxItems) {
+    return {
+      nextLines: lines,
+      action: 'added',
+      targetIndex: -1,
+      error: options.maxItemsErrorMessage || `A bill can contain a maximum of ${options.maxItems} items.`,
+    };
   }
 
   const created = {

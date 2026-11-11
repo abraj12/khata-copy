@@ -20,7 +20,7 @@ import {
 } from '../billing/numbering.js';
 import { StorageService } from '../../services/storage.service.js';
 import { AppError } from '../../utils/errors.js';
-import { validateMoneyInput, validateDecimalQuantityInput } from '../../utils/validation.js';
+import { validateMoneyInput, validateDecimalQuantityInput, resolveValidatedDiscount } from '../../utils/validation.js';
 import {
   generateTaxInvoicePdf,
   GstInvoicePdfCompany,
@@ -52,10 +52,10 @@ export interface CreateNormalBillInput {
   customerPhone?: string | null;
   customerState?: string | null;
   customerStateCode?: string | null;
-  subtotalAmount?: number | string;
+  subtotalAmount?: number | string | null;
   discountType?: 'percentage' | 'fixed' | null;
-  discountValue?: number | string;
-  discountAmount?: number | string;
+  discountValue?: number | string | null;
+  discountAmount?: number | string | null;
   items: CreateNormalBillItemInput[];
   notes?: string | null;
   idempotencyKey?: string | null;
@@ -227,25 +227,12 @@ export class NormalBillsService {
       });
     }
 
-    // 3. Discount calculations
-    const discountType = input.discountType || null;
-    const discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    let discountAmountDec = new Decimal(0);
-
-    if (discountType === 'percentage') {
-      if (discountValDec.isNegative() || discountValDec.greaterThan(100)) {
-        throw new AppError('Discount percentage must be between 0 and 100.', 400, 'INVALID_DISCOUNT');
-      }
-      discountAmountDec = subtotalDec.times(discountValDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    } else if (discountType === 'fixed') {
-      if (discountValDec.isNegative()) {
-        throw new AppError('Discount fixed amount cannot be negative.', 400, 'INVALID_DISCOUNT');
-      }
-      discountAmountDec = Decimal.min(discountValDec, subtotalDec);
-    } else if (input.discountAmount) {
-      discountAmountDec = validateMoneyInput(input.discountAmount, 'Discount amount', { allowZero: true });
-      discountAmountDec = Decimal.min(discountAmountDec, subtotalDec);
-    }
+    // 3. Strict discount validation and Decimal.js calculation
+    const {
+      discountType,
+      discountValueDec: discountValDec,
+      discountAmountDec,
+    } = resolveValidatedDiscount(subtotalDec, input);
 
     const totalAmountDec = subtotalDec.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     const amountInWords = numberToIndianWords(totalAmountDec.toFixed(2));
@@ -600,23 +587,11 @@ export class NormalBillsService {
       });
     }
 
-    const discountType = input.discountType || null;
-    const discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    let discountAmountDec = new Decimal(0);
-
-    if (discountType === 'percentage') {
-      if (discountValDec.isNegative() || discountValDec.greaterThan(100)) {
-        throw new AppError('Discount percentage must be between 0 and 100.', 400, 'INVALID_DISCOUNT');
-      }
-      discountAmountDec = subtotalDec.times(discountValDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    } else if (discountType === 'fixed') {
-      if (discountValDec.isNegative()) {
-        throw new AppError('Discount fixed amount cannot be negative.', 400, 'INVALID_DISCOUNT');
-      }
-      discountAmountDec = Decimal.min(discountValDec, subtotalDec);
-    } else if (input.discountAmount) {
-      discountAmountDec = Decimal.min(new Decimal(input.discountAmount || 0), subtotalDec);
-    }
+    const {
+      discountType,
+      discountValueDec: discountValDec,
+      discountAmountDec,
+    } = resolveValidatedDiscount(subtotalDec, input);
 
     const totalAmountDec = subtotalDec.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     const billNumber = input.billNumber || 'Draft';

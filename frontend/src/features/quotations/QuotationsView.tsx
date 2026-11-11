@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { INDIAN_STATES, getStateByCode } from '../../lib/indianStates.js';
 import {
   FileText,
@@ -52,6 +52,7 @@ export const QuotationsView: React.FC = () => {
   const debouncedSearch = useDebouncedValue(search, 300);
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [page, setPage] = useState(0);
+  const quotationRequestIdRef = useRef(0);
   const PAGE_SIZE = 25;
   const [pagination, setPagination] = useState<{ limit: number; offset: number; hasMore: boolean; nextOffset: number | null }>({
     limit: PAGE_SIZE,
@@ -80,26 +81,34 @@ export const QuotationsView: React.FC = () => {
   };
 
   const loadQuotations = useCallback(async () => {
+    const requestId = ++quotationRequestIdRef.current;
     setIsLoading(true);
     try {
       const res = await fetchQuotations({
-        search: debouncedSearch || undefined,
+        search: debouncedSearch.trim() || undefined,
         status: statusFilter || undefined,
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
       });
+      if (requestId !== quotationRequestIdRef.current) return;
       setQuotations(res.quotations);
       setPagination(res.pagination);
       setSummaryCounts(res.summaryCounts);
     } catch (err: any) {
+      if (requestId !== quotationRequestIdRef.current) return;
       showNotification('error', err?.message || 'Failed to load quotations.');
     } finally {
-      setIsLoading(false);
+      if (requestId === quotationRequestIdRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [debouncedSearch, statusFilter, page]);
 
   useEffect(() => {
     loadQuotations();
+    return () => {
+      quotationRequestIdRef.current += 1;
+    };
   }, [loadQuotations]);
 
   // Load settings
@@ -242,7 +251,7 @@ export const QuotationsView: React.FC = () => {
         {/* Total */}
         <button
           type="button"
-          onClick={() => setStatusFilter('')}
+          onClick={() => { setStatusFilter(''); setPage(0); }}
           className={`neu-card p-3 rounded-xl text-left transition border ${
             statusFilter === ''
               ? 'border-[var(--khata-accent)] bg-[var(--khata-surface-inset)] shadow-md'
@@ -260,7 +269,7 @@ export const QuotationsView: React.FC = () => {
         {/* Draft */}
         <button
           type="button"
-          onClick={() => setStatusFilter('draft')}
+          onClick={() => { setStatusFilter('draft'); setPage(0); }}
           className={`neu-card p-3 rounded-xl text-left transition border ${
             statusFilter === 'draft'
               ? 'border-amber-500 bg-amber-500/10 shadow-md'
@@ -279,7 +288,7 @@ export const QuotationsView: React.FC = () => {
         {/* Sent */}
         <button
           type="button"
-          onClick={() => setStatusFilter('sent')}
+          onClick={() => { setStatusFilter('sent'); setPage(0); }}
           className={`neu-card p-3 rounded-xl text-left transition border ${
             statusFilter === 'sent'
               ? 'border-blue-500 bg-blue-500/10 shadow-md'
@@ -298,7 +307,7 @@ export const QuotationsView: React.FC = () => {
         {/* Accepted */}
         <button
           type="button"
-          onClick={() => setStatusFilter('accepted')}
+          onClick={() => { setStatusFilter('accepted'); setPage(0); }}
           className={`neu-card p-3 rounded-xl text-left transition border ${
             statusFilter === 'accepted'
               ? 'border-emerald-500 bg-emerald-500/10 shadow-md'
@@ -317,7 +326,7 @@ export const QuotationsView: React.FC = () => {
         {/* Converted */}
         <button
           type="button"
-          onClick={() => setStatusFilter('converted')}
+          onClick={() => { setStatusFilter('converted'); setPage(0); }}
           className={`neu-card p-3 rounded-xl text-left transition border ${
             statusFilter === 'converted'
               ? 'border-purple-500 bg-purple-500/10 shadow-md'
@@ -336,7 +345,7 @@ export const QuotationsView: React.FC = () => {
         {/* Rejected / Expired */}
         <button
           type="button"
-          onClick={() => setStatusFilter('rejected_or_expired')}
+          onClick={() => { setStatusFilter('rejected_or_expired'); setPage(0); }}
           className={`neu-card p-3 rounded-xl text-left transition border ${
             statusFilter === 'rejected_or_expired'
               ? 'border-rose-500 bg-rose-500/10 shadow-md'
@@ -360,7 +369,7 @@ export const QuotationsView: React.FC = () => {
           <input
             type="text"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => { setSearch(e.target.value); setPage(0); }}
             placeholder="Search quotations by number, customer, or project..."
             className="neu-input neu-input-with-leading-icon w-full text-xs font-medium py-2.5"
           />

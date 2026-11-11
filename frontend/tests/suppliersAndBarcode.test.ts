@@ -1,4 +1,24 @@
-import { describe, it, expect, vi } from 'vitest';
+// @vitest-environment happy-dom
+
+import React, { act } from 'react';
+import { createRoot, Root } from 'react-dom/client';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { SupplierStatement } from '../src/features/suppliers/SupplierStatement.js';
+import * as suppliersApi from '../src/features/suppliers/suppliersApi.js';
+
+vi.mock('../src/features/suppliers/suppliersApi.js', async () => {
+  const actual = await vi.importActual<typeof import('../src/features/suppliers/suppliersApi.js')>(
+    '../src/features/suppliers/suppliersApi.js'
+  );
+  return {
+    ...actual,
+    listAllSuppliersApi: vi.fn(),
+    fetchSupplierStatementApi: vi.fn(),
+    downloadSupplierStatementCsvApi: vi.fn(),
+  };
+});
+
+(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 import {
   applyCatalogProductToDraftLine,
   DraftLineBase,
@@ -307,5 +327,191 @@ describe('Supplier Management & Billing Barcode Frontend Unit Tests', () => {
     };
     expect(sampleStatement.entries[0].entryType).toBe('purchase_bill_cancellation');
     expect(sampleStatement.periodCancellations).toBe('1200.00');
+  });
+});
+
+describe('Release #023: SupplierStatement Race Safety & Export Guards (React DOM)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  const makeSupplier = (id: string, name: string) => ({
+    id,
+    name,
+    contactPerson: null,
+    phone: '9876543210',
+    email: null,
+    address: null,
+    state: 'Bihar',
+    stateCode: '10',
+    gstin: null,
+    notes: null,
+    archivedAt: null,
+    createdAt: '2026-04-01T00:00:00Z',
+    updatedAt: '2026-04-01T00:00:00Z',
+    totalPurchases: '1000.00',
+    totalPayments: '200.00',
+    allocatedPayments: '200.00',
+    unallocatedPayments: '0.00',
+    outstandingPayable: '800.00',
+    advanceBalance: '0.00',
+    netBalance: '800.00',
+    purchaseBillCount: 1,
+    paymentCount: 1,
+    lastPurchaseDate: '2026-04-02',
+  });
+
+  const makeStatement = (id: string, name: string, fromDate: string | null = null, toDate: string | null = null): SupplierStatementData => ({
+    supplier: makeSupplier(id, name),
+    filters: { fromDate, toDate },
+    openingBalance: '0.00',
+    periodPurchases: '1000.00',
+    periodPayments: '200.00',
+    periodReversals: '0.00',
+    periodCancellations: '0.00',
+    closingBalance: '800.00',
+    entries: [
+      {
+        entryType: 'purchase_bill',
+        entryDate: '2026-04-02',
+        id: 1,
+        referenceNumber: `BILL-${id}`,
+        description: `Purchase for ${name}`,
+        debitAmount: '1000.00',
+        creditAmount: '0.00',
+        runningBalance: '1000.00',
+      },
+    ],
+  });
+
+  const setInputValue = (el: HTMLInputElement | HTMLSelectElement, val: string) => {
+    const proto =
+      el instanceof HTMLSelectElement
+        ? HTMLSelectElement.prototype
+        : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    setter?.call(el, val);
+    if (el instanceof HTMLSelectElement) {
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    } else {
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  };
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    vi.clearAllMocks();
+    (suppliersApi.listAllSuppliersApi as any).mockResolvedValue([
+      makeSupplier('sup-a', 'Alpha Hardware'),
+      makeSupplier('sup-b', 'Beta Plywood'),
+    ]);
+    (suppliersApi.downloadSupplierStatementCsvApi as any).mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  it('clears old statement on supplier switch and discards slow overlapping responses', async () => {
+    let resolveSupA!: (v: SupplierStatementData) => void;
+    let resolveSupB!: (v: SupplierStatementData) => void;
+
+    (suppliersApi.fetchSupplierStatementApi as any).mockImplementation((supplierId: string) => {
+      if (supplierId === 'sup-a') {
+        return new Promise<SupplierStatementData>((r) => {
+          resolveSupA = r;
+        });
+      }
+      return new Promise<SupplierStatementData>((r) => {
+        resolveSupB = r;
+      });
+    });
+
+    await act(async () => {
+      root.render(React.createElement(SupplierStatement));
+    });
+
+    const select = container.querySelector('select')!;
+    // Select Supplier A (request A stays pending)
+    await act(async () => {
+      setInputValue(select, 'sup-a');
+    });
+    expect(container.textContent).toContain('Generating statement...');
+
+    // Switch immediately to Supplier B before A resolves -> old statement stays cleared
+    await act(async () => {
+      setInputValue(select, 'sup-b');
+    });
+
+    // Resolve Supplier B first (fast response)
+    await act(async () => {
+      resolveSupB(makeStatement('sup-b', 'Beta Plywood'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('Beta Plywood');
+    expect(container.textContent).toContain('BILL-sup-b');
+
+    // Slow Supplier A resolves late -> MUST NOT overwrite Beta Plywood
+    await act(async () => {
+      resolveSupA(makeStatement('sup-a', 'Alpha Hardware'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('Beta Plywood');
+    expect(container.textContent).toContain('BILL-sup-b');
+    expect(container.textContent).not.toContain('BILL-sup-a');
+  });
+
+  it('disables Print & Export CSV when filter dates change until Apply is clicked, and exports applied dates only', async () => {
+    (suppliersApi.fetchSupplierStatementApi as any).mockImplementation(
+      async (supplierId: string, opts?: { fromDate?: string; toDate?: string }) =>
+        makeStatement(supplierId, 'Alpha Hardware', opts?.fromDate || null, opts?.toDate || null)
+    );
+
+    await act(async () => {
+      root.render(React.createElement(SupplierStatement, { initialSupplierId: 'sup-a' }));
+    });
+
+    const findBtn = (label: string) =>
+      Array.from(container.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes(label)
+      )!;
+
+    expect(findBtn('Print Statement').disabled).toBe(false);
+    expect(findBtn('Export CSV').disabled).toBe(false);
+
+    // Edit Start Date without clicking Apply -> dirty notice + disabled export/print buttons
+    const dateInputs = container.querySelectorAll<HTMLInputElement>('input[type="date"]');
+    await act(async () => {
+      setInputValue(dateInputs[0], '2026-04-01');
+    });
+
+    expect(container.textContent).toContain('Filter dates changed — click Apply to refresh this statement');
+    expect(findBtn('Print Statement').disabled).toBe(true);
+    expect(findBtn('Export CSV').disabled).toBe(true);
+
+    // Click Apply -> statement loads with 2026-04-01 filter -> Export CSV uses applied dates
+    await act(async () => {
+      findBtn('Apply').click();
+    });
+    expect(findBtn('Export CSV').disabled).toBe(false);
+
+    await act(async () => {
+      findBtn('Export CSV').click();
+    });
+    expect(suppliersApi.downloadSupplierStatementCsvApi).toHaveBeenCalledWith(
+      'sup-a',
+      'Alpha Hardware',
+      {
+        fromDate: '2026-04-01',
+        toDate: undefined,
+      }
+    );
   });
 });

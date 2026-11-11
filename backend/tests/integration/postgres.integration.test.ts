@@ -52,6 +52,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     try {
       // 1. Drop public schema tables cleanly for test isolation
       await client.query(`
+        DROP TABLE IF EXISTS "supplier_purchase_bill_cancellations" CASCADE;
         DROP TABLE IF EXISTS "supplier_payment_allocation_reversals" CASCADE;
         DROP TABLE IF EXISTS "supplier_payment_reversals" CASCADE;
         DROP TABLE IF EXISTS "supplier_payment_allocations" CASCADE;
@@ -110,6 +111,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '020_supplier_management.sql',
         '021_supplier_financial_integrity.sql',
         '022_supplier_operational_hardening.sql',
+        '023_supplier_audit_truncate_guard.sql',
       ];
 
       await client.query(`
@@ -168,6 +170,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '020_supplier_management.sql',
       '021_supplier_financial_integrity.sql',
       '022_supplier_operational_hardening.sql',
+      '023_supplier_audit_truncate_guard.sql',
     ]);
 
     const expectedTables = [
@@ -2685,6 +2688,225 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
           .minus(new Decimal(baseDash.summary.totalOutstandingPayable))
           .toFixed(2)
       ).toBe('200.00');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('30. Release #023: Truncate Guards on Audit Tables, REPEATABLE READ Statement Snapshots & >1200 Catalogue Pagination', async () => {
+    vi.spyOn(appPool, 'connect').mockImplementation(() => pool.connect());
+    vi.spyOn(appPool, 'query').mockImplementation((...args: any[]) => (pool.query as any)(...args));
+
+    try {
+    // A. Verify BEFORE TRUNCATE triggers exist on all 3 audit tables and migration 023 re-applies idempotently
+    const trigRes = await pool.query(`
+      SELECT c.relname AS table_name, t.tgname AS trigger_name
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      WHERE NOT t.tgisinternal
+        AND t.tgname LIKE '%truncate%'
+        AND c.relname IN (
+          'supplier_payment_reversals',
+          'supplier_payment_allocation_reversals',
+          'supplier_purchase_bill_cancellations'
+        )
+      ORDER BY c.relname ASC
+    `);
+    expect(trigRes.rows.map((r) => r.table_name)).toEqual([
+      'supplier_payment_allocation_reversals',
+      'supplier_payment_reversals',
+      'supplier_purchase_bill_cancellations',
+    ]);
+
+    const sql023 = fs.readFileSync(
+      path.resolve(__dirname, '../../migrations/023_supplier_audit_truncate_guard.sql'),
+      'utf-8'
+    );
+    await expect(pool.query(sql023)).resolves.toBeTruthy();
+
+    // Seed supplier bills, payment reversal, allocation reversal, and bill cancellation so all 3 audit tables have rows
+    const v30 = await suppliersService.createSupplier({
+      name: 'Release 023 Audit Vendor',
+      phone: '9811122334',
+    });
+    const b30a = await suppliersService.createPurchaseBill({
+      supplierId: v30.id,
+      invoiceNumber: 'R23-BILL-A',
+      invoiceDate: '2026-04-05',
+      items: [{ description: 'Item A', quantity: '1', purchaseRate: '1200.00' }],
+    });
+    const b30b = await suppliersService.createPurchaseBill({
+      supplierId: v30.id,
+      invoiceNumber: 'R23-BILL-B',
+      invoiceDate: '2026-04-06',
+      items: [{ description: 'Item B', quantity: '1', purchaseRate: '800.00' }],
+    });
+    const p30 = await suppliersService.createSupplierPayment({
+      supplierId: v30.id,
+      paymentDate: '2026-04-07',
+      amount: '500.00',
+      paymentMethod: 'cash',
+      allocations: [{ purchaseBillId: b30a.id, amount: '500.00' }],
+    });
+    await suppliersService.reverseSupplierPayment(p30.id, 'Audit guard seed reversal');
+    await suppliersService.cancelPurchaseBill(b30b.id, 'Audit guard seed cancellation');
+
+    // Attempt UPDATE, DELETE, and TRUNCATE on all 3 audit tables -> must fail with SQLSTATE 55000 and preserve counts
+    const preRevCount = Number((await pool.query('SELECT COUNT(*) FROM supplier_payment_reversals')).rows[0].count);
+    const preAllocCount = Number((await pool.query('SELECT COUNT(*) FROM supplier_payment_allocation_reversals')).rows[0].count);
+    const preCancelCount = Number((await pool.query('SELECT COUNT(*) FROM supplier_purchase_bill_cancellations')).rows[0].count);
+    expect(preRevCount).toBeGreaterThanOrEqual(1);
+    expect(preAllocCount).toBeGreaterThanOrEqual(1);
+    expect(preCancelCount).toBeGreaterThanOrEqual(1);
+
+    for (const stmt of [
+      `UPDATE supplier_payment_reversals SET reason = 'tamper'`,
+      `DELETE FROM supplier_payment_reversals`,
+      `TRUNCATE TABLE supplier_payment_reversals`,
+      `UPDATE supplier_payment_allocation_reversals SET reversed_amount = 1.00`,
+      `DELETE FROM supplier_payment_allocation_reversals`,
+      `TRUNCATE TABLE supplier_payment_allocation_reversals`,
+      `UPDATE supplier_purchase_bill_cancellations SET reason = 'tamper'`,
+      `DELETE FROM supplier_purchase_bill_cancellations`,
+      `TRUNCATE TABLE supplier_purchase_bill_cancellations`,
+    ]) {
+      let caught: any = null;
+      try {
+        await pool.query(stmt);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).not.toBeNull();
+      expect(caught.code).toBe('55000');
+    }
+
+    expect(Number((await pool.query('SELECT COUNT(*) FROM supplier_payment_reversals')).rows[0].count)).toBe(preRevCount);
+    expect(Number((await pool.query('SELECT COUNT(*) FROM supplier_payment_allocation_reversals')).rows[0].count)).toBe(preAllocCount);
+    expect(Number((await pool.query('SELECT COUNT(*) FROM supplier_purchase_bill_cancellations')).rows[0].count)).toBe(preCancelCount);
+
+    // B. REPEATABLE READ READ ONLY snapshot consistency under concurrent payment commits
+    const snapClient = await pool.connect();
+    try {
+      await snapClient.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const snapPayBefore = Number(
+        (await snapClient.query('SELECT COUNT(*) FROM supplier_payments WHERE supplier_id = $1', [v30.id])).rows[0].count
+      );
+
+      // Concurrent writer commits a new payment on another pool connection while snapshot transaction is open
+      await suppliersService.createSupplierPayment({
+        supplierId: v30.id,
+        paymentDate: '2026-04-08',
+        amount: '300.00',
+        paymentMethod: 'cash',
+      });
+
+      const snapPayDuring = Number(
+        (await snapClient.query('SELECT COUNT(*) FROM supplier_payments WHERE supplier_id = $1', [v30.id])).rows[0].count
+      );
+      expect(snapPayDuring).toBe(snapPayBefore);
+      await snapClient.query('COMMIT');
+    } finally {
+      snapClient.release();
+    }
+
+    const fullStmt = await suppliersService.getSupplierStatement(v30.id);
+    const computedClosing = new Decimal(fullStmt.openingBalance)
+      .plus(fullStmt.periodPurchases)
+      .minus(fullStmt.periodPayments)
+      .plus(fullStmt.periodReversals)
+      .minus(fullStmt.periodCancellations)
+      .toFixed(2);
+    expect(fullStmt.closingBalance).toBe(computedClosing);
+    expect(fullStmt.closingBalance).toBe('900.00');
+
+    // C. >1200 products & >1200 customers PostgreSQL search, pagination without duplicates, and billing beyond entry 1000
+    await pool.query(`
+      INSERT INTO products (name, buying_price, hsn_code, created_at, updated_at)
+      SELECT
+        'Scale Prod ' || LPAD(g::text, 4, '0'),
+        150.00,
+        '4411',
+        NOW(),
+        NOW()
+      FROM generate_series(1, 1210) AS g
+    `);
+
+    await pool.query(`
+      INSERT INTO customers (name, normalized_name, phone, normalized_phone, address, state, state_code, created_at, updated_at)
+      SELECT
+        'Scale Cust ' || LPAD(g::text, 4, '0'),
+        'scale cust ' || LPAD(g::text, 4, '0'),
+        '91' || LPAD(g::text, 8, '0'),
+        '91' || LPAD(g::text, 8, '0'),
+        'Market Road',
+        'Bihar',
+        '10',
+        NOW(),
+        NOW()
+      FROM generate_series(1, 1210) AS g
+    `);
+
+    const pPage1 = await productsService.listActiveProducts({ limit: 25, offset: 0 });
+    const pPage2 = await productsService.listActiveProducts({ limit: 25, offset: 25 });
+    expect(pPage1.products).toHaveLength(25);
+    expect(pPage1.pagination.hasMore).toBe(true);
+    expect(pPage2.products).toHaveLength(25);
+    const pIds = new Set([...pPage1.products.map((p) => p.id), ...pPage2.products.map((p) => p.id)]);
+    expect(pIds.size).toBe(50);
+
+    const pFind1199 = await productsService.listActiveProducts({ search: 'Scale Prod 1199', limit: 25, offset: 0 });
+    expect(pFind1199.products.some((p) => p.name === 'Scale Prod 1199')).toBe(true);
+    const prod1199 = pFind1199.products.find((p) => p.name === 'Scale Prod 1199')!;
+
+    const cPage1 = await khataService.listCustomers({ limit: 25, offset: 0 });
+    const cPage2 = await khataService.listCustomers({ limit: 25, offset: 25 });
+    expect(cPage1.customers).toHaveLength(25);
+    expect(cPage1.pagination.hasMore).toBe(true);
+    expect(cPage2.customers).toHaveLength(25);
+    const cIds = new Set([...cPage1.customers.map((c) => c.id), ...cPage2.customers.map((c) => c.id)]);
+    expect(cIds.size).toBe(50);
+
+    const cFind1199 = await khataService.listCustomers({ search: 'Scale Cust 1199', limit: 25, offset: 0 });
+    expect(cFind1199.customers.some((c) => c.name === 'Scale Cust 1199')).toBe(true);
+    const cust1199 = cFind1199.customers.find((c) => c.name === 'Scale Cust 1199')!;
+
+    // Create Normal Bill and GST Invoice using entries > 1000 & validate clamped fixed discount / strict errors
+    const nb = await normalBillsService.createBill({
+      billNumber: 'R23-NB-1199',
+      billDate: '2026-11-05',
+      customerId: cust1199.id,
+      customerName: cust1199.name,
+      discountType: 'fixed',
+      discountValue: '9999.00',
+      items: [{ productId: prod1199.id, description: prod1199.name, quantity: 2, rate: 250 }],
+    });
+    expect(nb.total_amount).toBe('0.00');
+
+    const gi = await gstInvoicesService.createInvoice({
+      invoiceNumber: 'R23-GST-1199',
+      invoiceDate: '2026-11-05',
+      state: 'Bihar',
+      stateCode: '10',
+      customerId: cust1199.id,
+      customerName: cust1199.name,
+      customerState: 'Bihar',
+      customerStateCode: '10',
+      gstRate: 5.5,
+      items: [{ productId: prod1199.id, description: prod1199.name, quantity: 1, rate: 199 }],
+    });
+    expect(gi.cgst_amount).toBe('5.47');
+    expect(gi.sgst_amount).toBe('5.47');
+    expect(gi.grand_total).toBe('209.94');
+
+    await expect(
+      gstInvoicesService.createInvoice({
+        invoiceNumber: 'R23-GST-BAD',
+        invoiceDate: '2026-11-05',
+        customerName: cust1199.name,
+        gstRate: '18.123',
+        items: [{ description: 'Bad', quantity: 1, rate: 100 }],
+      })
+    ).rejects.toThrow();
     } finally {
       vi.restoreAllMocks();
     }

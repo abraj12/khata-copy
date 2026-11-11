@@ -1,4 +1,5 @@
 import { Decimal } from 'decimal.js';
+import { z } from 'zod';
 
 export class FinancialValidationError extends Error {
   public status = 400;
@@ -101,6 +102,223 @@ export function validateDecimalQuantityInput(value: unknown, fieldName = 'Quanti
   }
 
   return d;
+}
+
+/**
+ * @deprecated Use validateDecimalQuantityInput instead.
+ * Kept as an alias for backward-compatibility during transition; will be removed.
+ */
+/**
+ * Validates a percentage input (0 to 100 inclusive, max 2 decimal places).
+ */
+export function validatePercentageInput(value: unknown, fieldName = 'Percentage'): Decimal {
+  const amount = validateMoneyInput(value, fieldName, { allowZero: true });
+  if (amount.greaterThan(100)) {
+    throw new FinancialValidationError(`${fieldName} must be between 0 and 100.`, 'INVALID_PERCENTAGE');
+  }
+  return amount;
+}
+
+/**
+ * Validates a GST rate input (0 to 100 inclusive, max 2 decimal places).
+ */
+export function validateGstRateInput(value: unknown, fieldName = 'GST rate'): Decimal {
+  const amount = validateMoneyInput(value, fieldName, { allowZero: true });
+  if (amount.greaterThan(100)) {
+    throw new FinancialValidationError(`${fieldName} must be between 0 and 100.`, 'INVALID_GST_RATE');
+  }
+  return amount;
+}
+
+function isProvidedFinancialInput(value: unknown): boolean {
+  return value !== undefined && value !== null && !(typeof value === 'string' && value.trim() === '');
+}
+
+/**
+ * Validates and resolves discount inputs across normal bills, GST invoices and quotations.
+ * Rejects any supplied invalid discountValue or discountAmount regardless of active discountType,
+ * never trusts client totals, and clamps fixed discounts cleanly at subtotal.
+ */
+export function resolveValidatedDiscount(
+  subtotalDec: Decimal,
+  input: {
+    discountType?: 'percentage' | 'fixed' | null;
+    discountValue?: number | string | null;
+    discountAmount?: number | string | null;
+  }
+): {
+  discountType: 'percentage' | 'fixed' | null;
+  discountValueDec: Decimal;
+  discountAmountDec: Decimal;
+} {
+  const discountType = input.discountType || null;
+
+  let suppliedDiscountAmountDec: Decimal | null = null;
+  if (isProvidedFinancialInput(input.discountAmount)) {
+    suppliedDiscountAmountDec = validateMoneyInput(input.discountAmount, 'Discount amount', {
+      allowZero: true,
+    });
+  }
+
+  let discountValueDec = new Decimal(0);
+  let discountAmountDec = new Decimal(0);
+
+  if (discountType === 'percentage') {
+    if (isProvidedFinancialInput(input.discountValue)) {
+      discountValueDec = validatePercentageInput(input.discountValue, 'Discount percentage');
+    }
+    discountAmountDec = subtotalDec
+      .times(discountValueDec)
+      .dividedBy(100)
+      .toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  } else if (discountType === 'fixed') {
+    if (isProvidedFinancialInput(input.discountValue)) {
+      discountValueDec = validateMoneyInput(input.discountValue, 'Discount fixed amount', {
+        allowZero: true,
+      });
+    }
+    discountAmountDec = Decimal.min(discountValueDec, subtotalDec).toDecimalPlaces(
+      2,
+      Decimal.ROUND_HALF_UP
+    );
+  } else {
+    // Reject invalid discountValue even when discountType is null or omitted
+    if (isProvidedFinancialInput(input.discountValue)) {
+      discountValueDec = validateMoneyInput(input.discountValue, 'Discount value', {
+        allowZero: true,
+      });
+    }
+    if (suppliedDiscountAmountDec !== null) {
+      discountAmountDec = Decimal.min(suppliedDiscountAmountDec, subtotalDec).toDecimalPlaces(
+        2,
+        Decimal.ROUND_HALF_UP
+      );
+    }
+  }
+
+  return {
+    discountType,
+    discountValueDec,
+    discountAmountDec,
+  };
+}
+
+/**
+ * Validates GST rate and computes intra-state (CGST + SGST) or inter-state (IGST) split using Decimal.js.
+ */
+export function calculateGstBreakdown(
+  taxableAmountDec: Decimal,
+  gstRateInput: unknown,
+  isIntraState: boolean
+): {
+  gstRateDec: Decimal;
+  cgstRateDec: Decimal;
+  cgstAmountDec: Decimal;
+  sgstRateDec: Decimal;
+  sgstAmountDec: Decimal;
+  igstRateDec: Decimal;
+  igstAmountDec: Decimal;
+  totalTaxDec: Decimal;
+} {
+  const gstRateDec = validateGstRateInput(gstRateInput, 'GST rate');
+  let cgstRateDec = new Decimal(0);
+  let cgstAmountDec = new Decimal(0);
+  let sgstRateDec = new Decimal(0);
+  let sgstAmountDec = new Decimal(0);
+  let igstRateDec = new Decimal(0);
+  let igstAmountDec = new Decimal(0);
+
+  if (isIntraState) {
+    cgstRateDec = gstRateDec.dividedBy(2).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    sgstRateDec = gstRateDec.minus(cgstRateDec);
+    cgstAmountDec = taxableAmountDec
+      .times(cgstRateDec)
+      .dividedBy(100)
+      .toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    sgstAmountDec = taxableAmountDec
+      .times(sgstRateDec)
+      .dividedBy(100)
+      .toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  } else {
+    igstRateDec = gstRateDec;
+    igstAmountDec = taxableAmountDec
+      .times(igstRateDec)
+      .dividedBy(100)
+      .toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  }
+
+  const totalTaxDec = cgstAmountDec
+    .plus(sgstAmountDec)
+    .plus(igstAmountDec)
+    .toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+
+  return {
+    gstRateDec,
+    cgstRateDec,
+    cgstAmountDec,
+    sgstRateDec,
+    sgstAmountDec,
+    igstRateDec,
+    igstAmountDec,
+    totalTaxDec,
+  };
+}
+
+/**
+ * Shared Zod field for optional non-negative money values (2 decimal places max).
+ */
+export function optionalNonNegativeMoneyZodField(fieldLabel: string) {
+  return z
+    .union([z.number(), z.string()])
+    .nullable()
+    .optional()
+    .superRefine((val, ctx) => {
+      if (!isProvidedFinancialInput(val)) {
+        return;
+      }
+      try {
+        validateMoneyInput(val, fieldLabel, { allowZero: true });
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: (err as Error).message,
+        });
+      }
+    });
+}
+
+/**
+ * Shared Zod field for required strict GST rate (0..100, 2 decimal places max).
+ */
+export const strictGstRateZodField = z.union([z.number(), z.string()]).superRefine((val, ctx) => {
+  try {
+    validateGstRateInput(val, 'GST rate');
+  } catch (err) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: (err as Error).message,
+    });
+  }
+});
+
+/**
+ * Enforces percentage discount bounds (0..100) on request schemas with discountType + discountValue.
+ */
+export function addPercentageDiscountZodIssue(
+  data: { discountType?: 'percentage' | 'fixed' | null; discountValue?: number | string | null },
+  ctx: z.RefinementCtx
+): void {
+  if (data.discountType === 'percentage' && isProvidedFinancialInput(data.discountValue)) {
+    try {
+      validatePercentageInput(data.discountValue, 'Discount percentage');
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['discountValue'],
+        message: (err as Error).message,
+      });
+    }
+  }
 }
 
 /**

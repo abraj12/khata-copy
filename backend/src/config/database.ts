@@ -54,6 +54,7 @@ export const EXPECTED_MIGRATIONS = [
   '020_supplier_management.sql',
   '021_supplier_financial_integrity.sql',
   '022_supplier_operational_hardening.sql',
+  '023_supplier_audit_truncate_guard.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [

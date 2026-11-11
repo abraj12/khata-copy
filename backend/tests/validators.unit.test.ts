@@ -6,6 +6,10 @@ import {
   validateMoneyInput,
   escapeLike,
   FinancialValidationError,
+  validatePercentageInput,
+  validateGstRateInput,
+  resolveValidatedDiscount,
+  calculateGstBreakdown,
 } from '../src/utils/validation.js';
 import { khataService } from '../src/modules/khata/khata.service.js';
 
@@ -134,6 +138,98 @@ describe('Unit Test Suite: Validators & Normalizers (Phase 12.1)', () => {
     it('normalizes customer names (NFKC, lowercase, whitespace collapse)', () => {
       expect(khataService.normalizeName('  Ramesh   Kumar  ')).toBe('ramesh kumar');
       expect(khataService.normalizeName('SURESH SHARMA')).toBe('suresh sharma');
+    });
+  });
+
+  describe('Release #023: Strict Percentage, GST Rate & Discount Resolvers', () => {
+    it('validatePercentageInput accepts 0..100 with <=2 decimals and rejects malformed/negative/>100', () => {
+      expect(validatePercentageInput(0).toFixed(2)).toBe('0.00');
+      expect(validatePercentageInput('0').toFixed(2)).toBe('0.00');
+      expect(validatePercentageInput('12.5').toFixed(2)).toBe('12.50');
+      expect(validatePercentageInput('100').toFixed(2)).toBe('100.00');
+
+      for (const bad of [-0.01, -5, '100.01', 101, '1.234', '1e2', 'abc', NaN, Infinity]) {
+        expect(() => validatePercentageInput(bad, 'Discount percentage')).toThrow(
+          FinancialValidationError
+        );
+      }
+    });
+
+    it('validateGstRateInput accepts 0..100 with <=2 decimals and rejects invalid rates', () => {
+      expect(validateGstRateInput(0).toFixed(2)).toBe('0.00');
+      expect(validateGstRateInput(5.5).toFixed(2)).toBe('5.50');
+      expect(validateGstRateInput('18.00').toFixed(2)).toBe('18.00');
+      expect(validateGstRateInput(100).toFixed(2)).toBe('100.00');
+
+      for (const bad of [-1, 100.01, '18.123', '1e1', 'abc', NaN, Infinity]) {
+        expect(() => validateGstRateInput(bad, 'GST rate')).toThrow(FinancialValidationError);
+      }
+    });
+
+    it('resolveValidatedDiscount enforces strict rules across omitted, zero, percentage, and fixed modes', () => {
+      const subtotal = new Decimal('200.00');
+
+      // Omitted / null -> 0.00
+      expect(resolveValidatedDiscount(subtotal, {})).toMatchObject({
+        discountType: null,
+      });
+      expect(resolveValidatedDiscount(subtotal, {}).discountAmountDec.toFixed(2)).toBe('0.00');
+
+      // Explicit numeric 0 vs string '0'
+      const numZero = resolveValidatedDiscount(subtotal, { discountType: 'percentage', discountValue: 0 });
+      const strZero = resolveValidatedDiscount(subtotal, { discountType: 'percentage', discountValue: '0' });
+      expect(numZero.discountValueDec.toFixed(2)).toBe('0.00');
+      expect(strZero.discountValueDec.toFixed(2)).toBe('0.00');
+      expect(numZero.discountAmountDec.toFixed(2)).toBe('0.00');
+      expect(strZero.discountAmountDec.toFixed(2)).toBe('0.00');
+
+      // Fixed discount exceeding subtotal clamps cleanly to subtotal
+      const clamped = resolveValidatedDiscount(subtotal, {
+        discountType: 'fixed',
+        discountValue: '500.00',
+      });
+      expect(clamped.discountValueDec.toFixed(2)).toBe('500.00');
+      expect(clamped.discountAmountDec.toFixed(2)).toBe('200.00');
+
+      // Client tampering on discountAmount in percentage mode is recomputed, yet malformed discountAmount is rejected
+      const recomputed = resolveValidatedDiscount(subtotal, {
+        discountType: 'percentage',
+        discountValue: '10',
+        discountAmount: '199.00',
+      });
+      expect(recomputed.discountAmountDec.toFixed(2)).toBe('20.00');
+
+      expect(() =>
+        resolveValidatedDiscount(subtotal, {
+          discountType: 'percentage',
+          discountValue: '10',
+          discountAmount: '-5',
+        })
+      ).toThrow(FinancialValidationError);
+
+      // Invalid discountValue rejected even when discountType is omitted or null
+      for (const badVal of [-5, '1.234', '1e2', 'abc']) {
+        expect(() => resolveValidatedDiscount(subtotal, { discountValue: badVal })).toThrow(
+          FinancialValidationError
+        );
+      }
+      expect(() =>
+        resolveValidatedDiscount(subtotal, { discountType: 'percentage', discountValue: 101 })
+      ).toThrow(FinancialValidationError);
+    });
+
+    it('calculateGstBreakdown splits CGST/SGST and IGST identically with ROUND_HALF_UP', () => {
+      const intra = calculateGstBreakdown(new Decimal('100.05'), 18, true);
+      expect(intra.cgstRateDec.toFixed(2)).toBe('9.00');
+      expect(intra.sgstRateDec.toFixed(2)).toBe('9.00');
+      expect(intra.cgstAmountDec.toFixed(2)).toBe('9.00');
+      expect(intra.sgstAmountDec.toFixed(2)).toBe('9.00');
+      expect(intra.totalTaxDec.toFixed(2)).toBe('18.00');
+
+      const inter = calculateGstBreakdown(new Decimal('100.55'), 5, false);
+      expect(inter.igstRateDec.toFixed(2)).toBe('5.00');
+      expect(inter.igstAmountDec.toFixed(2)).toBe('5.03');
+      expect(inter.totalTaxDec.toFixed(2)).toBe('5.03');
     });
   });
 });

@@ -3,6 +3,8 @@ import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { env } from '../src/config/env.js';
 import { appPool } from '../src/config/database.js';
+import { Decimal } from 'decimal.js';
+import { normalBillsService } from '../src/modules/normalBills/normalBills.service.js';
 import { generateTaxInvoicePdf } from '../src/modules/gstInvoices/gstInvoices.pdf.js';
 
 const TEST_PHONE = '9876543210';
@@ -360,5 +362,132 @@ describe('Normal Billing Module (Non-GST Standard Bills) Test Suite', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toBe('application/pdf');
+  });
+
+  it('7. Rejects invalid discount inputs (negative, >100%, 3dp, scientific notation, text, invalid omitted-mode value) with 400 and rejects >20 line items', async () => {
+    const basePayload = {
+      billNumber: 'NB-VAL-1',
+      billDate: '2026-11-02',
+      customerName: 'Validation Buyer',
+      items: [{ description: 'Item A', quantity: 2, rate: 100 }],
+    };
+
+    const invalidCases: Array<Record<string, unknown>> = [
+      { discountType: 'percentage', discountValue: -5 },
+      { discountType: 'percentage', discountValue: 101 },
+      { discountType: 'percentage', discountValue: '1.234' },
+      { discountType: 'fixed', discountValue: '1e2' },
+      { discountType: 'fixed', discountValue: 'abc' },
+      { discountValue: '1e2' },
+      { discountAmount: -1 },
+    ];
+
+    for (const badFields of invalidCases) {
+      for (const endpoint of ['/api/v1/normal-bills', '/api/v1/normal-bills/preview-pdf']) {
+        const res = await request(app)
+          .post(endpoint)
+          .set('Cookie', authCookie)
+          .set('X-CSRF-Token', csrfToken)
+          .send({ ...basePayload, ...badFields });
+        expect(res.status).toBe(400);
+      }
+    }
+
+    // Over 20 line items must also fail with 400
+    const twentyOneItems = Array.from({ length: 21 }, (_, idx) => ({
+      description: `Item ${idx + 1}`,
+      quantity: 1,
+      rate: 10,
+    }));
+    const tooManyRes = await request(app)
+      .post('/api/v1/normal-bills')
+      .set('Cookie', authCookie)
+      .set('X-CSRF-Token', csrfToken)
+      .send({ ...basePayload, items: twentyOneItems });
+    expect(tooManyRes.status).toBe(400);
+  });
+
+  it('8. Recomputes fixed clamped discounts, normalizes 0 vs "0", and ignores tampered client totals on POST & service call', async () => {
+    let insertedBillParams: any[] = [];
+    const mockClient = {
+      query: vi.fn().mockImplementation(async (sql: any, params?: any[]) => {
+        const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
+        if (sqlText.includes('FROM quotation_settings')) {
+          return { rows: [{ company_name: 'ALGIONS AI LABS PRIVATE LIMITED', state: 'Bihar', state_code: '10' }], rowCount: 1 };
+        }
+        if (sqlText.includes('SELECT 1 FROM normal_bills WHERE bill_number')) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (sqlText.includes('INSERT INTO normal_bills')) {
+          insertedBillParams = params || [];
+          return {
+            rows: [
+              {
+                id: 901,
+                bill_number: insertedBillParams[0],
+                bill_date: '2026-11-02',
+                customer_name: 'Clamp Buyer',
+                subtotal_amount: insertedBillParams[14],
+                discount_type: insertedBillParams[15],
+                discount_value: insertedBillParams[16],
+                discount_amount: insertedBillParams[17],
+                total_amount: insertedBillParams[18],
+                amount_in_words: insertedBillParams[19],
+                pdf_status: 'local_only',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        if (sqlText.includes('INSERT INTO normal_bill_items')) {
+          return { rows: [{ id: 1, bill_id: 901, item_index: 1, description: 'Board', quantity: '2.00', rate: '100.00', amount: '200.00' }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    vi.spyOn(appPool, 'connect').mockResolvedValue(mockClient as any);
+
+    // Fixed discount > subtotal (500 > 200) clamps discount_amount to 200.00 and total to 0.00, ignoring tampered discountAmount: 5
+    const clampRes = await request(app)
+      .post('/api/v1/normal-bills')
+      .set('Cookie', authCookie)
+      .set('X-CSRF-Token', csrfToken)
+      .send({
+        billNumber: 'NB-CLAMP-1',
+        billDate: '2026-11-02',
+        customerName: 'Clamp Buyer',
+        discountType: 'fixed',
+        discountValue: '500.00',
+        discountAmount: 5,
+        items: [{ description: 'Board', quantity: 2, rate: 100 }],
+      });
+    expect(clampRes.status).toBe(201);
+    expect(insertedBillParams[14]).toBe('200.00');
+    expect(insertedBillParams[17]).toBe('200.00');
+    expect(insertedBillParams[18]).toBe('0.00');
+
+    // Consistent handling of 0 and '0' directly in createBillInTransaction
+    await normalBillsService.createBillInTransaction(mockClient as any, {
+      billNumber: 'NB-ZERO-NUM',
+      billDate: '2026-11-02',
+      customerName: 'Zero Buyer',
+      discountType: 'percentage',
+      discountValue: 0,
+      items: [{ description: 'Board', quantity: 1, rate: 100 }],
+    });
+    const numDiscount = new Decimal(insertedBillParams[17]).toFixed(2);
+    const numTotal = new Decimal(insertedBillParams[18]).toFixed(2);
+
+    await normalBillsService.createBillInTransaction(mockClient as any, {
+      billNumber: 'NB-ZERO-STR',
+      billDate: '2026-11-02',
+      customerName: 'Zero Buyer',
+      discountType: 'percentage',
+      discountValue: '0',
+      items: [{ description: 'Board', quantity: 1, rate: 100 }],
+    });
+    expect(new Decimal(insertedBillParams[17]).toFixed(2)).toBe(numDiscount);
+    expect(new Decimal(insertedBillParams[18]).toFixed(2)).toBe(numTotal);
   });
 });

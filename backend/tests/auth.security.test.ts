@@ -83,6 +83,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '020_supplier_management.sql' },
             { version: '021_supplier_financial_integrity.sql' },
             { version: '022_supplier_operational_hardening.sql' },
+            { version: '023_supplier_audit_truncate_guard.sql' },
             {
             version: '011_gst_invoices.sql',
           },

@@ -145,14 +145,48 @@ jobs:
         run: test -f android-twa/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Verify Release Build Fails Closed Without Signing Config
+        shell: bash
         working-directory: android-twa
         run: |
-          if ./gradlew assembleRelease --no-daemon; then
-            echo "SECURITY ERROR: assembleRelease succeeded without signing credentials!"
+          set -euo pipefail
+
+          if [[ -f signing.properties ]]; then
+            echo "ERROR: signing.properties exists; unsigned-release assertion cannot run safely."
             exit 1
-          else
-            echo "SUCCESS: assembleRelease safely failed closed when credentials are missing."
           fi
+
+          if [[ -n "${RELEASE_STORE_FILE:-}" ||
+                -n "${RELEASE_STORE_PASSWORD:-}" ||
+                -n "${RELEASE_KEY_ALIAS:-}" ||
+                -n "${RELEASE_KEY_PASSWORD:-}" ]]; then
+            echo "ERROR: Release signing credentials are present in this CI job."
+            exit 1
+          fi
+
+          rm -f release-build.log
+          set +e
+          ./gradlew assembleRelease --no-daemon > release-build.log 2>&1
+          BUILD_EXIT_CODE=$?
+          set -e
+
+          cat release-build.log
+
+          if [[ "$BUILD_EXIT_CODE" -eq 0 ]]; then
+            echo "SECURITY ERROR: unsigned assembleRelease unexpectedly succeeded."
+            rm -f release-build.log
+            exit 1
+          fi
+
+          if ! grep -Fq \
+            "[SECURITY ERROR] Release build requested, but release signing credentials are missing!" \
+            release-build.log; then
+            echo "SECURITY ERROR: Release build failed for an unexpected reason."
+            rm -f release-build.log
+            exit 1
+          fi
+
+          rm -f release-build.log
+          echo "PASS: Release build correctly failed only because signing credentials are missing."
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4

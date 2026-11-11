@@ -3160,75 +3160,80 @@ export class SuppliersService {
       throw new AppError('End date cannot be earlier than start date.', 400, 'INVALID_DATE_RANGE');
     }
 
-    // Archived suppliers remain available for historical statements
-    const supplier = await this.getSupplierById(supplierId);
+    const client = await appPool.connect();
 
-    let priorPurchases = '0.00';
-    let priorPayments = '0.00';
-    let priorReversals = '0.00';
-    let priorCancellations = '0.00';
+    try {
+      await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
 
-    if (fromDate) {
-      const priorRes = await appPool.query(
-        `SELECT
-          (SELECT COALESCE(SUM(grand_total), 0)::numeric FROM supplier_purchase_bills WHERE supplier_id = $1 AND status IN ('finalized', 'cancelled') AND invoice_date < $2::date) AS prior_purchases,
-          (SELECT COALESCE(SUM(amount), 0)::numeric FROM supplier_payments WHERE supplier_id = $1 AND payment_date < $2::date) AS prior_payments,
-          (SELECT COALESCE(SUM(original_amount), 0)::numeric FROM supplier_payment_reversals WHERE supplier_id = $1 AND (reversed_at AT TIME ZONE 'Asia/Kolkata')::date < $2::date) AS prior_reversals,
-          (SELECT COALESCE(SUM(original_grand_total), 0)::numeric FROM supplier_purchase_bill_cancellations WHERE supplier_id = $1 AND (cancelled_at AT TIME ZONE 'Asia/Kolkata')::date < $2::date) AS prior_cancellations`,
-        [supplierId, fromDate]
-      );
-      priorPurchases = toFixedMoney(priorRes.rows[0]?.prior_purchases || 0);
-      priorPayments = toFixedMoney(priorRes.rows[0]?.prior_payments || 0);
-      priorReversals = toFixedMoney(priorRes.rows[0]?.prior_reversals || 0);
-      priorCancellations = toFixedMoney(priorRes.rows[0]?.prior_cancellations || 0);
-    }
+      // Archived suppliers remain available for historical statements; every read uses the same snapshot client.
+      const supplier = await this.getSupplierById(supplierId, client);
 
-    const billConditions = [`spb.supplier_id = $1`, `spb.status IN ('finalized', 'cancelled')`];
-    const billParams: unknown[] = [supplierId];
-    if (fromDate) {
-      billParams.push(fromDate);
-      billConditions.push(`spb.invoice_date >= $${billParams.length}::date`);
-    }
-    if (toDate) {
-      billParams.push(toDate);
-      billConditions.push(`spb.invoice_date <= $${billParams.length}::date`);
-    }
+      let priorPurchases = '0.00';
+      let priorPayments = '0.00';
+      let priorReversals = '0.00';
+      let priorCancellations = '0.00';
 
-    const payConditions = [`sp.supplier_id = $1`];
-    const payParams: unknown[] = [supplierId];
-    if (fromDate) {
-      payParams.push(fromDate);
-      payConditions.push(`sp.payment_date >= $${payParams.length}::date`);
-    }
-    if (toDate) {
-      payParams.push(toDate);
-      payConditions.push(`sp.payment_date <= $${payParams.length}::date`);
-    }
+      if (fromDate) {
+        const priorRes = await client.query(
+          `SELECT
+            (SELECT COALESCE(SUM(grand_total), 0)::numeric FROM supplier_purchase_bills WHERE supplier_id = $1 AND status IN ('finalized', 'cancelled') AND invoice_date < $2::date) AS prior_purchases,
+            (SELECT COALESCE(SUM(amount), 0)::numeric FROM supplier_payments WHERE supplier_id = $1 AND payment_date < $2::date) AS prior_payments,
+            (SELECT COALESCE(SUM(original_amount), 0)::numeric FROM supplier_payment_reversals WHERE supplier_id = $1 AND (reversed_at AT TIME ZONE 'Asia/Kolkata')::date < $2::date) AS prior_reversals,
+            (SELECT COALESCE(SUM(original_grand_total), 0)::numeric FROM supplier_purchase_bill_cancellations WHERE supplier_id = $1 AND (cancelled_at AT TIME ZONE 'Asia/Kolkata')::date < $2::date) AS prior_cancellations`,
+          [supplierId, fromDate]
+        );
+        priorPurchases = toFixedMoney(priorRes.rows[0]?.prior_purchases || 0);
+        priorPayments = toFixedMoney(priorRes.rows[0]?.prior_payments || 0);
+        priorReversals = toFixedMoney(priorRes.rows[0]?.prior_reversals || 0);
+        priorCancellations = toFixedMoney(priorRes.rows[0]?.prior_cancellations || 0);
+      }
 
-    const revConditions = [`spr.supplier_id = $1`];
-    const revParams: unknown[] = [supplierId];
-    if (fromDate) {
-      revParams.push(fromDate);
-      revConditions.push(`(spr.reversed_at AT TIME ZONE 'Asia/Kolkata')::date >= $${revParams.length}::date`);
-    }
-    if (toDate) {
-      revParams.push(toDate);
-      revConditions.push(`(spr.reversed_at AT TIME ZONE 'Asia/Kolkata')::date <= $${revParams.length}::date`);
-    }
+      const billConditions = [`spb.supplier_id = $1`, `spb.status IN ('finalized', 'cancelled')`];
+      const billParams: unknown[] = [supplierId];
+      if (fromDate) {
+        billParams.push(fromDate);
+        billConditions.push(`spb.invoice_date >= $${billParams.length}::date`);
+      }
+      if (toDate) {
+        billParams.push(toDate);
+        billConditions.push(`spb.invoice_date <= $${billParams.length}::date`);
+      }
 
-    const cancelConditions = [`spbc.supplier_id = $1`];
-    const cancelParams: unknown[] = [supplierId];
-    if (fromDate) {
-      cancelParams.push(fromDate);
-      cancelConditions.push(`(spbc.cancelled_at AT TIME ZONE 'Asia/Kolkata')::date >= $${cancelParams.length}::date`);
-    }
-    if (toDate) {
-      cancelParams.push(toDate);
-      cancelConditions.push(`(spbc.cancelled_at AT TIME ZONE 'Asia/Kolkata')::date <= $${cancelParams.length}::date`);
-    }
+      const payConditions = [`sp.supplier_id = $1`];
+      const payParams: unknown[] = [supplierId];
+      if (fromDate) {
+        payParams.push(fromDate);
+        payConditions.push(`sp.payment_date >= $${payParams.length}::date`);
+      }
+      if (toDate) {
+        payParams.push(toDate);
+        payConditions.push(`sp.payment_date <= $${payParams.length}::date`);
+      }
 
-    const [billsRes, paymentsRes, reversalsRes, cancellationsRes] = await Promise.all([
-      appPool.query(
+      const revConditions = [`spr.supplier_id = $1`];
+      const revParams: unknown[] = [supplierId];
+      if (fromDate) {
+        revParams.push(fromDate);
+        revConditions.push(`(spr.reversed_at AT TIME ZONE 'Asia/Kolkata')::date >= $${revParams.length}::date`);
+      }
+      if (toDate) {
+        revParams.push(toDate);
+        revConditions.push(`(spr.reversed_at AT TIME ZONE 'Asia/Kolkata')::date <= $${revParams.length}::date`);
+      }
+
+      const cancelConditions = [`spbc.supplier_id = $1`];
+      const cancelParams: unknown[] = [supplierId];
+      if (fromDate) {
+        cancelParams.push(fromDate);
+        cancelConditions.push(`(spbc.cancelled_at AT TIME ZONE 'Asia/Kolkata')::date >= $${cancelParams.length}::date`);
+      }
+      if (toDate) {
+        cancelParams.push(toDate);
+        cancelConditions.push(`(spbc.cancelled_at AT TIME ZONE 'Asia/Kolkata')::date <= $${cancelParams.length}::date`);
+      }
+
+      // Execute sequentially on the single REPEATABLE READ transaction client
+      const billsRes = await client.query(
         `WITH alloc_rev AS (
           SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
           FROM supplier_payment_allocation_reversals
@@ -3255,8 +3260,9 @@ export class SuppliersService {
         LEFT JOIN active_bill_alloc aba ON aba.purchase_bill_id = spb.id
         WHERE ${billConditions.join(' AND ')}`,
         billParams
-      ),
-      appPool.query(
+      );
+
+      const paymentsRes = await client.query(
         `WITH alloc_rev AS (
           SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
           FROM supplier_payment_allocation_reversals
@@ -3288,8 +3294,9 @@ export class SuppliersService {
         LEFT JOIN active_pay_alloc apa ON apa.payment_id = sp.id
         WHERE ${payConditions.join(' AND ')}`,
         payParams
-      ),
-      appPool.query(
+      );
+
+      const reversalsRes = await client.query(
         `SELECT
           spr.id,
           spr.reversal_number,
@@ -3303,8 +3310,9 @@ export class SuppliersService {
         INNER JOIN supplier_payments sp ON sp.id = spr.payment_id
         WHERE ${revConditions.join(' AND ')}`,
         revParams
-      ),
-      appPool.query(
+      );
+
+      const cancellationsRes = await client.query(
         `SELECT
           spbc.id,
           spbc.purchase_bill_id,
@@ -3315,108 +3323,115 @@ export class SuppliersService {
         FROM supplier_purchase_bill_cancellations spbc
         WHERE ${cancelConditions.join(' AND ')}`,
         cancelParams
-      ),
-    ]);
+      );
 
-    const rawEntries: StatementEntryInput[] = [];
+      const rawEntries: StatementEntryInput[] = [];
 
-    for (const b of billsRes.rows) {
-      const grandTotal = new Decimal(b.grand_total || 0);
-      const paidAmount = new Decimal(b.paid_amount || 0);
-      const remaining = Decimal.max(grandTotal.minus(paidAmount), new Decimal(0));
-      const isCancelled = b.status === 'cancelled';
-      rawEntries.push({
-        entryType: 'purchase_bill',
-        entryDate: b.invoice_date,
-        sortOrder: 0,
-        id: Number(b.id),
-        referenceNumber: b.invoice_number,
-        description: isCancelled
-          ? `Purchase Bill ${b.invoice_number} [Cancelled later]`
-          : `Purchase Bill ${b.invoice_number}`,
-        amount: toFixedMoney(grandTotal),
-        billStatus: isCancelled
-          ? 'cancelled'
-          : remaining.isZero()
-            ? 'paid'
-            : paidAmount.greaterThan(0)
-              ? 'partial'
-              : 'unpaid',
-        billPaidAmount: toFixedMoney(paidAmount),
-        billRemainingAmount: isCancelled ? '0.00' : toFixedMoney(remaining),
-      });
+      for (const b of billsRes.rows) {
+        const grandTotal = new Decimal(b.grand_total || 0);
+        const paidAmount = new Decimal(b.paid_amount || 0);
+        const remaining = Decimal.max(grandTotal.minus(paidAmount), new Decimal(0));
+        const isCancelled = b.status === 'cancelled';
+        rawEntries.push({
+          entryType: 'purchase_bill',
+          entryDate: b.invoice_date,
+          sortOrder: 0,
+          id: Number(b.id),
+          referenceNumber: b.invoice_number,
+          description: isCancelled
+            ? `Purchase Bill ${b.invoice_number} [Cancelled later]`
+            : `Purchase Bill ${b.invoice_number}`,
+          amount: toFixedMoney(grandTotal),
+          billStatus: isCancelled
+            ? 'cancelled'
+            : remaining.isZero()
+              ? 'paid'
+              : paidAmount.greaterThan(0)
+                ? 'partial'
+                : 'unpaid',
+          billPaidAmount: toFixedMoney(paidAmount),
+          billRemainingAmount: isCancelled ? '0.00' : toFixedMoney(remaining),
+        });
+      }
+
+      for (const p of paymentsRes.rows) {
+        const amt = new Decimal(p.amount || 0);
+        const allocated = new Decimal(p.allocated_amount || 0);
+        const unallocated = p.status === 'active'
+          ? Decimal.max(amt.minus(allocated), new Decimal(0))
+          : new Decimal(0);
+        const methodLabel = p.payment_method.replace('_', ' ').toUpperCase();
+        rawEntries.push({
+          entryType: 'payment',
+          entryDate: p.payment_date,
+          sortOrder: 1,
+          id: Number(p.id),
+          referenceNumber: p.receipt_number,
+          description: `Payment ${p.receipt_number} (${methodLabel})${p.status === 'reversed' ? ' [Reversed]' : ''}`,
+          amount: toFixedMoney(amt),
+          paymentMethod: p.payment_method,
+          transactionReference: p.transaction_reference ?? null,
+          paymentStatus: p.status === 'reversed' ? 'reversed' : 'active',
+          paymentAllocatedAmount: toFixedMoney(allocated),
+          paymentUnallocatedAmount: toFixedMoney(unallocated),
+        });
+      }
+
+      for (const rev of reversalsRes.rows) {
+        const amt = new Decimal(rev.original_amount || 0);
+        rawEntries.push({
+          entryType: 'payment_reversal',
+          entryDate: rev.reversal_date,
+          sortOrder: 2,
+          id: Number(rev.id),
+          referenceNumber: rev.reversal_number,
+          description: `Reversal of ${rev.original_receipt_number} — ${rev.reason}`,
+          amount: toFixedMoney(amt),
+          paymentMethod: rev.payment_method,
+          transactionReference: rev.transaction_reference ?? null,
+          paymentStatus: 'reversed',
+          reversalReason: rev.reason,
+          originalPaymentReceipt: rev.original_receipt_number,
+        });
+      }
+
+      for (const cancel of cancellationsRes.rows) {
+        const amt = new Decimal(cancel.original_grand_total || 0);
+        rawEntries.push({
+          entryType: 'purchase_bill_cancellation',
+          entryDate: cancel.cancellation_date,
+          sortOrder: 3,
+          id: Number(cancel.id),
+          referenceNumber: cancel.invoice_number,
+          description: `Bill Cancellation (${cancel.invoice_number}) — ${cancel.reason}`,
+          amount: toFixedMoney(amt),
+          billStatus: 'cancelled',
+          cancellationReason: cancel.reason,
+          originalBillInvoiceNumber: cancel.invoice_number,
+        });
+      }
+
+      const statement = buildSupplierStatementLedger(
+        priorPurchases,
+        priorPayments,
+        rawEntries,
+        priorReversals,
+        priorCancellations
+      );
+
+      await client.query('COMMIT');
+
+      return {
+        supplier,
+        filters: { fromDate, toDate },
+        ...statement,
+      };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
     }
-
-    for (const p of paymentsRes.rows) {
-      const amt = new Decimal(p.amount || 0);
-      const allocated = new Decimal(p.allocated_amount || 0);
-      const unallocated = p.status === 'active'
-        ? Decimal.max(amt.minus(allocated), new Decimal(0))
-        : new Decimal(0);
-      const methodLabel = p.payment_method.replace('_', ' ').toUpperCase();
-      rawEntries.push({
-        entryType: 'payment',
-        entryDate: p.payment_date,
-        sortOrder: 1,
-        id: Number(p.id),
-        referenceNumber: p.receipt_number,
-        description: `Payment ${p.receipt_number} (${methodLabel})${p.status === 'reversed' ? ' [Reversed]' : ''}`,
-        amount: toFixedMoney(amt),
-        paymentMethod: p.payment_method,
-        transactionReference: p.transaction_reference ?? null,
-        paymentStatus: p.status === 'reversed' ? 'reversed' : 'active',
-        paymentAllocatedAmount: toFixedMoney(allocated),
-        paymentUnallocatedAmount: toFixedMoney(unallocated),
-      });
-    }
-
-    for (const rev of reversalsRes.rows) {
-      const amt = new Decimal(rev.original_amount || 0);
-      rawEntries.push({
-        entryType: 'payment_reversal',
-        entryDate: rev.reversal_date,
-        sortOrder: 2,
-        id: Number(rev.id),
-        referenceNumber: rev.reversal_number,
-        description: `Reversal of ${rev.original_receipt_number} — ${rev.reason}`,
-        amount: toFixedMoney(amt),
-        paymentMethod: rev.payment_method,
-        transactionReference: rev.transaction_reference ?? null,
-        paymentStatus: 'reversed',
-        reversalReason: rev.reason,
-        originalPaymentReceipt: rev.original_receipt_number,
-      });
-    }
-
-    for (const cancel of cancellationsRes.rows) {
-      const amt = new Decimal(cancel.original_grand_total || 0);
-      rawEntries.push({
-        entryType: 'purchase_bill_cancellation',
-        entryDate: cancel.cancellation_date,
-        sortOrder: 3,
-        id: Number(cancel.id),
-        referenceNumber: cancel.invoice_number,
-        description: `Bill Cancellation (${cancel.invoice_number}) — ${cancel.reason}`,
-        amount: toFixedMoney(amt),
-        billStatus: 'cancelled',
-        cancellationReason: cancel.reason,
-        originalBillInvoiceNumber: cancel.invoice_number,
-      });
-    }
-
-    const statement = buildSupplierStatementLedger(
-      priorPurchases,
-      priorPayments,
-      rawEntries,
-      priorReversals,
-      priorCancellations
-    );
-
-    return {
-      supplier,
-      filters: { fromDate, toDate },
-      ...statement,
-    };
   }
 
   public formatStatementCsv(statement: SupplierStatementResponse): string {

@@ -631,4 +631,122 @@ describe('FIFO Barcode Queue, Synchronous State Commit & BillingBarcodeControls 
     });
     containerEl.remove();
   });
+
+  it('allows up to 20 distinct scanned products, blocks the 21st distinct item cleanly, increments existing product at 20 rows, and never copies buying_price into rate', async () => {
+    const initial20 = Array.from({ length: 20 }, (_, idx) => ({
+      id: `row-${idx + 1}`,
+      productId: String(idx + 1),
+      description: `Existing Product ${idx + 1}`,
+      hsnCode: '4411',
+      quantity: '1',
+      rate: '',
+      buyingPriceReference: '100.00',
+    }));
+
+    // 1. Direct helper test: 20th distinct item succeeds on 19-row bill
+    const nineteenRows = initial20.slice(0, 19);
+    const prod20: ProductCatalogReference = {
+      id: 20,
+      name: 'Distinct Product 20',
+      buying_price: '250.00',
+      hsn_code: '4411',
+    };
+    const res20 = upsertScannedProductLine(nineteenRows, prod20, () => 'row-20', {
+      maxItems: 20,
+      maxItemsErrorMessage: 'A bill can contain a maximum of 20 items.',
+    });
+    expect(res20.error).toBeNull();
+    expect(res20.nextLines).toHaveLength(20);
+    expect(res20.nextLines[19].rate).toBe('');
+    expect(res20.nextLines[19].buyingPriceReference).toBe('250.00');
+
+    // 2. Direct helper test: 21st distinct item blocked while preserving all 20 rows
+    const prod21: ProductCatalogReference = {
+      id: 21,
+      name: 'Distinct Product 21',
+      buying_price: '300.00',
+      hsn_code: '4411',
+    };
+    const res21 = upsertScannedProductLine(res20.nextLines, prod21, () => 'row-21', {
+      maxItems: 20,
+      maxItemsErrorMessage: 'A bill can contain a maximum of 20 items.',
+    });
+    expect(res21.error).toBe('A bill can contain a maximum of 20 items.');
+    expect(res21.nextLines).toHaveLength(20);
+
+    // 3. Direct helper test: rescanning existing product #5 while at 20 rows still increments qty (+1)
+    const existing5: ProductCatalogReference = {
+      id: 5,
+      name: 'Existing Product 5',
+      buying_price: '100.00',
+      hsn_code: '4411',
+    };
+    const resInc = upsertScannedProductLine(res20.nextLines, existing5, () => 'unused', {
+      maxItems: 20,
+      maxItemsErrorMessage: 'A bill can contain a maximum of 20 items.',
+    });
+    expect(resInc.error).toBeNull();
+    expect(resInc.nextLines).toHaveLength(20);
+    expect(resInc.nextLines[4].quantity).toBe('2');
+    expect(resInc.nextLines[4].rate).toBe('');
+
+    // 4. Component-level BillingBarcodeControls callback test with 20 existing rows
+    const product21FromApi = { id: 21, name: 'Product 21', buying_price: '450.00', hsn_code: '4411', barcode: 'BAR-021' };
+    const product5FromApi = { id: 5, name: 'Existing Product 5', buying_price: '100.00', hsn_code: '4411', barcode: 'BAR-005' };
+    (barcodeApi.fetchProductByBarcode as any).mockImplementation(async (code: string) => {
+      if (code === 'BAR-021') return product21FromApi;
+      if (code === 'BAR-005') return product5FromApi;
+      throw new Error('Unexpected barcode');
+    });
+
+    let currentItems = [...initial20];
+    const containerEl = document.createElement('div');
+    document.body.appendChild(containerEl);
+    const r = createRoot(containerEl);
+
+    const handleResolve = (product: any) => {
+      const outcome = upsertScannedProductLine(currentItems, product, () => 'extra-row', {
+        maxItems: 20,
+        maxItemsErrorMessage: 'A bill can contain a maximum of 20 items.',
+      });
+      if (outcome.error) {
+        return { action: outcome.action, error: outcome.error };
+      }
+      currentItems = outcome.nextLines;
+      return { action: outcome.action, error: null };
+    };
+
+    await act(async () => {
+      r.render(React.createElement(BillingBarcodeControls, { onProductResolved: handleResolve }));
+    });
+
+    const inputEl = containerEl.querySelector<HTMLInputElement>('input[placeholder*="barcode" i]')!;
+    const submitBarcode = async (code: string) => {
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+        setter?.call(inputEl, code);
+        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await act(async () => {
+        inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      });
+    };
+
+    // Scanning 21st distinct product fails cleanly without mutating 20 rows
+    await submitBarcode('BAR-021');
+    expect(currentItems).toHaveLength(20);
+    expect(containerEl.textContent).toContain('A bill can contain a maximum of 20 items.');
+
+    // Scanning existing BAR-005 succeeds even at 20 rows and increments quantity without copying buying_price
+    await submitBarcode('BAR-005');
+    expect(currentItems).toHaveLength(20);
+    expect(currentItems[4].quantity).toBe('2');
+    expect(currentItems[4].rate).toBe('');
+
+    act(() => {
+      r.unmount();
+    });
+    containerEl.remove();
+  });
 });

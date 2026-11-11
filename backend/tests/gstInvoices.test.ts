@@ -3,6 +3,8 @@ import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { env } from '../src/config/env.js';
 import { appPool } from '../src/config/database.js';
+import { Decimal } from 'decimal.js';
+import { gstInvoicesService } from '../src/modules/gstInvoices/gstInvoices.service.js';
 import { numberToIndianWords, formatDateToIndian, generateTaxInvoicePdf } from '../src/modules/gstInvoices/gstInvoices.pdf.js';
 
 const TEST_PHONE = '9876543210';
@@ -708,5 +710,119 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('application/pdf');
+  });
+
+  it('9. Rejects invalid GST rates & malformed discounts (400) and >20 items while accepting 0, 5.5, 100%', async () => {
+    const basePayload = {
+      invoiceNumber: 'GST-VAL-1',
+      invoiceDate: '2026-11-02',
+      state: 'Uttar Pradesh',
+      stateCode: '09',
+      customerName: 'Sharma Construction',
+      customerState: 'Uttar Pradesh',
+      customerStateCode: '09',
+      gstRate: 18,
+      items: [{ description: 'Hardware Item', quantity: 2, rate: 100 }],
+    };
+
+    const invalidCases: Array<Record<string, unknown>> = [
+      { gstRate: -5 },
+      { gstRate: 100.01 },
+      { gstRate: '18.123' },
+      { gstRate: '1e1' },
+      { gstRate: 'abc' },
+      { discountType: 'percentage', discountValue: -1 },
+      { discountType: 'percentage', discountValue: 101 },
+      { discountType: 'fixed', discountValue: '1.234' },
+      { discountValue: '1e2' },
+    ];
+
+    for (const badFields of invalidCases) {
+      for (const endpoint of ['/api/v1/gst-invoices', '/api/v1/gst-invoices/preview-pdf']) {
+        const res = await request(app)
+          .post(endpoint)
+          .set('Cookie', authCookie)
+          .set('X-CSRF-Token', csrfToken)
+          .send({ ...basePayload, ...badFields });
+        expect(res.status).toBe(400);
+      }
+    }
+
+    const twentyOneItems = Array.from({ length: 21 }, (_, idx) => ({
+      description: `Hardware ${idx + 1}`,
+      quantity: 1,
+      rate: 10,
+    }));
+    const tooManyRes = await request(app)
+      .post('/api/v1/gst-invoices')
+      .set('Cookie', authCookie)
+      .set('X-CSRF-Token', csrfToken)
+      .send({ ...basePayload, items: twentyOneItems });
+    expect(tooManyRes.status).toBe(400);
+
+    // Valid boundary GST rates: 0, 5.5, 100
+    let lastInsertedParams: any[] = [];
+    const mockClient = {
+      query: vi.fn().mockImplementation(async (sql: any, params?: any[]) => {
+        const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
+        if (sqlText.includes('FROM quotation_settings')) {
+          return { rows: [{ company_name: 'ALGIONS AI LABS PRIVATE LIMITED', gstin: '09AAAAA0000A1Z0', state: 'Uttar Pradesh', state_code: '09' }], rowCount: 1 };
+        }
+        if (sqlText.includes('SELECT 1 FROM gst_invoices WHERE invoice_number')) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (sqlText.includes('INSERT INTO gst_invoices')) {
+          lastInsertedParams = params || [];
+          return {
+            rows: [
+              {
+                id: 88,
+                invoice_number: lastInsertedParams[0],
+                invoice_date: '2026-11-02',
+                customer_name: 'Sharma Construction',
+                taxable_amount: lastInsertedParams[18],
+                cgst_rate: lastInsertedParams[19],
+                cgst_amount: lastInsertedParams[20],
+                sgst_rate: lastInsertedParams[21],
+                sgst_amount: lastInsertedParams[22],
+                igst_rate: lastInsertedParams[23],
+                igst_amount: lastInsertedParams[24],
+                tax_amount: lastInsertedParams[25],
+                grand_total: lastInsertedParams[26],
+                pdf_status: 'local_only',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        if (sqlText.includes('INSERT INTO gst_invoice_items')) {
+          return { rows: [{ id: 1, invoice_id: 88, item_index: 1, description: 'Hardware Item', quantity: '2.00', rate: '100.00', amount: '200.00' }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    vi.spyOn(appPool, 'connect').mockResolvedValue(mockClient as any);
+
+    for (const validRate of [0, 5.5, 100]) {
+      const okRes = await request(app)
+        .post('/api/v1/gst-invoices')
+        .set('Cookie', authCookie)
+        .set('X-CSRF-Token', csrfToken)
+        .send({ ...basePayload, gstRate: validRate });
+      expect(okRes.status).toBe(201);
+    }
+
+    // Verify ROUND_HALF_UP parity between backend service and frontend formula on 5.5% intra-state tax on 199.00
+    await gstInvoicesService.createInvoiceInTransaction(mockClient as any, {
+      ...basePayload,
+      gstRate: '5.5',
+      items: [{ description: 'Boundary Item', quantity: 1, rate: 199 }],
+    });
+    const halfRate = new Decimal('5.5').dividedBy(2);
+    const expectedHalfTax = new Decimal('199.00').times(halfRate).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    expect(lastInsertedParams[20]).toBe(expectedHalfTax.toFixed(2));
+    expect(lastInsertedParams[22]).toBe(expectedHalfTax.toFixed(2));
+    expect(lastInsertedParams[26]).toBe(new Decimal('199.00').plus(expectedHalfTax.times(2)).toFixed(2));
   });
 });

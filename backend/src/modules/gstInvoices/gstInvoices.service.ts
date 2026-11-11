@@ -20,7 +20,12 @@ import {
 } from '../../services/idempotency.service.js';
 import { StorageService } from '../../services/storage.service.js';
 import { AppError } from '../../utils/errors.js';
-import { validateMoneyInput, validateDecimalQuantityInput } from '../../utils/validation.js';
+import {
+  validateMoneyInput,
+  validateDecimalQuantityInput,
+  resolveValidatedDiscount,
+  calculateGstBreakdown,
+} from '../../utils/validation.js';
 import {
   generateTaxInvoicePdf,
   numberToIndianWords,
@@ -55,10 +60,10 @@ export interface CreateGstInvoiceInput {
   customerState?: string | null;
   customerStateCode?: string | null;
   gstRate: number | string; // e.g. 18 for 18% GST, 5, 12, 28, or 0
-  subtotalAmount?: number | string;
+  subtotalAmount?: number | string | null;
   discountType?: 'percentage' | 'fixed' | null;
-  discountValue?: number | string;
-  discountAmount?: number | string;
+  discountValue?: number | string | null;
+  discountAmount?: number | string | null;
   items: CreateGstInvoiceItemInput[];
   notes?: string | null;
   idempotencyKey?: string | null;
@@ -245,53 +250,26 @@ export class GstInvoicesService {
       });
     }
 
-    // 3. Discount calculations
-    const discountType = input.discountType || null;
-    const discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    let discountAmountDec = new Decimal(0);
-
-    if (discountType === 'percentage') {
-      if (discountValDec.isNegative() || discountValDec.greaterThan(100)) {
-        throw new AppError('Discount percentage must be between 0 and 100.', 400, 'INVALID_DISCOUNT');
-      }
-      discountAmountDec = subtotalDec.times(discountValDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    } else if (discountType === 'fixed') {
-      if (discountValDec.isNegative()) {
-        throw new AppError('Discount fixed amount cannot be negative.', 400, 'INVALID_DISCOUNT');
-      }
-      discountAmountDec = Decimal.min(discountValDec, subtotalDec);
-    } else if (input.discountAmount) {
-      discountAmountDec = validateMoneyInput(input.discountAmount, 'Discount amount', { allowZero: true });
-      discountAmountDec = Decimal.min(discountAmountDec, subtotalDec);
-    }
+    // 3. Strict discount validation and Decimal.js calculation
+    const {
+      discountType,
+      discountValueDec: discountValDec,
+      discountAmountDec,
+    } = resolveValidatedDiscount(subtotalDec, input);
 
     // Taxable amount is subtotal minus discount
     const taxableAmountDec = subtotalDec.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 
-    // 4. GST calculations (Intra-state vs Inter-state)
-    const gstRateDec = new Decimal(input.gstRate || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    if (gstRateDec.isNegative() || !gstRateDec.isFinite() || gstRateDec.greaterThan(100)) {
-      throw new AppError('GST rate must be between 0 and 100 with at most 2 decimal places.', 400, 'INVALID_GST_RATE');
-    }
-
-    let cgstRateDec = new Decimal(0);
-    let cgstAmountDec = new Decimal(0);
-    let sgstRateDec = new Decimal(0);
-    let sgstAmountDec = new Decimal(0);
-    let igstRateDec = new Decimal(0);
-    let igstAmountDec = new Decimal(0);
-
-    if (isIntraState) {
-      cgstRateDec = gstRateDec.dividedBy(2).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-      sgstRateDec = gstRateDec.minus(cgstRateDec);
-      cgstAmountDec = taxableAmountDec.times(cgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-      sgstAmountDec = taxableAmountDec.times(sgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    } else {
-      igstRateDec = gstRateDec;
-      igstAmountDec = taxableAmountDec.times(igstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    }
-
-    const totalTaxDec = cgstAmountDec.plus(sgstAmountDec).plus(igstAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    // 4. Strict GST rate validation and Intra-state / Inter-state split
+    const {
+      cgstRateDec,
+      cgstAmountDec,
+      sgstRateDec,
+      sgstAmountDec,
+      igstRateDec,
+      igstAmountDec,
+      totalTaxDec,
+    } = calculateGstBreakdown(taxableAmountDec, input.gstRate, isIntraState);
     const grandTotalDec = taxableAmountDec.plus(totalTaxDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     const amountInWords = numberToIndianWords(grandTotalDec.toFixed(2));
 
@@ -787,52 +765,26 @@ export class GstInvoicesService {
       });
     }
 
-    const discountType = input.discountType || null;
-    const discountValDec = new Decimal(input.discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    let discountAmountDec = new Decimal(0);
-
-    if (discountType === 'percentage') {
-      if (discountValDec.isNegative() || discountValDec.greaterThan(100)) {
-        throw new AppError('Discount percentage must be between 0 and 100.', 400, 'INVALID_DISCOUNT');
-      }
-      discountAmountDec = subtotalDec.times(discountValDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    } else if (discountType === 'fixed') {
-      if (discountValDec.isNegative()) {
-        throw new AppError('Discount fixed amount cannot be negative.', 400, 'INVALID_DISCOUNT');
-      }
-      discountAmountDec = Decimal.min(discountValDec, subtotalDec);
-    } else if (input.discountAmount) {
-      discountAmountDec = Decimal.min(new Decimal(input.discountAmount || 0), subtotalDec);
-    }
+    const {
+      discountType,
+      discountValueDec: discountValDec,
+      discountAmountDec,
+    } = resolveValidatedDiscount(subtotalDec, input);
 
     const taxableAmountDec = subtotalDec.minus(discountAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 
     const shopStateCode = resolvedSupplier.stateCode!;
     const customerStateCode = resolvedCustomer.stateCode!;
     const isIntraState = shopStateCode === customerStateCode;
-    const gstRateDec = new Decimal(input.gstRate || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    if (gstRateDec.isNegative() || !gstRateDec.isFinite() || gstRateDec.greaterThan(100)) {
-      throw new AppError('GST rate must be between 0 and 100 with at most 2 decimal places.', 400, 'INVALID_GST_RATE');
-    }
-
-    let cgstRateDec = new Decimal(0);
-    let cgstAmountDec = new Decimal(0);
-    let sgstRateDec = new Decimal(0);
-    let sgstAmountDec = new Decimal(0);
-    let igstRateDec = new Decimal(0);
-    let igstAmountDec = new Decimal(0);
-
-    if (isIntraState) {
-      cgstRateDec = gstRateDec.dividedBy(2).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-      sgstRateDec = gstRateDec.minus(cgstRateDec);
-      cgstAmountDec = taxableAmountDec.times(cgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-      sgstAmountDec = taxableAmountDec.times(sgstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    } else {
-      igstRateDec = gstRateDec;
-      igstAmountDec = taxableAmountDec.times(igstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    }
-
-    const totalTaxDec = cgstAmountDec.plus(sgstAmountDec).plus(igstAmountDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const {
+      cgstRateDec,
+      cgstAmountDec,
+      sgstRateDec,
+      sgstAmountDec,
+      igstRateDec,
+      igstAmountDec,
+      totalTaxDec,
+    } = calculateGstBreakdown(taxableAmountDec, input.gstRate, isIntraState);
     const grandTotalDec = taxableAmountDec.plus(totalTaxDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     const amountInWords = numberToIndianWords(grandTotalDec.toFixed(2));
     const invoiceNumber = input.invoiceNumber || 'Draft';

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Archive,
   Download,
@@ -33,6 +33,7 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
   const [loadingStatement, setLoadingStatement] = useState(false);
   const [downloadingCsv, setDownloadingCsv] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const statementRequestIdRef = useRef(0);
 
   useEffect(() => {
     if (initialSupplierId) {
@@ -63,44 +64,78 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
     };
   }, []);
 
-  const loadStatement = async (supId = selectedSupplierId, start = fromDate, end = toDate) => {
+  const loadStatement = useCallback(async (supId: string, start: string, end: string) => {
+    const requestId = ++statementRequestIdRef.current;
+
     if (!supId) {
       setStatement(null);
+      setLoadingStatement(false);
+      setError(null);
       return;
     }
+
     if (start && end && end < start) {
+      setStatement(null);
+      setLoadingStatement(false);
       setError('End date cannot be earlier than start date.');
       return;
     }
+
     setLoadingStatement(true);
     setError(null);
+    setStatement(null);
+
     try {
       const res = await fetchSupplierStatementApi(supId, {
         fromDate: start || undefined,
         toDate: end || undefined,
       });
+      if (requestId !== statementRequestIdRef.current) {
+        return;
+      }
       setStatement(res);
     } catch (err: any) {
+      if (requestId !== statementRequestIdRef.current) {
+        return;
+      }
+      setStatement(null);
       setError(err?.message || 'Failed to load supplier statement.');
     } finally {
-      setLoadingStatement(false);
+      if (requestId === statementRequestIdRef.current) {
+        setLoadingStatement(false);
+      }
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (selectedSupplierId) {
       void loadStatement(selectedSupplierId, fromDate, toDate);
+    } else {
+      statementRequestIdRef.current += 1;
+      setStatement(null);
+      setError(null);
+      setLoadingStatement(false);
     }
-  }, [selectedSupplierId]);
+    return () => {
+      statementRequestIdRef.current += 1;
+    };
+  }, [selectedSupplierId, loadStatement]);
+
+  const statementMatchesCurrentSelection = Boolean(
+    statement &&
+      statement.supplier.id === selectedSupplierId &&
+      (statement.filters.fromDate || '') === fromDate &&
+      (statement.filters.toDate || '') === toDate
+  );
 
   const handleExportCsv = async () => {
-    if (!statement) return;
+    if (!statement || !statementMatchesCurrentSelection || loadingStatement) return;
     setDownloadingCsv(true);
     setError(null);
     try {
       await downloadSupplierStatementCsvApi(statement.supplier.id, statement.supplier.name, {
-        fromDate: fromDate || undefined,
-        toDate: toDate || undefined,
+        fromDate: statement.filters.fromDate || undefined,
+        toDate: statement.filters.toDate || undefined,
       });
     } catch (err: any) {
       setError(err?.message || 'Failed to export CSV.');
@@ -136,7 +171,7 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              disabled={!statement}
+              disabled={!statement || loadingStatement || !statementMatchesCurrentSelection}
               onClick={() => window.print()}
               className="neu-btn-secondary text-xs px-3.5 py-1.5 font-bold inline-flex items-center gap-1.5 disabled:opacity-40"
             >
@@ -145,7 +180,7 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
             </button>
             <button
               type="button"
-              disabled={!statement || downloadingCsv}
+              disabled={!statement || loadingStatement || downloadingCsv || !statementMatchesCurrentSelection}
               onClick={() => void handleExportCsv()}
               className="neu-btn-primary text-xs px-3.5 py-1.5 font-bold inline-flex items-center gap-1.5 disabled:opacity-40"
             >
@@ -167,7 +202,12 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
             <select
               disabled={loadingSuppliers}
               value={selectedSupplierId}
-              onChange={(e) => setSelectedSupplierId(e.target.value)}
+              onChange={(e) => {
+                statementRequestIdRef.current += 1;
+                setStatement(null);
+                setError(null);
+                setSelectedSupplierId(e.target.value);
+              }}
               className="neu-input w-full text-xs font-semibold"
             >
               <option value="">-- Select Supplier --</option>
@@ -215,7 +255,7 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
               <RefreshCw className={`w-3.5 h-3.5 ${loadingStatement ? 'animate-spin' : ''}`} />
               <span>Apply</span>
             </button>
-            {(fromDate || toDate) && (
+            {(fromDate || toDate || statement?.filters.fromDate || statement?.filters.toDate) && (
               <button
                 type="button"
                 onClick={() => {
@@ -230,6 +270,12 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
             )}
           </div>
         </div>
+
+        {statement && !statementMatchesCurrentSelection && !loadingStatement && (
+          <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-xs font-semibold">
+            Filter dates changed — click Apply to refresh this statement before printing or exporting CSV.
+          </div>
+        )}
       </div>
 
       {error && (

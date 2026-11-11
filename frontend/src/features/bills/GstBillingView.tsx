@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import Decimal from 'decimal.js';
 import {
   FileText,
@@ -30,7 +31,6 @@ import {
   mapRecordToInvoiceProps,
   GstInvoiceRecord,
 } from './gstInvoicesApi.js';
-import { apiClient } from '../../lib/apiClient.js';
 import { fetchQuotationSettings } from '../quotations/quotationApi.js';
 import {
   INDIAN_STATES,
@@ -44,26 +44,24 @@ import {
   upsertScannedProductLine,
   validateQuantityInput,
   validateSellingRateInput,
+  decimalOrZero,
+  validatePercentageDraftInput,
 } from '../../utils/lineItemDraft.js';
 import { BillingBarcodeControls } from '../barcode/BillingBarcodeControls.js';
+import { MAX_BILL_LINE_ITEMS } from '../../utils/billingLimits.js';
+import {
+  usePaginatedProductSearch,
+  usePaginatedCustomerSearch,
+  ProductCatalogOption,
+  CustomerCatalogOption,
+} from './useBillingCatalogueSearch.js';
+import {
+  CustomerPickerDropdown,
+  ProductPickerPopover,
+} from './BillingCataloguePickers.js';
 
-interface ProductItem {
-  id: number;
-  name: string;
-  buying_price: string;
-  hsn_code?: string | null;
-  barcode?: string | null;
-}
-
-interface CustomerItem {
-  id: number;
-  name: string;
-  phone?: string | null;
-  address?: string | null;
-  gstin?: string | null;
-  state?: string | null;
-  state_code?: string | null;
-}
+type ProductItem = ProductCatalogOption;
+type CustomerItem = CustomerCatalogOption;
 
 interface FormLineItem {
   id: string; // client temporary ID
@@ -171,14 +169,32 @@ export const GstBillingView: React.FC = () => {
     }
   }, [previewInvoice, autoPrintAfterPreview]);
 
-  // Existing products & customers lookup
-  const [availableProducts, setAvailableProducts] = useState<ProductItem[]>([]);
-  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
-  const [availableCustomers, setAvailableCustomers] = useState<CustomerItem[]>([]);
-  const [customerSearch, setCustomerSearch] = useState('');
+  // Server-side paginated product & customer search
+  const {
+    items: availableProducts,
+    searchQuery: productPickerSearch,
+    setSearchQuery: setProductPickerSearch,
+    isLoading: isLoadingProducts,
+    isLoadingMore: isLoadingMoreProducts,
+    error: productsError,
+    hasMore: hasMoreProducts,
+    loadMore: loadMoreProducts,
+    prependItem: prependCatalogProduct,
+  } = usePaginatedProductSearch();
+
+  const {
+    items: availableCustomers,
+    searchQuery: customerSearch,
+    setSearchQuery: setCustomerSearch,
+    isLoading: isLoadingCustomers,
+    isLoadingMore: isLoadingMoreCustomers,
+    error: customersError,
+    hasMore: hasMoreCustomers,
+    loadMore: loadMoreCustomers,
+  } = usePaginatedCustomerSearch();
+
   const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
   const [openProductPickerItemId, setOpenProductPickerItemId] = useState<string | null>(null);
-  const [productPickerSearch, setProductPickerSearch] = useState('');
 
   // History list states
   const [historyInvoices, setHistoryInvoices] = useState<GstInvoiceRecord[]>([]);
@@ -187,6 +203,8 @@ export const GstBillingView: React.FC = () => {
   const [historyDateFrom, setHistoryDateFrom] = useState('');
   const [historyDateTo, setHistoryDateTo] = useState('');
   const [historyPage, setHistoryPage] = useState(0);
+  const debouncedHistorySearch = useDebouncedValue(historySearch, 300);
+  const historyRequestIdRef = useRef(0);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const customerDropdownRef = useRef<HTMLDivElement>(null);
@@ -210,8 +228,6 @@ export const GstBillingView: React.FC = () => {
   useEffect(() => {
     loadCompanyProfile();
     fetchNextNumber();
-    fetchProducts();
-    fetchCustomers();
   }, []);
 
   const loadCompanyProfile = async () => {
@@ -248,95 +264,42 @@ export const GstBillingView: React.FC = () => {
     }
   };
 
-  const fetchProducts = async () => {
-    try {
-      setIsLoadingProducts(true);
-      const all: ProductItem[] = [];
-      let offset = 0;
-      let hasMore = true;
+  // Products and customers are fetched via server-side paginated search hooks above.
 
-      while (hasMore && offset < 1000) {
-        const res = await apiClient<{
-          success: boolean;
-          data: ProductItem[];
-          pagination?: { hasMore: boolean; nextOffset: number | null };
-        }>(`/api/v1/products?limit=50&offset=${offset}`);
-
-        if (res.data?.data && Array.isArray(res.data.data)) {
-          all.push(...res.data.data);
-          if (res.data.pagination?.hasMore && res.data.pagination?.nextOffset) {
-            offset = res.data.pagination.nextOffset;
-          } else {
-            hasMore = false;
-          }
-        } else {
-          hasMore = false;
-        }
-      }
-      setAvailableProducts(all);
-    } catch (err) {
-      console.warn('Error fetching products:', err);
-    } finally {
-      setIsLoadingProducts(false);
-    }
-  };
-
-  const fetchCustomers = async () => {
-    try {
-      const all: CustomerItem[] = [];
-      let offset = 0;
-      let hasMore = true;
-
-      while (hasMore && offset < 1000) {
-        const res = await apiClient<{
-          success: boolean;
-          customers: CustomerItem[];
-          pagination?: { hasMore: boolean; nextOffset: number | null };
-        }>(`/api/v1/khata/customers?limit=200&offset=${offset}`);
-
-        const custs = res.data?.customers || (res.data as any)?.data;
-        if (custs && Array.isArray(custs) && custs.length > 0) {
-          all.push(...custs);
-          if (res.data?.pagination?.hasMore && res.data.pagination.nextOffset) {
-            offset = res.data.pagination.nextOffset;
-          } else {
-            hasMore = false;
-          }
-        } else {
-          hasMore = false;
-        }
-      }
-      setAvailableCustomers(all);
-    } catch (err) {
-      console.warn('Error fetching customers:', err);
-    }
-  };
-
-  // Load history when tab is switched
-  useEffect(() => {
-    if (activeSubTab === 'history') {
-      loadHistory();
-    }
-  }, [activeSubTab, historyPage, historySearch, historyDateFrom, historyDateTo]);
-
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
+    const requestId = ++historyRequestIdRef.current;
+    const trimmedSearch = debouncedHistorySearch.trim();
     try {
       setIsLoadingHistory(true);
       const res = await listGstInvoices({
-        search: historySearch,
+        search: trimmedSearch || undefined,
         dateFrom: historyDateFrom || undefined,
         dateTo: historyDateTo || undefined,
         limit: 15,
         offset: historyPage * 15,
       });
+      if (requestId !== historyRequestIdRef.current) return;
       setHistoryInvoices(res.invoices);
       setHistoryTotal(res.pagination.total);
     } catch (err: any) {
+      if (requestId !== historyRequestIdRef.current) return;
       setErrorMessage(err.message || 'Failed to load invoice history.');
     } finally {
-      setIsLoadingHistory(false);
+      if (requestId === historyRequestIdRef.current) {
+        setIsLoadingHistory(false);
+      }
     }
-  };
+  }, [historyPage, debouncedHistorySearch, historyDateFrom, historyDateTo]);
+
+  // Load history when tab is switched
+  useEffect(() => {
+    if (activeSubTab === 'history') {
+      void loadHistory();
+    }
+    return () => {
+      historyRequestIdRef.current += 1;
+    };
+  }, [activeSubTab, loadHistory]);
 
   // Safe Financial Calculation
   const isIntraState = useMemo(() => {
@@ -349,9 +312,12 @@ export const GstBillingView: React.FC = () => {
     let taxableDec = new Decimal(0);
 
     const computedItems = items.map((item) => {
-      const q = new Decimal(item.quantity || 0);
-      const r = new Decimal(item.rate || 0);
-      const lineAmt = q.isPositive() && r.isFinite() ? q.times(r).toDecimalPlaces(2, Decimal.ROUND_HALF_UP) : new Decimal(0);
+      const q = decimalOrZero(item.quantity);
+      const r = decimalOrZero(item.rate);
+      const lineAmt =
+        q.isPositive() && r.isFinite() && !r.isNegative()
+          ? q.times(r).toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+          : new Decimal(0);
       taxableDec = taxableDec.plus(lineAmt);
       return {
         ...item,
@@ -359,7 +325,10 @@ export const GstBillingView: React.FC = () => {
       };
     });
 
-    const gstRateDec = new Decimal(gstRate || 0);
+    const parsedGstRateDec = decimalOrZero(gstRate);
+    const gstRateDec = parsedGstRateDec.isNegative()
+      ? new Decimal(0)
+      : Decimal.min(parsedGstRateDec, 100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     let cgstRateVal = 0;
     let sgstRateVal = 0;
     let igstRateVal = 0;
@@ -378,7 +347,7 @@ export const GstBillingView: React.FC = () => {
       sgstAmountDec = taxableDec.times(sgstDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     } else {
       igstRateVal = gstRateDec.toNumber();
-      igstAmountDec = taxableDec.times(igstRateVal).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      igstAmountDec = taxableDec.times(gstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     }
 
     const totalTaxDec = cgstAmountDec.plus(sgstAmountDec).plus(igstAmountDec);
@@ -460,19 +429,29 @@ export const GstBillingView: React.FC = () => {
 
   // Add line item
   const handleAddItem = () => {
-    commitItems((prev) => [
-      ...prev,
-      {
-        id: `item-${Date.now()}-${Math.random()}`,
-        productId: null,
-        description: '',
-        hsnCode: '',
-        quantity: '1',
-        unit: 'pcs',
-        rate: '',
-        rateUnit: '',
-      },
-    ]);
+    if (itemsRef.current.length >= MAX_BILL_LINE_ITEMS) {
+      setErrorMessage(`A bill can contain a maximum of ${MAX_BILL_LINE_ITEMS} items.`);
+      return;
+    }
+    setErrorMessage(null);
+    commitItems((prev) => {
+      if (prev.length >= MAX_BILL_LINE_ITEMS) {
+        return prev;
+      }
+      return [
+        ...prev,
+        {
+          id: `item-${Date.now()}-${Math.random()}`,
+          productId: null,
+          description: '',
+          hsnCode: '',
+          quantity: '1',
+          unit: 'pcs',
+          rate: '',
+          rateUnit: '',
+        },
+      ];
+    });
   };
 
   // Remove line item
@@ -511,20 +490,31 @@ export const GstBillingView: React.FC = () => {
 
   const handleBarcodeResolved = useCallback(
     (product: ProductCatalogReference) => {
-      const res = upsertScannedProductLine(itemsRef.current, product, () => ({
-        id: `item-${Date.now()}-${Math.random()}`,
-        productId: null,
-        description: '',
-        hsnCode: '',
-        barcode: '',
-        buyingPriceReference: null,
-        quantity: '1',
-        unit: 'pcs',
-        rate: '',
-        rateUnit: '',
-      }));
+      const res = upsertScannedProductLine(
+        itemsRef.current,
+        product,
+        () => ({
+          id: `item-${Date.now()}-${Math.random()}`,
+          productId: null,
+          description: '',
+          hsnCode: '',
+          barcode: '',
+          buyingPriceReference: null,
+          quantity: '1',
+          unit: 'pcs',
+          rate: '',
+          rateUnit: '',
+        }),
+        {
+          maxItems: MAX_BILL_LINE_ITEMS,
+          maxItemsErrorMessage: `A bill can contain a maximum of ${MAX_BILL_LINE_ITEMS} items.`,
+        }
+      );
       if (!res.error) {
         commitItems(res.nextLines);
+        setErrorMessage(null);
+      } else {
+        setErrorMessage(res.error);
       }
       return { action: res.action, error: res.error };
     },
@@ -544,6 +534,9 @@ export const GstBillingView: React.FC = () => {
   };
 
   const validateGstForm = (requireCustomerName: boolean): string | null => {
+    if (items.length > MAX_BILL_LINE_ITEMS) {
+      return `A bill can contain a maximum of ${MAX_BILL_LINE_ITEMS} items.`;
+    }
     if (!state.trim() || !stateCode.trim()) {
       return 'Company tax profile is incomplete. Please configure your Seller State in Quotations Company Settings.';
     }
@@ -553,6 +546,8 @@ export const GstBillingView: React.FC = () => {
     if (!customerState.trim() || !customerStateCode.trim()) {
       return 'Please select the Customer State & State Code for GST calculation.';
     }
+    const gstErr = validatePercentageDraftInput(gstRate, 'GST Rate');
+    if (gstErr) return gstErr;
     for (let idx = 0; idx < items.length; idx++) {
       const itm = items[idx];
       if (!itm.description.trim()) {
@@ -968,48 +963,17 @@ export const GstBillingView: React.FC = () => {
                     </button>
 
                     {isCustomerDropdownOpen && (
-                      <div
-                        className="absolute right-0 top-full mt-2 w-72 max-w-[85vw] p-2 rounded-xl border border-[var(--khata-border)] shadow-xl z-20 space-y-2"
-                        style={{ background: 'var(--khata-surface)' }}
-                      >
-                        <input
-                          type="text"
-                          placeholder="Search customer..."
-                          value={customerSearch}
-                          onChange={(e) => setCustomerSearch(e.target.value)}
-                          className="neu-input w-full text-xs p-1.5"
-                        />
-                        <div className="max-h-48 overflow-y-auto space-y-1">
-                          {availableCustomers
-                            .filter((c) =>
-                              c.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
-                              (c.phone && c.phone.includes(customerSearch))
-                            )
-                            .map((c) => (
-                              <button
-                                key={c.id}
-                                type="button"
-                                onClick={() => handleSelectCustomer(c)}
-                                className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex items-center justify-between"
-                              >
-                                <div>
-                                  <span className="font-bold text-[var(--khata-text)] block truncate">{c.name}</span>
-                                  {c.address && (
-                                    <span className="text-[10px] text-[var(--khata-text-muted)] block truncate max-w-[180px]">
-                                      {c.address}
-                                    </span>
-                                  )}
-                                </div>
-                                {c.phone && <span className="text-[10px] text-[var(--khata-text-muted)] font-mono ml-2">{c.phone}</span>}
-                              </button>
-                            ))}
-                          {availableCustomers.length === 0 && (
-                            <div className="p-2 text-center text-xs text-[var(--khata-text-muted)]">
-                              No Khata customers found.
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                      <CustomerPickerDropdown
+                        customers={availableCustomers}
+                        search={customerSearch}
+                        onSearchChange={setCustomerSearch}
+                        isLoading={isLoadingCustomers}
+                        isLoadingMore={isLoadingMoreCustomers}
+                        error={customersError}
+                        hasMore={hasMoreCustomers}
+                        onLoadMore={loadMoreCustomers}
+                        onSelectCustomer={handleSelectCustomer}
+                      />
                     )}
                   </div>
                 </div>
@@ -1144,15 +1108,31 @@ export const GstBillingView: React.FC = () => {
                     <Package className="w-4 h-4 text-[var(--khata-accent)]" />
                     <span>C. Product Selection &amp; Line Items</span>
                   </h3>
-                  <button
-                    type="button"
-                    onClick={handleAddItem}
-                    className="neu-btn-primary text-xs px-3 py-1.5 flex items-center gap-1"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add Item</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-bold text-[var(--khata-text-muted)]">
+                      {items.length}/{MAX_BILL_LINE_ITEMS} items
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleAddItem}
+                      disabled={items.length >= MAX_BILL_LINE_ITEMS}
+                      title={
+                        items.length >= MAX_BILL_LINE_ITEMS
+                          ? `Maximum limit of ${MAX_BILL_LINE_ITEMS} items reached`
+                          : 'Add line item'
+                      }
+                      className="neu-btn-primary text-xs px-3 py-1.5 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Item</span>
+                    </button>
+                  </div>
                 </div>
+                {items.length >= MAX_BILL_LINE_ITEMS && (
+                  <div className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-1.5">
+                    Maximum limit of {MAX_BILL_LINE_ITEMS} line items reached. You can still increase quantity for existing products.
+                  </div>
+                )}
 
                 <BillingBarcodeControls
                   enableGlobalScanner={
@@ -1160,16 +1140,13 @@ export const GstBillingView: React.FC = () => {
                   }
                   onProductResolved={handleBarcodeResolved}
                   onCatalogProductCreated={(created) => {
-                    setAvailableProducts((prev) => [
-                      {
-                        id: created.id,
-                        name: created.name,
-                        buying_price: created.buying_price,
-                        hsn_code: created.hsn_code ?? null,
-                        barcode: created.barcode ?? null,
-                      },
-                      ...prev,
-                    ]);
+                    prependCatalogProduct({
+                      id: created.id,
+                      name: created.name,
+                      buying_price: created.buying_price,
+                      hsn_code: created.hsn_code ?? null,
+                      barcode: created.barcode ?? null,
+                    });
                   }}
                 />
 
@@ -1214,7 +1191,7 @@ export const GstBillingView: React.FC = () => {
                             {item.productId ? (
                               <div className="flex items-center gap-1.5 text-[10px]">
                                 <span className="text-[var(--khata-accent)] font-semibold truncate max-w-[200px]">
-                                  ✓ Linked: {availableProducts.find((p) => Number(p.id) === Number(item.productId))?.name || 'Catalogue Product'}
+                                  ✓ Linked: {availableProducts.find((p) => Number(p.id) === Number(item.productId))?.name || item.description || 'Catalogue Product'}
                                 </span>
                                 <button
                                   type="button"
@@ -1252,7 +1229,8 @@ export const GstBillingView: React.FC = () => {
                                   </span>
                                 ) : availableProducts.length > 0 ? (
                                   <span className="text-[10px] text-[var(--khata-text-muted)]">
-                                    {availableProducts.length} in catalogue
+                                    {availableProducts.length}
+                                    {hasMoreProducts ? '+' : ''} loaded
                                   </span>
                                 ) : null}
                               </div>
@@ -1263,7 +1241,6 @@ export const GstBillingView: React.FC = () => {
                         <div className="relative" ref={openProductPickerItemId === item.id ? productPickerRef : undefined}>
                           <input
                             type="text"
-                            list={`product-options-${item.id}`}
                             value={item.description}
                             onChange={(e) => {
                               const val = e.target.value;
@@ -1277,79 +1254,28 @@ export const GstBillingView: React.FC = () => {
                                 handleItemChange(item.id, 'description', val);
                               }
                             }}
-                            placeholder="Type to search product from catalogue or enter custom description..."
+                            placeholder="Enter item description or use Pick Product to search catalogue..."
                             className="neu-input w-full font-medium text-xs"
                           />
-                          <datalist id={`product-options-${item.id}`}>
-                            {availableProducts.map((p) => (
-                              <option key={p.id} value={p.name}>
-                                {p.hsn_code ? `HSN: ${p.hsn_code} | ` : ''}Ref: ₹{p.buying_price}
-                              </option>
-                            ))}
-                          </datalist>
 
-                          {/* Interactive Product Popover Picker */}
+                          {/* Server-Paginated Product Popover Picker */}
                           {openProductPickerItemId === item.id && (
-                            <div
-                              className="absolute left-0 right-0 top-full mt-1.5 p-2 rounded-xl border border-[var(--khata-border)] shadow-2xl z-30 space-y-2 animate-in fade-in"
-                              style={{ background: 'var(--khata-surface)' }}
-                            >
-                              <div className="flex items-center justify-between text-[10px] font-bold text-[var(--khata-text-muted)] pb-1 border-b border-[var(--khata-border)]">
-                                <span>SELECT PRODUCT FROM CATALOGUE ({availableProducts.length})</span>
-                                <button
-                                  type="button"
-                                  onClick={() => setOpenProductPickerItemId(null)}
-                                  className="text-neutral-400 hover:text-neutral-600 p-0.5 cursor-pointer"
-                                >
-                                  <X className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                              <input
-                                type="text"
-                                placeholder="Search products by name or HSN..."
-                                value={productPickerSearch}
-                                onChange={(e) => setProductPickerSearch(e.target.value)}
-                                className="neu-input w-full text-xs p-1.5"
-                                autoFocus
-                              />
-                              <div className="max-h-48 overflow-y-auto space-y-1">
-                                {availableProducts
-                                  .filter(
-                                    (p) =>
-                                      p.name.toLowerCase().includes(productPickerSearch.toLowerCase()) ||
-                                      (p.hsn_code && p.hsn_code.includes(productPickerSearch))
-                                  )
-                                  .map((p) => (
-                                    <button
-                                      key={p.id}
-                                      type="button"
-                                      onClick={() => {
-                                        handleSelectProduct(item.id, p);
-                                        setOpenProductPickerItemId(null);
-                                        setProductPickerSearch('');
-                                      }}
-                                      className="w-full text-left px-2 py-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] flex items-center justify-between transition cursor-pointer"
-                                    >
-                                      <div>
-                                        <span className="font-bold text-[var(--khata-text)] block truncate">{p.name}</span>
-                                        {p.hsn_code && (
-                                          <span className="text-[10px] text-[var(--khata-text-muted)] font-mono">
-                                            HSN: {p.hsn_code}
-                                          </span>
-                                        )}
-                                      </div>
-                                      <span className="text-xs font-bold text-[var(--khata-text-muted)] font-mono ml-2">
-                                        Ref: ₹{p.buying_price}
-                                      </span>
-                                    </button>
-                                  ))}
-                                {availableProducts.length === 0 && (
-                                  <div className="p-2 text-center text-xs text-[var(--khata-text-muted)]">
-                                    {isLoadingProducts ? 'Loading catalogue...' : 'No products found.'}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
+                            <ProductPickerPopover
+                              products={availableProducts}
+                              search={productPickerSearch}
+                              onSearchChange={setProductPickerSearch}
+                              isLoading={isLoadingProducts}
+                              isLoadingMore={isLoadingMoreProducts}
+                              error={productsError}
+                              hasMore={hasMoreProducts}
+                              onLoadMore={loadMoreProducts}
+                              onSelectProduct={(p) => {
+                                handleSelectProduct(item.id, p);
+                                setOpenProductPickerItemId(null);
+                                setProductPickerSearch('');
+                              }}
+                              onClose={() => setOpenProductPickerItemId(null)}
+                            />
                           )}
                         </div>
                       </div>

@@ -34,6 +34,8 @@ import {
   upsertScannedProductLine,
   validateQuantityInput,
   validateSellingRateInput,
+  decimalOrZero,
+  validatePercentageDraftInput,
 } from '../../utils/lineItemDraft.js';
 
 export interface QuotationEditorProps {
@@ -270,9 +272,10 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
   const handleSelectRowProduct = (rowIdx: number, p: any) => {
     commitItems((prev) => {
       const next = [...prev];
-      const qty = new Decimal(String(next[rowIdx].quantity || 1));
+      const parsedQty = decimalOrZero(next[rowIdx].quantity, 1);
+      const qty = parsedQty.isPositive() ? parsedQty : new Decimal(1);
       const nextLine = applyCatalogProductToDraftLine(next[rowIdx], p);
-      const rate = nextLine.rate ? new Decimal(nextLine.rate) : null;
+      const rate = nextLine.rate ? decimalOrZero(nextLine.rate) : null;
       next[rowIdx] = {
         ...next[rowIdx],
         productId: p.id,
@@ -345,9 +348,11 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
   });
 
   let discountAmountDec = new Decimal(0);
-  const discValDec = new Decimal(String(discountValue || 0));
+  const rawDiscValDec = decimalOrZero(discountValue);
+  const discValDec = rawDiscValDec.isNegative() ? new Decimal(0) : rawDiscValDec;
   if (discountType === 'percentage') {
-    discountAmountDec = subtotalDec.times(discValDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const safePctDec = Decimal.min(discValDec, 100);
+    discountAmountDec = subtotalDec.times(safePctDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
   } else if (discountType === 'fixed') {
     discountAmountDec = Decimal.min(subtotalDec, discValDec).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
   }
@@ -358,13 +363,15 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
   let sgstDec = new Decimal(0);
   let igstDec = new Decimal(0);
 
-  if (gstEnabled && gstRate > 0) {
+  const rawGstRateDec = decimalOrZero(gstRate);
+  const safeGstRateDec = rawGstRateDec.isNegative() ? new Decimal(0) : Decimal.min(rawGstRateDec, 100);
+  if (gstEnabled && safeGstRateDec.greaterThan(0)) {
     if (isIntraState) {
-      const halfRate = new Decimal(gstRate).dividedBy(2);
+      const halfRate = safeGstRateDec.dividedBy(2);
       cgstDec = taxableAmountDec.times(halfRate).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
       sgstDec = taxableAmountDec.times(halfRate).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     } else {
-      igstDec = taxableAmountDec.times(gstRate).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      igstDec = taxableAmountDec.times(safeGstRateDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     }
   }
 
@@ -410,6 +417,17 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     }
     if (gstEnabled && (!customerStateCode || !customerState)) {
       return 'Customer State is required when GST is included.';
+    }
+    if (discountType === 'percentage') {
+      const pctErr = validatePercentageDraftInput(discountValue, 'Discount percentage');
+      if (pctErr) return pctErr;
+    } else if (discountType === 'fixed') {
+      const fixedErr = validateSellingRateInput(discountValue, 'Fixed discount');
+      if (fixedErr) return fixedErr;
+    }
+    if (gstEnabled) {
+      const gstErr = validatePercentageDraftInput(gstRate, 'GST Rate');
+      if (gstErr) return gstErr;
     }
     for (let i = 0; i < items.length; i++) {
       const it = items[i];

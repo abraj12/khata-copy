@@ -15,6 +15,8 @@ import {
   FinancialValidationError,
   validateMoneyInput,
   validateDecimalQuantityInput,
+  validateGstRateInput,
+  resolveValidatedDiscount,
   escapeLike,
 } from '../../utils/validation.js';
 import { getCompanyTaxProfile } from '../../services/companyTaxProfile.service.js';
@@ -281,21 +283,11 @@ export class QuotationsService {
       };
     });
 
-    // 2. Calculate Commercial Discount
-    let discountAmountDec = new Decimal(0);
-    const discValDec = new Decimal(discountValue || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-
-    if (discountType === 'percentage') {
-      if (discValDec.isNegative() || discValDec.greaterThan(100)) {
-        throw new AppError('Discount percentage must be between 0 and 100.', 400, 'INVALID_DISCOUNT');
-      }
-      discountAmountDec = subtotalDec.times(discValDec).dividedBy(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-    } else if (discountType === 'fixed') {
-      if (discValDec.isNegative()) {
-        throw new AppError('Fixed discount amount cannot be negative.', 400, 'INVALID_DISCOUNT');
-      }
-      discountAmountDec = Decimal.min(discValDec, subtotalDec);
-    }
+    // 2. Strict Commercial Discount Validation & Calculation
+    const {
+      discountValueDec: discValDec,
+      discountAmountDec,
+    } = resolveValidatedDiscount(subtotalDec, { discountType: discountType || null, discountValue });
 
     // 3. Taxable Amount (Subtotal minus discount, clamped at 0)
     const taxableAmountDec = Decimal.max(0, subtotalDec.minus(discountAmountDec)).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
@@ -305,7 +297,7 @@ export class QuotationsService {
     let sgstDec = new Decimal(0);
     let igstDec = new Decimal(0);
     let taxAmountDec = new Decimal(0);
-    const gstRateDec = new Decimal(gstRate || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    const gstRateDec = validateGstRateInput(gstRate ?? 0, 'GST rate');
 
     if (gstEnabled && gstRateDec.greaterThan(0)) {
       if (!supplierStateCode || !supplierStateCode.trim()) {
