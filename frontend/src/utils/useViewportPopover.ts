@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 
-const POPOVER_OPEN_EVENT = 'khata:popover-open';
+export const POPOVER_OPEN_EVENT = 'khata:popover-open';
 const VIEWPORT_MARGIN_PX = 12;
 
 export interface PopoverGeometry {
@@ -153,6 +153,7 @@ export function useViewportPopover({
     : {};
 
   return {
+    popoverId,
     containerRef,
     triggerRef,
     popoverStyle,

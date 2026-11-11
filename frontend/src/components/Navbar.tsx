@@ -1,5 +1,9 @@
-import React, { useState, useCallback } from 'react';
-import { broadcastCloseOtherPopovers, useViewportPopover } from '../utils/useViewportPopover.js';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import {
+  POPOVER_OPEN_EVENT,
+  broadcastCloseOtherPopovers,
+  useViewportPopover,
+} from '../utils/useViewportPopover.js';
 import { useAuth } from '../features/auth/AuthProvider.js';
 import { NotificationCenterButton } from './NotificationCenterButton.js';
 import {
@@ -14,6 +18,8 @@ import {
   FileText,
   ChevronDown,
   Building2,
+  Menu,
+  X,
 } from 'lucide-react';
 
 export type NavTab =
@@ -25,6 +31,19 @@ export type NavTab =
   | 'gst-bill'
   | 'normal-bill';
 
+const NAV_TAB_LABELS: Record<NavTab, string> = {
+  home: 'Home',
+  khata: 'Khata',
+  products: 'Products',
+  suppliers: 'Suppliers',
+  quotations: 'Quotations',
+  'gst-bill': 'GST Bill',
+  'normal-bill': 'Normal Bill',
+};
+
+const MOBILE_NAV_SOURCE_ID = 'navbar-mobile-drawer';
+const MOBILE_NAV_ELEMENT_ID = 'main-navigation-menu';
+
 interface NavbarProps {
   currentTab: NavTab;
   onTabChange: (tab: NavTab) => void;
@@ -33,11 +52,14 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenAppearance }) => {
   const { logout, owner } = useAuth();
+  const headerRef = useRef<HTMLElement>(null);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [isBillMenuOpen, setIsBillMenuOpen] = useState(false);
   const closeBillMenu = useCallback(() => setIsBillMenuOpen(false), []);
   const {
+    popoverId: billPopoverId,
     containerRef: billMenuRef,
     triggerRef: billTriggerRef,
     popoverStyle: billPopoverStyle,
@@ -48,13 +70,69 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
     offsetY: 6,
   });
 
+  useEffect(() => {
+    const handleOtherPopoverOpen = (event: Event) => {
+      const customEvent = event as CustomEvent<{ id?: string }>;
+      const sourceId = customEvent.detail?.id;
+      if (sourceId !== MOBILE_NAV_SOURCE_ID && sourceId !== billPopoverId) {
+        setIsMobileNavOpen(false);
+      }
+    };
+
+    window.addEventListener(POPOVER_OPEN_EVENT, handleOtherPopoverOpen);
+    return () => {
+      window.removeEventListener(POPOVER_OPEN_EVENT, handleOtherPopoverOpen);
+    };
+  }, [billPopoverId]);
+
+  useEffect(() => {
+    if (!isMobileNavOpen) return;
+
+    const handleOutsidePress = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (headerRef.current && target && !headerRef.current.contains(target)) {
+        setIsMobileNavOpen(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isBillMenuOpen) {
+        setIsMobileNavOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutsidePress);
+    document.addEventListener('touchstart', handleOutsidePress, { passive: true });
+    document.addEventListener('keydown', handleEscape);
+
+    return () => {
+      document.removeEventListener('mousedown', handleOutsidePress);
+      document.removeEventListener('touchstart', handleOutsidePress);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [isMobileNavOpen, isBillMenuOpen]);
+
   const handleSelectTab = (tab: NavTab) => {
     setIsBillMenuOpen(false);
+    setIsMobileNavOpen(false);
     broadcastCloseOtherPopovers();
     onTabChange(tab);
   };
 
+  const handleToggleMobileNav = () => {
+    setIsBillMenuOpen(false);
+    setIsMobileNavOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        broadcastCloseOtherPopovers(MOBILE_NAV_SOURCE_ID);
+      }
+      return next;
+    });
+  };
+
   const handleLogout = async () => {
+    setIsBillMenuOpen(false);
+    setIsMobileNavOpen(false);
     setIsLoggingOut(true);
     setLogoutError(null);
     try {
@@ -70,6 +148,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
 
   return (
     <header
+      ref={headerRef}
       className="sticky top-0 z-30 border-b border-[var(--khata-border)] shadow-sm"
       style={{ background: 'var(--khata-surface)' }}
     >
@@ -91,30 +170,41 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
-        <div className="flex flex-wrap items-center justify-between min-h-[60px] py-2 sm:py-2.5 gap-x-3 gap-y-2">
+      <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8">
+        <div className="flex flex-wrap items-center justify-between min-h-[52px] sm:min-h-[60px] py-1.5 sm:py-2.5 gap-x-2 sm:gap-x-3 gap-y-2">
           {/* Brand Identity / Store Badge */}
           <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 min-w-0 flex-1 lg:flex-initial">
             <div
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-inner border border-[var(--khata-border)] shrink-0"
+              className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-inner border border-[var(--khata-border)] shrink-0"
               style={{ background: 'var(--khata-surface-inset)' }}
               aria-hidden="true"
             >
-              <Store className="w-5 h-5 text-[var(--khata-accent)]" />
+              <Store className="w-4 h-4 sm:w-5 sm:h-5 text-[var(--khata-accent)]" />
             </div>
-            <div className="min-w-0">
-              <h1 className="text-sm sm:text-base md:text-lg font-black tracking-tight text-[var(--khata-text)] leading-none">
-                Khata
-              </h1>
-              <p className="text-[10px] sm:text-[11px] text-[var(--khata-text-muted)] font-medium mt-0.5 truncate max-w-[11rem] sm:max-w-none">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <h1 className="text-sm sm:text-base md:text-lg font-black tracking-tight text-[var(--khata-text)] leading-none shrink-0">
+                  Khata
+                </h1>
+                <span
+                  className="md:hidden inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold truncate max-w-[6rem] bg-[var(--khata-surface-inset)] text-[var(--khata-accent)] border border-[var(--khata-border)]"
+                  data-testid="mobile-active-tab-badge"
+                >
+                  {NAV_TAB_LABELS[currentTab]}
+                </span>
+              </div>
+              <p className="text-[10px] sm:text-[11px] text-[var(--khata-text-muted)] font-medium mt-0.5 truncate">
                 Algions AI Labs Private Limited
               </p>
             </div>
           </div>
 
-          {/* Navigation Tabs (Home, Khata, Products, Quotations, Suppliers, Bill -> GST Bill / Normal Bill) */}
+          {/* Navigation Tabs (Collapsible behind Menu toggle on phones; always visible on md+ / desktop) */}
           <nav
-            className="flex flex-wrap items-center gap-1.5 sm:gap-2 order-3 lg:order-2 w-full lg:w-auto justify-center lg:justify-start pt-1 lg:pt-0"
+            id={MOBILE_NAV_ELEMENT_ID}
+            className={`${
+              isMobileNavOpen ? 'flex' : 'hidden'
+            } md:flex flex-wrap items-center gap-1.5 sm:gap-2 order-3 lg:order-2 w-full lg:w-auto justify-center lg:justify-start pt-2 md:pt-1 lg:pt-0 mt-0.5 md:mt-0 border-t border-[var(--khata-border)] md:border-t-0 max-h-[calc(100vh-4.5rem)] overflow-y-auto md:max-h-none md:overflow-visible`}
             aria-label="Main Navigation"
           >
             {/* 0. Home Tab */}
@@ -223,10 +313,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                   <button
                     type="button"
                     role="menuitem"
-                    onClick={() => {
-                      setIsBillMenuOpen(false);
-                      onTabChange('gst-bill');
-                    }}
+                    onClick={() => handleSelectTab('gst-bill')}
                     className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs font-bold text-left transition ${
                       currentTab === 'gst-bill'
                         ? 'bg-[var(--khata-accent)] text-white'
@@ -244,10 +331,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                   <button
                     type="button"
                     role="menuitem"
-                    onClick={() => {
-                      setIsBillMenuOpen(false);
-                      onTabChange('normal-bill');
-                    }}
+                    onClick={() => handleSelectTab('normal-bill')}
                     className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs font-bold text-left transition mt-1 ${
                       currentTab === 'normal-bill'
                         ? 'bg-[var(--khata-accent)] text-white'
@@ -265,8 +349,8 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             </div>
           </nav>
 
-          {/* Controls: Notifications, Appearance, Owner Phone, Logout */}
-          <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2 order-2 lg:order-3 shrink-0">
+          {/* Controls: Notifications, Appearance, Owner Phone, Logout, Mobile Menu Toggle */}
+          <div className="flex flex-wrap items-center justify-end gap-1 sm:gap-2 order-2 lg:order-3 shrink-0">
             <NotificationCenterButton />
 
             {/* Persistent Appearance & Accessibility Button */}
@@ -274,12 +358,13 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               type="button"
               onClick={() => {
                 setIsBillMenuOpen(false);
+                setIsMobileNavOpen(false);
                 broadcastCloseOtherPopovers();
                 onOpenAppearance();
               }}
               title="Appearance & Accessibility"
               aria-label="Open Appearance & Accessibility settings"
-              className="neu-btn-secondary text-xs px-2.5 sm:px-3 py-1.5 sm:py-2 inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
+              className="neu-btn-secondary text-xs px-2 sm:px-3 py-1.5 sm:py-2 inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
             >
               <Palette className="w-4 h-4 text-[var(--khata-accent)]" />
               <span className="hidden sm:inline">Appearance</span>
@@ -298,7 +383,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               type="button"
               onClick={handleLogout}
               disabled={isLoggingOut}
-              className="neu-btn-secondary text-rose-500 hover:text-rose-600 text-xs px-2.5 sm:px-3.5 py-1.5 sm:py-2 inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
+              className="neu-btn-secondary text-rose-500 hover:text-rose-600 text-xs px-2 sm:px-3.5 py-1.5 sm:py-2 inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
               aria-label="Log out of Khata"
             >
               {isLoggingOut ? (
@@ -307,6 +392,28 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                 <LogOut className="w-4 h-4" />
               )}
               <span className="hidden sm:inline">{isLoggingOut ? 'Logging out...' : 'Logout'}</span>
+            </button>
+
+            {/* Mobile Navigation Collapsible Toggle ("Hider" on phones only, hidden on md+/desktop) */}
+            <button
+              type="button"
+              onClick={handleToggleMobileNav}
+              aria-expanded={isMobileNavOpen}
+              aria-controls={MOBILE_NAV_ELEMENT_ID}
+              aria-label={isMobileNavOpen ? 'Hide navigation menu' : 'Show navigation menu'}
+              title={isMobileNavOpen ? 'Hide menu' : 'Show navigation menu'}
+              className={`md:hidden inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all border min-h-[38px] ${
+                isMobileNavOpen
+                  ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-sm'
+                  : 'neu-btn-secondary text-[var(--khata-text)] border-[var(--khata-border)]'
+              }`}
+            >
+              {isMobileNavOpen ? (
+                <X className="w-4 h-4 shrink-0" aria-hidden="true" />
+              ) : (
+                <Menu className="w-4 h-4 shrink-0" aria-hidden="true" />
+              )}
+              <span>{isMobileNavOpen ? 'Close' : 'Menu'}</span>
             </button>
           </div>
         </div>

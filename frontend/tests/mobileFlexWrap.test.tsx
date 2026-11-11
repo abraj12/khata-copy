@@ -417,4 +417,128 @@ describe('Mobile responsiveness: flex-wrap containers and bounded popovers', () 
       vi.unstubAllGlobals();
     }
   });
+
+  it('8. Navbar hides main nav behind a mobile-only Menu toggle on phone viewports while remaining always visible on md+ desktop', async () => {
+    vi.spyOn(authApi, 'me').mockResolvedValue({
+      authenticated: true,
+      owner: { phone: '9876543210', role: 'OWNER' },
+      csrfToken: 'csrf-mobile-hider',
+    } as any);
+    vi.spyOn(appDataApi, 'fetchNotificationsApi').mockResolvedValue({
+      success: true,
+      notifications: [],
+      unreadCount: 0,
+      source: 'default',
+    });
+
+    const onTabChange = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <ThemeAccessibilityProvider>
+          <AuthProvider>
+            <Navbar
+              currentTab="products"
+              onTabChange={onTabChange}
+              onOpenAppearance={() => {}}
+            />
+          </AuthProvider>
+        </ThemeAccessibilityProvider>
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const mainNav = container.querySelector('nav[aria-label="Main Navigation"]') as HTMLElement;
+    const toggleBtn = container.querySelector('button[aria-controls="main-navigation-menu"]') as HTMLButtonElement;
+    const activeBadge = container.querySelector('[data-testid="mobile-active-tab-badge"]') as HTMLElement;
+    const bellBtn = container.querySelector('button[title="Notifications"]') as HTMLButtonElement;
+
+    expect(mainNav).not.toBeNull();
+    expect(toggleBtn).not.toBeNull();
+    expect(activeBadge?.textContent?.trim()).toBe('Products');
+    expect(activeBadge?.className).toContain('md:hidden');
+
+    // Collapsed on phone by default, always flex on md+ desktop; toggle only shows below md
+    expect(toggleBtn.className).toContain('md:hidden');
+    expect(toggleBtn.getAttribute('aria-expanded')).toBe('false');
+    expect(toggleBtn.textContent).toContain('Menu');
+    expect(mainNav.classList.contains('hidden')).toBe(true);
+    expect(mainNav.classList.contains('md:flex')).toBe(true);
+
+    // Open Notification popover first, then opening mobile Menu should close Notification popover
+    await act(async () => {
+      bellBtn.click();
+    });
+    expect(container.querySelector('[role="dialog"][aria-label="Business notifications"]')).not.toBeNull();
+
+    await act(async () => {
+      toggleBtn.click();
+    });
+    expect(container.querySelector('[role="dialog"][aria-label="Business notifications"]')).toBeNull();
+    expect(toggleBtn.getAttribute('aria-expanded')).toBe('true');
+    expect(toggleBtn.textContent).toContain('Close');
+    expect(mainNav.classList.contains('hidden')).toBe(false);
+    expect(mainNav.classList.contains('flex')).toBe(true);
+
+    // Clicking Bill dropdown inside open mobile nav keeps mobile nav open so GST/Normal Bill can be picked
+    const billTrigger = Array.from(mainNav.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Bill')
+    ) as HTMLButtonElement;
+    await act(async () => {
+      billTrigger.click();
+    });
+    expect(container.querySelector('[role="menu"]')).not.toBeNull();
+    expect(toggleBtn.getAttribute('aria-expanded')).toBe('true');
+
+    // Selecting GST Bill from submenu switches tab and collapses both Bill dropdown and mobile nav
+    const gstOption = Array.from(container.querySelectorAll('[role="menuitem"]')).find((b) =>
+      b.textContent?.includes('GST Bill')
+    ) as HTMLButtonElement;
+    await act(async () => {
+      gstOption.click();
+    });
+    expect(onTabChange).toHaveBeenCalledWith('gst-bill');
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    expect(toggleBtn.getAttribute('aria-expanded')).toBe('false');
+    expect(mainNav.classList.contains('hidden')).toBe(true);
+
+    // Re-open mobile nav, then pressing Escape collapses it
+    await act(async () => {
+      toggleBtn.click();
+    });
+    expect(toggleBtn.getAttribute('aria-expanded')).toBe('true');
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(toggleBtn.getAttribute('aria-expanded')).toBe('false');
+    expect(mainNav.classList.contains('hidden')).toBe(true);
+
+    // Re-open mobile nav, then clicking Khata tab switches tab and collapses mobile nav
+    await act(async () => {
+      toggleBtn.click();
+    });
+    const khataBtn = Array.from(mainNav.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Khata'
+    ) as HTMLButtonElement;
+    await act(async () => {
+      khataBtn.click();
+    });
+    expect(onTabChange).toHaveBeenCalledWith('khata');
+    expect(toggleBtn.getAttribute('aria-expanded')).toBe('false');
+    expect(mainNav.classList.contains('hidden')).toBe(true);
+
+    // Re-open mobile nav, then opening Notifications collapses mobile nav
+    await act(async () => {
+      toggleBtn.click();
+    });
+    expect(toggleBtn.getAttribute('aria-expanded')).toBe('true');
+    await act(async () => {
+      bellBtn.click();
+    });
+    expect(toggleBtn.getAttribute('aria-expanded')).toBe('false');
+    expect(mainNav.classList.contains('hidden')).toBe(true);
+  });
 });
