@@ -18,6 +18,7 @@ import {
   getSuggestedNextDocumentNumber,
   NORMAL_BILL_NUMBERING_CONFIG,
 } from '../billing/numbering.js';
+import { resolveProductCostSnapshots } from '../billing/costSnapshot.js';
 import { StorageService } from '../../services/storage.service.js';
 import { AppError } from '../../utils/errors.js';
 import { validateMoneyInput, validateDecimalQuantityInput, resolveValidatedDiscount } from '../../utils/validation.js';
@@ -103,6 +104,7 @@ export interface NormalBillItemRecord {
   rate: string;
   rate_unit: string | null;
   amount: string;
+  cost_rate_snapshot?: string | null;
   created_at: string;
 }
 
@@ -352,10 +354,14 @@ export class NormalBillsService {
 
     const billRecord: NormalBillRecord = billRes.rows[0];
 
-    // 6. Insert line items
+    // 6. Capture historical buying-price snapshots for linked products and insert line items
+    const productCostMap = await resolveProductCostSnapshots(client, computedItems);
     const insertedItems: NormalBillItemRecord[] = [];
     for (let i = 0; i < computedItems.length; i++) {
       const item = computedItems[i];
+      const costRateSnapshot = item.productId
+        ? productCostMap.get(Number(item.productId)) ?? null
+        : null;
       const itemRes = await client.query(
         `
         INSERT INTO normal_bill_items (
@@ -368,8 +374,9 @@ export class NormalBillsService {
           unit,
           rate,
           rate_unit,
-          amount
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          amount,
+          cost_rate_snapshot
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING *;
       `,
         [
@@ -383,6 +390,7 @@ export class NormalBillsService {
           item.rate,
           item.rateUnit || null,
           item.amount,
+          costRateSnapshot,
         ]
       );
       insertedItems.push(itemRes.rows[0]);

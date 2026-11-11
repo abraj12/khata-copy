@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../features/auth/AuthProvider.js';
 import {
   Store,
+  Home,
   LogOut,
   BookOpen,
   Tag,
@@ -14,6 +15,7 @@ import {
 } from 'lucide-react';
 
 export type NavTab =
+  | 'home'
   | 'khata'
   | 'products'
   | 'suppliers'
@@ -103,11 +105,28 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             </div>
           </div>
 
-          {/* Navigation Tabs (Khata, Products, Quotations, Bill -> GST Bill / Normal Bill) */}
+          {/* Navigation Tabs (Home, Khata, Products, Quotations, Suppliers, Bill -> GST Bill / Normal Bill) */}
           <nav
             className="flex flex-wrap items-center gap-1 sm:gap-2 order-3 sm:order-2 w-full sm:w-auto justify-center sm:justify-start pt-1 sm:pt-0"
             aria-label="Main Navigation"
           >
+            {/* 0. Home Tab */}
+            <button
+              onClick={() => {
+                setIsBillMenuOpen(false);
+                onTabChange('home');
+              }}
+              className={`inline-flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[44px] flex-1 sm:flex-initial ${
+                currentTab === 'home'
+                  ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
+                  : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
+              }`}
+              aria-current={currentTab === 'home' ? 'page' : undefined}
+            >
+              <Home className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <span>Home</span>
+            </button>
+
             {/* 1. Khata Tab */}
             <button
               onClick={() => {

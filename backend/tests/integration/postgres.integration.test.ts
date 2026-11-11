@@ -28,6 +28,7 @@ import { gstInvoicesService } from '../../src/modules/gstInvoices/gstInvoices.se
 import { normalBillsService } from '../../src/modules/normalBills/normalBills.service.js';
 import { productsService } from '../../src/modules/products/products.service.js';
 import { suppliersService } from '../../src/modules/suppliers/suppliers.service.js';
+import { dashboardService } from '../../src/modules/dashboard/dashboard.service.js';
 
 const { Pool } = pg;
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
@@ -52,6 +53,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     try {
       // 1. Drop public schema tables cleanly for test isolation
       await client.query(`
+        DROP TABLE IF EXISTS "business_expense_events" CASCADE;
+        DROP TABLE IF EXISTS "business_expenses" CASCADE;
         DROP TABLE IF EXISTS "supplier_purchase_bill_cancellations" CASCADE;
         DROP TABLE IF EXISTS "supplier_payment_allocation_reversals" CASCADE;
         DROP TABLE IF EXISTS "supplier_payment_reversals" CASCADE;
@@ -112,6 +115,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '021_supplier_financial_integrity.sql',
         '022_supplier_operational_hardening.sql',
         '023_supplier_audit_truncate_guard.sql',
+        '024_home_dashboard_profitability.sql',
       ];
 
       await client.query(`
@@ -171,6 +175,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '021_supplier_financial_integrity.sql',
       '022_supplier_operational_hardening.sql',
       '023_supplier_audit_truncate_guard.sql',
+      '024_home_dashboard_profitability.sql',
     ]);
 
     const expectedTables = [
@@ -200,6 +205,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       'supplier_payment_reversals',
       'supplier_payment_allocation_reversals',
       'supplier_purchase_bill_cancellations',
+      'business_expenses',
+      'business_expense_events',
     ];
 
     const tablesRes = await pool.query(
@@ -2907,6 +2914,250 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         items: [{ description: 'Bad', quantity: 1, rate: 100 }],
       })
     ).rejects.toThrow();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('31. Release #024: Home Dashboard Overview, Cost Snapshots, Operating Expenses & Append-Only Audit Triggers', async () => {
+    vi.spyOn(appPool, 'connect').mockImplementation(() => pool.connect());
+    vi.spyOn(appPool, 'query').mockImplementation((...args: any[]) => (pool.query as any)(...args));
+
+    try {
+      // 1. Re-apply migration 024 idempotently
+      const sql024 = fs.readFileSync(
+        path.resolve(__dirname, '../../migrations/024_home_dashboard_profitability.sql'),
+        'utf-8'
+      );
+      await expect(pool.query(sql024)).resolves.toBeTruthy();
+
+      // 2. Verify append-only BEFORE UPDATE/DELETE and BEFORE TRUNCATE triggers exist on business_expense_events
+      const expTrigRes = await pool.query(`
+        SELECT tgname
+        FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        WHERE c.relname = 'business_expense_events'
+          AND NOT t.tgisinternal
+        ORDER BY tgname ASC
+      `);
+      expect(expTrigRes.rows.map((r) => r.tgname)).toEqual([
+        'trg_prevent_business_expense_events_mutation',
+        'trg_prevent_business_expense_events_truncate',
+      ]);
+
+      // 3. Seed clean product + customer + sales in isolated date window 2026-12-01..2026-12-02
+      const prod = await productsService.createProduct(
+        'Release 024 Snapshot Cement',
+        '100.00',
+        '2523'
+      );
+
+      const cust = await khataService.createCustomer({
+        name: 'Release 024 Customer',
+        phone: '9876500240',
+        address: 'Station Road',
+        state: 'Bihar',
+        stateCode: '10',
+      });
+
+      // Normal bill: qty 2 * rate 150 = 300 (cost snapshot = 100.00) + manual line 1 * 50 = 50 (cost snapshot = NULL) => total 350.00
+      const nb24 = await normalBillsService.createBill({
+        billNumber: 'R24-NB-001',
+        billDate: '2026-12-01',
+        customerId: cust.id,
+        customerName: cust.name,
+        customerState: 'Bihar',
+        customerStateCode: '10',
+        items: [
+          { productId: prod.id, description: prod.name, quantity: 2, rate: 150 },
+          { description: 'Unlinked Freight Service', quantity: 1, rate: 50 },
+        ],
+      });
+      expect(nb24.items?.[0]?.cost_rate_snapshot).toBe('100.00');
+      expect(nb24.items?.[1]?.cost_rate_snapshot).toBeNull();
+
+      // GST invoice: qty 1 * rate 200 = 200 taxable + 18% GST (36) = 236.00 (cost snapshot = 100.00)
+      const gi24 = await gstInvoicesService.createInvoice({
+        invoiceNumber: 'R24-GST-001',
+        invoiceDate: '2026-12-01',
+        state: 'Bihar',
+        stateCode: '10',
+        customerId: cust.id,
+        customerName: cust.name,
+        customerState: 'Bihar',
+        customerStateCode: '10',
+        gstRate: 18,
+        items: [{ productId: prod.id, description: prod.name, quantity: 1, rate: 200 }],
+      });
+      expect(gi24.items?.[0]?.cost_rate_snapshot).toBe('100.00');
+
+      // Mutate product buying price later -> historical bill snapshots must stay 100.00 and manual row stays NULL
+      await productsService.updateProduct(prod.id, { name: prod.name, buyingPrice: '260.00' });
+      const nbCheck = await pool.query(
+        'SELECT cost_rate_snapshot FROM normal_bill_items WHERE bill_id = $1 ORDER BY item_index ASC',
+        [nb24.id]
+      );
+      expect(nbCheck.rows.map((r) => r.cost_rate_snapshot)).toEqual(['100.00', null]);
+
+      // 4. Seed Khata credit & payment, Supplier purchase/payment, and Quotations in same isolated window
+      const khTx = await khataService.createTransaction({
+        customer: { id: cust.id, name: cust.name },
+        items: [{ productId: prod.id, quantity: '1', sellingPrice: '500.00' }],
+        note: 'R24 credit',
+      });
+      await pool.query(`UPDATE udhar_transactions SET transaction_date = '2026-12-01' WHERE id = $1`, [
+        khTx.transactionId,
+      ]);
+      await khataService.recordPayment(cust.id, '150.00', 'R24 partial receipt');
+
+      const v24 = await suppliersService.createSupplier({
+        name: 'Release 024 Timber House',
+        phone: '9811100240',
+      });
+      await suppliersService.createPurchaseBill({
+        supplierId: v24.id,
+        invoiceNumber: 'R24-SUP-001',
+        invoiceDate: '2026-12-01',
+        items: [{ description: 'Bulk Timber', quantity: '1', purchaseRate: '1000.00' }],
+      });
+      await suppliersService.createSupplierPayment({
+        supplierId: v24.id,
+        paymentDate: '2026-12-01',
+        amount: '400.00',
+        paymentMethod: 'upi',
+        transactionReference: 'UTR-R24-SUP',
+      });
+
+      await quotationsService.createQuotation({
+        quotationNumber: 'R24-QT-001',
+        quotationDate: '2026-12-01',
+        validUntil: '2026-12-31',
+        customerId: cust.id,
+        customerName: cust.name,
+        gstEnabled: false,
+        gstRate: 0,
+        items: [{ productId: prod.id, description: prod.name, quantity: 3, rate: 150 }],
+      });
+
+      // 5. Operating Expenses lifecycle + DB constraints + append-only business_expense_events
+      await expect(
+        pool.query(
+          `INSERT INTO business_expenses (expense_date, category, title, amount, payment_method)
+           VALUES ('2026-12-01', 'rent', 'Bad Zero', 0, 'cash')`
+        )
+      ).rejects.toThrow();
+
+      const exp1 = await dashboardService.createExpense({
+        expenseDate: '2026-12-01',
+        category: 'rent',
+        title: 'December Shop Rent',
+        vendorName: 'Plaza Estate',
+        amount: '100.00',
+        paymentMethod: 'bank_transfer',
+        referenceNumber: 'NEFT-24',
+      });
+      const exp1Upd = await dashboardService.updateExpense(exp1.id, {
+        expenseDate: '2026-12-01',
+        category: 'rent',
+        title: 'December Shop Rent Revised',
+        amount: '120.00',
+        paymentMethod: 'bank_transfer',
+        reason: 'Maintenance surcharge added',
+      });
+      expect(exp1Upd.amount).toBe('120.00');
+
+      const expVoid = await dashboardService.createExpense({
+        expenseDate: '2026-12-01',
+        category: 'misc',
+        title: 'Wrong Mistake Expense',
+        amount: '999.00',
+        paymentMethod: 'cash',
+      });
+      const voided = await dashboardService.voidExpense(expVoid.id, 'Entered on wrong company');
+      expect(voided.status).toBe('voided');
+      await expect(
+        dashboardService.voidExpense(expVoid.id, 'Second void')
+      ).rejects.toMatchObject({ status: 409 });
+
+      const eventsRes = await pool.query(
+        'SELECT action FROM business_expense_events WHERE expense_id = ANY($1::uuid[]) ORDER BY id ASC',
+        [[exp1.id, expVoid.id]]
+      );
+      expect(eventsRes.rows.map((r) => r.action)).toEqual(['created', 'updated', 'created', 'voided']);
+
+      // Append-only enforcement on business_expense_events (UPDATE, DELETE, TRUNCATE -> 55000)
+      for (const stmt of [
+        `UPDATE business_expense_events SET reason = 'tampered'`,
+        `DELETE FROM business_expense_events`,
+        `TRUNCATE TABLE business_expense_events`,
+      ]) {
+        let caught: any = null;
+        try {
+          await pool.query(stmt);
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught).not.toBeNull();
+        expect(caught.code).toBe('55000');
+      }
+
+      // 6. Real Dashboard Overview Aggregation verification on isolated 2026-12-01..2026-12-02 window
+      // Sales: NB 350.00 (costed 300.00, cogs 200.00, uncosted 50.00) + GST taxable 200.00 (gst 36.00, cogs 100.00)
+      // Total revenue ex-GST = 550.00; costed = 500.00; COGS = 300.00; Gross Profit = 200.00; Operating Exp = 120.00 (voided 999 excluded); Net = 80.00
+      const overview = await dashboardService.getOverview({
+        fromDate: '2026-12-01',
+        toDate: '2026-12-02',
+      });
+      expect(overview.sales.normalBillsTotal).toBe('350.00');
+      expect(overview.sales.gstTaxableSales).toBe('200.00');
+      expect(overview.sales.gstCollected).toBe('36.00');
+      expect(overview.sales.totalSalesRevenue).toBe('550.00');
+      expect(overview.profitability.costedSalesRevenue).toBe('500.00');
+      expect(overview.profitability.uncostedSalesRevenue).toBe('50.00');
+      expect(overview.profitability.estimatedCostOfGoodsSold).toBe('300.00');
+      expect(overview.profitability.estimatedGrossProfit).toBe('200.00');
+      expect(overview.profitability.operatingExpenses).toBe('120.00');
+      expect(overview.profitability.voidedExpensesCount).toBe(1);
+      expect(overview.profitability.estimatedNetOperatingResult).toBe('80.00');
+      expect(overview.profitability.hasIncompleteCostData).toBe(true);
+      expect(overview.customersKhata.creditGiven).toBe('500.00');
+      expect(overview.suppliers.totalPurchases).toBe('1000.00');
+      expect(overview.suppliers.totalPaymentsMade).toBe('400.00');
+      expect(overview.quotations.draftCount).toBeGreaterThanOrEqual(1);
+      expect(overview.products.topProducts[0]?.productId).toBe(prod.id);
+      expect(overview.salesTrend.granularity).toBe('day');
+      expect(overview.salesTrend.points).toHaveLength(2);
+
+      // 7. Pagination & search across >12 expenses
+      for (let i = 1; i <= 12; i++) {
+        await dashboardService.createExpense({
+          expenseDate: '2026-12-02',
+          category: 'packaging',
+          title: `Box Pack ${String(i).padStart(2, '0')}`,
+          amount: '25.00',
+          paymentMethod: 'cash',
+        });
+      }
+      const p1 = await dashboardService.listExpenses({
+        category: 'packaging',
+        fromDate: '2026-12-02',
+        toDate: '2026-12-02',
+        limit: 5,
+        offset: 0,
+      });
+      const p2 = await dashboardService.listExpenses({
+        category: 'packaging',
+        fromDate: '2026-12-02',
+        toDate: '2026-12-02',
+        limit: 5,
+        offset: 5,
+      });
+      expect(p1.total).toBe(12);
+      expect(p1.items).toHaveLength(5);
+      expect(p1.hasMore).toBe(true);
+      expect(p1.totalActiveAmount).toBe('300.00');
+      const seenExpIds = new Set([...p1.items.map((x) => x.id), ...p2.items.map((x) => x.id)]);
+      expect(seenExpIds.size).toBe(10);
     } finally {
       vi.restoreAllMocks();
     }

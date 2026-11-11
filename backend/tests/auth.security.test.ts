@@ -56,8 +56,10 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { table_name: 'supplier_payment_reversals' },
             { table_name: 'supplier_payment_allocation_reversals' },
             { table_name: 'supplier_purchase_bill_cancellations' },
+            { table_name: 'business_expenses' },
+            { table_name: 'business_expense_events' },
           ],
-          rowCount: 15,
+          rowCount: 28,
         } as any;
       }
       if (sqlText.includes('FROM schema_migrations')) {
@@ -84,6 +86,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { version: '021_supplier_financial_integrity.sql' },
             { version: '022_supplier_operational_hardening.sql' },
             { version: '023_supplier_audit_truncate_guard.sql' },
+            { version: '024_home_dashboard_profitability.sql' },
             {
             version: '011_gst_invoices.sql',
           },
@@ -91,7 +94,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             version: '012_normal_bills.sql',
           },
           ],
-          rowCount: 20,
+          rowCount: 24,
         } as any;
       }
       return { rows: [], rowCount: 0 } as any;

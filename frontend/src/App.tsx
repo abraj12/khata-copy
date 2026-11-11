@@ -8,10 +8,11 @@ import { GstBillingView } from './features/bills/GstBillingView.js';
 import { NormalBillingView } from './features/bills/NormalBillingView.js';
 import { QuotationsView } from './features/quotations/QuotationsView.js';
 import { SuppliersModuleView } from './features/suppliers/SuppliersModuleView.js';
+import { HomeDashboard } from './features/dashboard/HomeDashboard.js';
 import { ThemeAccessibilityProvider } from './context/ThemeAccessibilityContext.js';
 import { AppearanceAccessibilityModal } from './components/AppearanceAccessibilityModal.js';
 
-function getInitialTab(): NavTab {
+export function getInitialTab(): NavTab {
   if (typeof window !== 'undefined') {
     const path = window.location.pathname;
     const hash = window.location.hash;
@@ -30,8 +31,11 @@ function getInitialTab(): NavTab {
     if (path.startsWith('/suppliers') || hash.includes('suppliers')) {
       return 'suppliers';
     }
+    if (path.startsWith('/khata') || hash.includes('khata')) {
+      return 'khata';
+    }
   }
-  return 'khata';
+  return 'home';
 }
 
 export function KhataDashboard() {
@@ -43,7 +47,8 @@ export function KhataDashboard() {
     setCurrentTab(tab);
     if (typeof window !== 'undefined') {
       let targetPath = '/';
-      if (tab === 'gst-bill') targetPath = '/bills/gst';
+      if (tab === 'khata') targetPath = '/khata';
+      else if (tab === 'gst-bill') targetPath = '/bills/gst';
       else if (tab === 'normal-bill') targetPath = '/bills/normal';
       else if (tab === 'products') targetPath = '/products';
       else if (tab === 'quotations') targetPath = '/quotations';
@@ -78,6 +83,7 @@ export function KhataDashboard() {
       </div>
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        {currentTab === 'home' && <HomeDashboard onNavigate={handleTabChange} />}
         {currentTab === 'khata' && <KhataLedgerView />}
         {currentTab === 'products' && <ProductsView />}
         {currentTab === 'gst-bill' && <GstBillingView />}

@@ -55,6 +55,7 @@ export const EXPECTED_MIGRATIONS = [
   '021_supplier_financial_integrity.sql',
   '022_supplier_operational_hardening.sql',
   '023_supplier_audit_truncate_guard.sql',
+  '024_home_dashboard_profitability.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [
@@ -84,6 +85,8 @@ export const EXPECTED_CORE_TABLES = [
   'supplier_payment_reversals',
   'supplier_payment_allocation_reversals',
   'supplier_purchase_bill_cancellations',
+  'business_expenses',
+  'business_expense_events',
 ];
 
 export interface ReadinessReport {

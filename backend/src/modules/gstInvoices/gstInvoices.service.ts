@@ -8,6 +8,7 @@ import {
   getSuggestedNextDocumentNumber,
   GST_INVOICE_NUMBERING_CONFIG,
 } from '../billing/numbering.js';
+import { resolveProductCostSnapshots } from '../billing/costSnapshot.js';
 import { resolveValidatedState, validateGstinForState } from '../../utils/indianTax.js';
 import { getCompanyTaxProfile } from '../../services/companyTaxProfile.service.js';
 import {
@@ -119,6 +120,7 @@ export interface GstInvoiceItemRecord {
   rate: string;
   rate_unit: string | null;
   amount: string;
+  cost_rate_snapshot?: string | null;
   created_at: string;
 }
 
@@ -343,15 +345,19 @@ export class GstInvoicesService {
 
     const createdInvoice: GstInvoiceRecord = invoiceRes.rows[0];
 
-    // 7. Insert Line Items
+    // 7. Capture historical buying-price snapshots for linked products and insert line items
+    const productCostMap = await resolveProductCostSnapshots(client, computedItems);
     const insertedItems: GstInvoiceItemRecord[] = [];
     for (let i = 0; i < computedItems.length; i++) {
       const itm = computedItems[i];
+      const costRateSnapshot = itm.productId
+        ? productCostMap.get(Number(itm.productId)) ?? null
+        : null;
       const itemRes = await client.query(
         `INSERT INTO gst_invoice_items (
           invoice_id, product_id, item_index, description, hsn_code,
-          quantity, unit, rate, rate_unit, amount
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          quantity, unit, rate, rate_unit, amount, cost_rate_snapshot
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING *`,
         [
           createdInvoice.id,
@@ -364,6 +370,7 @@ export class GstInvoicesService {
           itm.rate,
           itm.rateUnit || null,
           itm.amount,
+          costRateSnapshot,
         ]
       );
       insertedItems.push(itemRes.rows[0]);
