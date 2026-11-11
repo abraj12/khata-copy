@@ -121,12 +121,12 @@ export const NotificationCenterButton: React.FC = () => {
   };
 
   return (
-    <div ref={containerRef} className="relative shrink-0">
+    <div ref={containerRef} className="relative shrink-0 inline-flex items-center">
       <button
         ref={triggerRef}
         type="button"
         onClick={handleToggle}
-        className="neu-btn-secondary p-2 sm:px-3 text-sm font-medium relative inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
+        className="neu-btn-secondary px-2 py-1.5 sm:px-2.5 sm:py-2 text-xs font-medium relative inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
         aria-expanded={isOpen}
         title="Notifications"

@@ -541,4 +541,75 @@ describe('Mobile responsiveness: flex-wrap containers and bounded popovers', () 
     expect(toggleBtn.getAttribute('aria-expanded')).toBe('false');
     expect(mainNav.classList.contains('hidden')).toBe(true);
   });
+
+  it('9. Navbar maintains symmetric 2x3 mobile grid, aligned 2-tier md/lg and single-row xl layout, and @layer components button sizing', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const candidateInWorkspace = path.resolve(process.cwd(), 'src', 'index.css');
+    const candidateFromRoot = path.resolve(process.cwd(), 'frontend', 'src', 'index.css');
+    const cssPath = fs.existsSync(candidateInWorkspace) ? candidateInWorkspace : candidateFromRoot;
+    const cssText = fs.readFileSync(cssPath, 'utf-8');
+    const layerIdx = cssText.indexOf('@layer components');
+    const neuSecondaryIdx = cssText.indexOf('.neu-btn-secondary');
+    expect(layerIdx).toBeGreaterThan(-1);
+    expect(neuSecondaryIdx).toBeGreaterThan(layerIdx);
+
+    vi.spyOn(authApi, 'me').mockResolvedValue({
+      authenticated: true,
+      owner: { phone: '9876543210', role: 'OWNER' },
+      csrfToken: 'csrf-alignment-test',
+    } as any);
+    vi.spyOn(appDataApi, 'fetchNotificationsApi').mockResolvedValue({
+      success: true,
+      notifications: [],
+      unreadCount: 0,
+      source: 'default',
+    });
+
+    await act(async () => {
+      root.render(
+        <ThemeAccessibilityProvider>
+          <AuthProvider>
+            <Navbar
+              currentTab="home"
+              onTabChange={() => {}}
+              onOpenAppearance={() => {}}
+            />
+          </AuthProvider>
+        </ThemeAccessibilityProvider>
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const headerRow = container.querySelector('header div.max-w-7xl > div') as HTMLElement;
+    const utilityControls = headerRow?.querySelector('div.order-2') as HTMLElement;
+    const mainNav = container.querySelector('nav[aria-label="Main Navigation"]') as HTMLElement;
+
+    // Desktop xl single-row ordering + md/lg centered 2-tier alignment
+    expect(headerRow.className).toContain('xl:flex-nowrap');
+    expect(utilityControls.className).toContain('xl:order-3');
+    expect(mainNav.className).toContain('order-3');
+    expect(mainNav.className).toContain('xl:order-2');
+    expect(mainNav.className).toContain('xl:w-auto');
+
+    // Symmetrical 2-column portrait mobile grid -> 3-column sm grid -> auto inline md+
+    const navItems = Array.from(mainNav.children) as HTMLElement[];
+    expect(navItems).toHaveLength(6);
+    for (const item of navItems) {
+      expect(item.className).toContain('basis-[calc(50%-0.25rem)]');
+      expect(item.className).toContain('sm:basis-[calc(33.333%-0.375rem)]');
+      expect(item.className).toContain('md:basis-auto');
+      expect(item.className).toContain('min-w-0');
+    }
+
+    // All top header utility buttons share consistent mobile height alignment
+    const utilityButtons = Array.from(utilityControls.querySelectorAll('button')) as HTMLButtonElement[];
+    expect(utilityButtons.length).toBe(4);
+    for (const btn of utilityButtons) {
+      expect(btn.className).toContain('min-h-[38px]');
+    }
+  });
 });

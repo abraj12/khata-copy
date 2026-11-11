@@ -41,6 +41,29 @@ const NAV_TAB_LABELS: Record<NavTab, string> = {
   'normal-bill': 'Normal Bill',
 };
 
+const PRIMARY_NAV_TABS: Array<{
+  tab: Exclude<NavTab, 'gst-bill' | 'normal-bill'>;
+  label: string;
+  Icon: React.ComponentType<{ className?: string }>;
+}> = [
+  { tab: 'home', label: 'Home', Icon: Home },
+  { tab: 'khata', label: 'Khata', Icon: BookOpen },
+  { tab: 'products', label: 'Products', Icon: Tag },
+  { tab: 'quotations', label: 'Quotations', Icon: FileText },
+  { tab: 'suppliers', label: 'Suppliers', Icon: Building2 },
+];
+
+const NAV_FLEX_ITEM_CLASSES =
+  'flex-1 basis-[calc(50%-0.25rem)] sm:basis-[calc(33.333%-0.375rem)] md:basis-auto md:flex-initial min-w-0';
+
+function getNavButtonClass(isActive: boolean): string {
+  return `inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 xl:px-3 py-2 rounded-xl text-xs sm:text-sm xl:text-[13px] font-bold transition-all border min-h-[40px] sm:min-h-[42px] whitespace-nowrap ${
+    isActive
+      ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
+      : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
+  }`;
+}
+
 const MOBILE_NAV_SOURCE_ID = 'navbar-mobile-drawer';
 const MOBILE_NAV_ELEMENT_ID = 'main-navigation-menu';
 
@@ -171,9 +194,9 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
       )}
 
       <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8">
-        <div className="flex flex-wrap items-center justify-between min-h-[52px] sm:min-h-[60px] py-1.5 sm:py-2.5 gap-x-2 sm:gap-x-3 gap-y-2">
+        <div className="flex flex-wrap xl:flex-nowrap items-center justify-between min-h-[52px] sm:min-h-[60px] py-1.5 sm:py-2.5 gap-x-2 sm:gap-x-3 xl:gap-x-4 gap-y-2">
           {/* Brand Identity / Store Badge */}
-          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 min-w-0 flex-1 lg:flex-initial">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 min-w-0 flex-1 xl:flex-initial xl:shrink-0">
             <div
               className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-inner border border-[var(--khata-border)] shrink-0"
               style={{ background: 'var(--khata-surface-inset)' }}
@@ -181,125 +204,62 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             >
               <Store className="w-4 h-4 sm:w-5 sm:h-5 text-[var(--khata-accent)]" />
             </div>
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 xl:flex-initial">
               <div className="flex items-center gap-1.5 min-w-0">
                 <h1 className="text-sm sm:text-base md:text-lg font-black tracking-tight text-[var(--khata-text)] leading-none shrink-0">
                   Khata
                 </h1>
                 <span
-                  className="md:hidden inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold truncate max-w-[6rem] bg-[var(--khata-surface-inset)] text-[var(--khata-accent)] border border-[var(--khata-border)]"
+                  className="md:hidden inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold shrink truncate max-w-[5.75rem] bg-[var(--khata-surface-inset)] text-[var(--khata-accent)] border border-[var(--khata-border)]"
                   data-testid="mobile-active-tab-badge"
                 >
                   {NAV_TAB_LABELS[currentTab]}
                 </span>
               </div>
-              <p className="text-[10px] sm:text-[11px] text-[var(--khata-text-muted)] font-medium mt-0.5 truncate">
+              <p className="text-[10px] sm:text-[11px] text-[var(--khata-text-muted)] font-medium mt-0.5 truncate max-w-full xl:max-w-[11.5rem] 2xl:max-w-none">
                 Algions AI Labs Private Limited
               </p>
             </div>
           </div>
 
-          {/* Navigation Tabs (Collapsible behind Menu toggle on phones; always visible on md+ / desktop) */}
+          {/* Navigation Tabs (Collapsible 2x3/3x2 grid on phones; centered row on md/lg; inline bar on xl desktop) */}
           <nav
             id={MOBILE_NAV_ELEMENT_ID}
             className={`${
               isMobileNavOpen ? 'flex' : 'hidden'
-            } md:flex flex-wrap items-center gap-1.5 sm:gap-2 order-3 lg:order-2 w-full lg:w-auto justify-center lg:justify-start pt-2 md:pt-1 lg:pt-0 mt-0.5 md:mt-0 border-t border-[var(--khata-border)] md:border-t-0 max-h-[calc(100vh-4.5rem)] overflow-y-auto md:max-h-none md:overflow-visible`}
+            } md:flex flex-wrap items-center gap-1.5 sm:gap-2 xl:gap-1.5 order-3 xl:order-2 w-full xl:w-auto justify-center xl:justify-start pt-2 md:pt-1 xl:pt-0 mt-0.5 md:mt-0 border-t border-[var(--khata-border)] md:border-t-0 max-h-[calc(100vh-4.5rem)] overflow-y-auto md:max-h-none md:overflow-visible`}
             aria-label="Main Navigation"
           >
-            {/* 0. Home Tab */}
-            <button
-              type="button"
-              onClick={() => handleSelectTab('home')}
-              className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
-                currentTab === 'home'
-                  ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
-                  : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
-              }`}
-              aria-current={currentTab === 'home' ? 'page' : undefined}
-            >
-              <Home className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              <span>Home</span>
-            </button>
+            {PRIMARY_NAV_TABS.map(({ tab, label, Icon }) => {
+              const isActive = currentTab === tab;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => handleSelectTab(tab)}
+                  className={`${NAV_FLEX_ITEM_CLASSES} ${getNavButtonClass(isActive)}`}
+                  aria-current={isActive ? 'page' : undefined}
+                >
+                  <Icon className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                  <span>{label}</span>
+                </button>
+              );
+            })}
 
-            {/* 1. Khata Tab */}
-            <button
-              type="button"
-              onClick={() => handleSelectTab('khata')}
-              className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
-                currentTab === 'khata'
-                  ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
-                  : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
-              }`}
-              aria-current={currentTab === 'khata' ? 'page' : undefined}
-            >
-              <BookOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              <span>Khata</span>
-            </button>
-
-            {/* 2. Products Tab */}
-            <button
-              type="button"
-              onClick={() => handleSelectTab('products')}
-              className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
-                currentTab === 'products'
-                  ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
-                  : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
-              }`}
-              aria-current={currentTab === 'products' ? 'page' : undefined}
-            >
-              <Tag className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              <span>Products</span>
-            </button>
-
-            {/* 3. Quotations Tab */}
-            <button
-              type="button"
-              onClick={() => handleSelectTab('quotations')}
-              className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
-                currentTab === 'quotations'
-                  ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
-                  : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
-              }`}
-              aria-current={currentTab === 'quotations' ? 'page' : undefined}
-            >
-              <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              <span>Quotations</span>
-            </button>
-
-            {/* Suppliers Navigation Tab */}
-            <button
-              type="button"
-              onClick={() => handleSelectTab('suppliers')}
-              className={`inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial whitespace-nowrap ${
-                currentTab === 'suppliers'
-                  ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
-                  : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
-              }`}
-              aria-current={currentTab === 'suppliers' ? 'page' : undefined}
-            >
-              <Building2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              <span>Suppliers</span>
-            </button>
-
-            {/* 4. Bill Dropdown Menu (Contains GST Bill & Normal Bill) */}
-            <div className="relative flex-1 basis-[calc(33.333%-0.375rem)] min-w-[96px] sm:min-w-0 sm:basis-auto lg:flex-initial" ref={billMenuRef}>
+            {/* Bill Dropdown Menu (Contains GST Bill & Normal Bill) */}
+            <div className={`relative ${NAV_FLEX_ITEM_CLASSES}`} ref={billMenuRef}>
               <button
                 ref={billTriggerRef}
                 type="button"
                 onClick={() => setIsBillMenuOpen((prev) => !prev)}
-                className={`w-full inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border min-h-[40px] sm:min-h-[42px] whitespace-nowrap ${
-                  isBillActive
-                    ? 'bg-[var(--khata-accent)] text-white border-[var(--khata-accent)] shadow-md'
-                    : 'bg-[var(--khata-surface-inset)] text-[var(--khata-text)] border-[var(--khata-border)] hover:border-[var(--khata-accent)]'
-                }`}
+                className={`w-full ${getNavButtonClass(isBillActive)}`}
                 aria-haspopup="true"
                 aria-expanded={isBillMenuOpen}
                 aria-current={isBillActive ? 'page' : undefined}
               >
-                <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
                 <span>Bill</span>
-                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isBillMenuOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform ${isBillMenuOpen ? 'rotate-180' : ''}`} />
               </button>
 
               {/* Submenu Dropdown */}
@@ -320,7 +280,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                         : 'text-[var(--khata-text)] hover:bg-[var(--khata-surface-inset)] hover:text-[var(--khata-accent)]'
                     }`}
                   >
-                    <FileText className="w-4 h-4" />
+                    <FileText className="w-4 h-4 shrink-0" />
                     <div>
                       <div>GST Bill</div>
                       <div className="text-[10px] opacity-75 font-normal">Official Tax Invoice</div>
@@ -338,7 +298,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
                         : 'text-[var(--khata-text)] hover:bg-[var(--khata-surface-inset)] hover:text-[var(--khata-accent)]'
                     }`}
                   >
-                    <FileText className="w-4 h-4 text-emerald-500" />
+                    <FileText className="w-4 h-4 shrink-0 text-emerald-500" />
                     <div>
                       <div>Normal Bill</div>
                       <div className="text-[10px] opacity-75 font-normal">Standard / Non-GST</div>
@@ -350,7 +310,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
           </nav>
 
           {/* Controls: Notifications, Appearance, Owner Phone, Logout, Mobile Menu Toggle */}
-          <div className="flex flex-wrap items-center justify-end gap-1 sm:gap-2 order-2 lg:order-3 shrink-0">
+          <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2 xl:gap-1.5 order-2 xl:order-3 shrink-0">
             <NotificationCenterButton />
 
             {/* Persistent Appearance & Accessibility Button */}
@@ -364,14 +324,14 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               }}
               title="Appearance & Accessibility"
               aria-label="Open Appearance & Accessibility settings"
-              className="neu-btn-secondary text-xs px-2 sm:px-3 py-1.5 sm:py-2 inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
+              className="neu-btn-secondary text-xs px-2 py-1.5 sm:px-2.5 sm:py-2 inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
             >
-              <Palette className="w-4 h-4 text-[var(--khata-accent)]" />
+              <Palette className="w-4 h-4 shrink-0 text-[var(--khata-accent)]" />
               <span className="hidden sm:inline">Appearance</span>
             </button>
 
             {/* Owner Mobile Badge */}
-            <div className="hidden lg:block text-right">
+            <div className="hidden lg:block text-right px-0.5 leading-tight">
               <span className="block text-[11px] font-bold text-[var(--khata-text)]">Owner</span>
               <span className="block text-[10px] text-[var(--khata-text-muted)] font-mono">
                 {owner?.phone || 'Logged In'}
@@ -383,13 +343,13 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
               type="button"
               onClick={handleLogout}
               disabled={isLoggingOut}
-              className="neu-btn-secondary text-rose-500 hover:text-rose-600 text-xs px-2 sm:px-3.5 py-1.5 sm:py-2 inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
+              className="neu-btn-secondary text-rose-500 hover:text-rose-600 text-xs px-2 py-1.5 sm:px-3 sm:py-2 inline-flex items-center justify-center gap-1.5 min-h-[38px] sm:min-h-[40px]"
               aria-label="Log out of Khata"
             >
               {isLoggingOut ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
               ) : (
-                <LogOut className="w-4 h-4" />
+                <LogOut className="w-4 h-4 shrink-0" />
               )}
               <span className="hidden sm:inline">{isLoggingOut ? 'Logging out...' : 'Logout'}</span>
             </button>

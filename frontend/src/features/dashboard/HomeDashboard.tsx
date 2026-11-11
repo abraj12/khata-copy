@@ -166,7 +166,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
       {/* Header & Quick Shortcuts */}
       <div className="neu-card p-4 sm:p-6 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+          <div className="min-w-0 flex-1">
             <h1 className="text-xl sm:text-2xl font-black tracking-tight text-[var(--khata-text)]">
               Business Overview
             </h1>
@@ -205,7 +205,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
             disabled={loading}
             onClick={() => void loadOverview()}
             aria-label="Refresh dashboard metrics"
-            className="neu-btn-secondary text-xs px-3.5 py-2 min-h-[40px] font-bold inline-flex items-center gap-1.5"
+            className="neu-btn-secondary text-xs px-3.5 py-2 min-h-[40px] font-bold inline-flex items-center gap-1.5 shrink-0"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             <span>{loading ? 'Refreshing...' : 'Refresh'}</span>

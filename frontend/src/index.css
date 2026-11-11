@@ -344,6 +344,7 @@ input, button, select, textarea, table {
    TACTILE NEUMORPHIC UTILITY CLASSES (Gradient & Solid Surface Compatible)
    ============================================================================== */
 
+@layer components {
 .neu-surface {
   background: var(--khata-surface);
   color: var(--khata-text);
@@ -508,4 +509,5 @@ input, button, select, textarea, table {
   background-color: rgba(185, 28, 28, 0.12);
   color: var(--khata-danger);
   border: 1px solid rgba(185, 28, 28, 0.3);
+}
 }

@@ -141,7 +141,7 @@ export function KhataDashboard() {
       </footer>
 
       {/* Persistent Appearance & Accessibility Modal */}
-      <div className="mhi-no-print sticky top-0 z-30">
+      <div className="mhi-no-print">
         <AppearanceAccessibilityModal
           isOpen={isAppearanceOpen}
           onClose={() => setIsAppearanceOpen(false)}
