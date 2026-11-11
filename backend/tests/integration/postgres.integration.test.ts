@@ -6,6 +6,11 @@ import Decimal from 'decimal.js';
 import session from 'express-session';
 import connectPgSimple from 'connect-pg-simple';
 import { assertSafeTestDatabaseUrl } from '../../src/config/testDbGuard.js';
+import {
+  allocateDocumentNumber,
+  getSuggestedNextDocumentNumber,
+  GST_INVOICE_NUMBERING_CONFIG,
+} from '../../src/modules/billing/numbering.js';
 
 const { Pool } = pg;
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
@@ -886,13 +891,13 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         invoice_number, invoice_date, state, state_code,
         customer_name, customer_state, customer_state_code,
         subtotal_amount, discount_type, discount_value, discount_amount, taxable_amount,
-        gst_rate, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
+        cgst_rate, cgst_amount, sgst_rate, sgst_amount,
         igst_rate, igst_amount, tax_amount, grand_total, amount_in_words
       ) VALUES (
         'INV-FIN-531', '2026-11-11', 'Bihar', '10',
         'UP Customer', 'Uttar Pradesh', '09',
         500.00, 'percentage', 10.00, 50.00, 450.00,
-        18.00, 0.00, 0.00, 0.00, 0.00,
+        0.00, 0.00, 0.00, 0.00,
         18.00, 81.00, 81.00, 531.00, 'Rupees Five Hundred Thirty One Only'
       ) RETURNING *
     `);
@@ -900,10 +905,17 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     expect(Number(inv.subtotal_amount)).toBe(500);
     expect(Number(inv.discount_amount)).toBe(50);
     expect(Number(inv.taxable_amount)).toBe(450);
+    expect(Number(inv.igst_rate)).toBe(18);
     expect(Number(inv.igst_amount)).toBe(81);
     expect(Number(inv.cgst_amount)).toBe(0);
     expect(Number(inv.sgst_amount)).toBe(0);
     expect(Number(inv.grand_total)).toBe(531);
+
+    await pool.query(
+      `INSERT INTO gst_invoice_items (invoice_id, item_index, description, quantity, rate, amount)
+       VALUES ($1, 1, 'Item A', 2.00, 100.00, 200.00), ($1, 2, 'Item B', 1.00, 300.00, 300.00)`,
+      [inv.id]
+    );
 
     // Intra-State (Bihar 10 -> Bihar 10): 450.00 Taxable, 9% CGST 40.50, 9% SGST 40.50, IGST 0.00 -> 531.00
     const intraStateRes = await pool.query(`
@@ -911,20 +923,72 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         invoice_number, invoice_date, state, state_code,
         customer_name, customer_state, customer_state_code,
         subtotal_amount, discount_type, discount_value, discount_amount, taxable_amount,
-        gst_rate, cgst_rate, cgst_amount, sgst_rate, sgst_amount,
+        cgst_rate, cgst_amount, sgst_rate, sgst_amount,
         igst_rate, igst_amount, tax_amount, grand_total, amount_in_words
       ) VALUES (
         'INV-INTRA-531', '2026-11-11', 'Bihar', '10',
         'Bihar Customer', 'Bihar', '10',
         500.00, 'percentage', 10.00, 50.00, 450.00,
-        18.00, 9.00, 40.50, 9.00, 40.50,
+        9.00, 40.50, 9.00, 40.50,
         0.00, 0.00, 81.00, 531.00, 'Rupees Five Hundred Thirty One Only'
       ) RETURNING *
     `);
     const intraInv = intraStateRes.rows[0];
+    expect(Number(intraInv.cgst_rate)).toBe(9);
+    expect(Number(intraInv.sgst_rate)).toBe(9);
     expect(Number(intraInv.cgst_amount)).toBe(40.5);
     expect(Number(intraInv.sgst_amount)).toBe(40.5);
     expect(Number(intraInv.igst_amount)).toBe(0);
     expect(Number(intraInv.grand_total)).toBe(531);
+  });
+
+  // 19. Migration 018 Quotation Nullability & Advisory-Lock Document Numbering Integration
+  it('19. Migration 018 leaves quotation buyer state nullable without defaults and advisory-lock numbering stays monotonic & preview-safe', async () => {
+    const colRes = await pool.query(`
+      SELECT column_name, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'quotations'
+        AND column_name IN ('customer_state', 'customer_state_code')
+      ORDER BY column_name ASC
+    `);
+    expect(colRes.rows).toHaveLength(2);
+    for (const col of colRes.rows) {
+      expect(col.is_nullable).toBe('YES');
+      expect(col.column_default).toBeNull();
+    }
+
+    const qRes = await pool.query(
+      `INSERT INTO quotations (
+        quotation_number, quotation_date, customer_name, customer_state, customer_state_code,
+        company_snapshot, subtotal, taxable_amount, grand_total, amount_in_words
+      ) VALUES (
+        'QT-INT-NULL-STATE', '2026-11-11', 'Null State Buyer', NULL, NULL,
+        '{"companyName":"ALGIONS AI LABS PRIVATE LIMITED","state":"Bihar","stateCode":"10"}'::jsonb,
+        500.00, 500.00, 500.00, 'Rupees Five Hundred Only'
+      ) RETURNING customer_state, customer_state_code`
+    );
+    expect(qRes.rows[0].customer_state).toBeNull();
+    expect(qRes.rows[0].customer_state_code).toBeNull();
+
+    const seqBefore = await pool.query(`SELECT last_value, is_called FROM gst_invoice_number_seq`);
+    const preview1 = await getSuggestedNextDocumentNumber(pool, GST_INVOICE_NUMBERING_CONFIG);
+    const preview2 = await getSuggestedNextDocumentNumber(pool, GST_INVOICE_NUMBERING_CONFIG);
+    const seqAfterPreview = await pool.query(`SELECT last_value, is_called FROM gst_invoice_number_seq`);
+
+    expect(preview1).toBe(preview2);
+    expect(seqAfterPreview.rows[0].last_value).toBe(seqBefore.rows[0].last_value);
+    expect(seqAfterPreview.rows[0].is_called).toBe(seqBefore.rows[0].is_called);
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const allocated1 = await allocateDocumentNumber(client, GST_INVOICE_NUMBERING_CONFIG);
+      const allocated2 = await allocateDocumentNumber(client, GST_INVOICE_NUMBERING_CONFIG);
+      expect(Number(allocated2)).toBe(Number(allocated1) + 1);
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
   });
 });
