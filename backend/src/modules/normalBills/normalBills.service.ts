@@ -25,6 +25,7 @@ import { validateMoneyInput, validateDecimalQuantityInput, resolveValidatedDisco
 import {
   generateTaxInvoicePdf,
   GstInvoicePdfCompany,
+  GstInvoicePdfData,
   numberToIndianWords,
 } from '../gstInvoices/gstInvoices.pdf.js';
 
@@ -169,10 +170,56 @@ export class NormalBillsService {
         phone: profile.phone,
         state: profile.state,
         stateCode: profile.stateCode,
+        jurisdiction: profile.jurisdiction,
       };
     } catch {
       return undefined;
     }
+  }
+
+  private buildPdfDataFromRecord(
+    bill: NormalBillRecord,
+    company?: GstInvoicePdfCompany
+  ): GstInvoicePdfData {
+    return {
+      invoiceNumber: bill.bill_number,
+      invoiceDate: bill.bill_date,
+      state: bill.state,
+      stateCode: bill.state_code,
+      transportationMode: bill.transportation_mode,
+      vehicleNumber: bill.vehicle_number,
+      dateOfSupply: bill.date_of_supply,
+      placeOfSupply: bill.place_of_supply,
+      company,
+      customer: {
+        name: bill.customer_name,
+        address: bill.customer_address,
+        phone: bill.customer_phone,
+        state: bill.customer_state,
+        stateCode: bill.customer_state_code,
+      },
+      items: (bill.items || []).map((item) => ({
+        name: item.description,
+        hsn: item.hsn_code,
+        quantity: item.quantity,
+        unit: item.unit,
+        rate: item.rate,
+        rateUnit: item.rate_unit,
+        amount: item.amount,
+      })),
+      totals: {
+        subtotal: bill.subtotal_amount || bill.total_amount,
+        discountType: bill.discount_type,
+        discountValue: bill.discount_value,
+        discountAmount: bill.discount_amount,
+        taxableAmount: bill.total_amount,
+        taxAmount: 0,
+        grandTotal: bill.total_amount,
+      },
+      amountInWords: bill.amount_in_words,
+      isNormalBill: true,
+      billTitle: 'NORMAL BILL',
+    };
   }
 
   /**
@@ -478,64 +525,31 @@ export class NormalBillsService {
     let r2Key: string | null = null;
 
     try {
-      const pdfBuffer = await generateTaxInvoicePdf({
-        invoiceNumber: billRecord.bill_number,
-        invoiceDate: billRecord.bill_date,
-        state: billRecord.state,
-        stateCode: billRecord.state_code,
-        transportationMode: billRecord.transportation_mode,
-        vehicleNumber: billRecord.vehicle_number,
-        dateOfSupply: billRecord.date_of_supply,
-        placeOfSupply: billRecord.place_of_supply,
-        company: companyForPdf,
-        customer: {
-          name: billRecord.customer_name,
-          address: billRecord.customer_address,
-          phone: billRecord.customer_phone,
-          state: billRecord.customer_state,
-          stateCode: billRecord.customer_state_code,
-        },
-        items: (billRecord.items || []).map((item) => ({
-          name: item.description,
-          hsn: item.hsn_code,
-          quantity: item.quantity,
-          unit: item.unit,
-          rate: item.rate,
-          rateUnit: item.rate_unit,
-          amount: item.amount,
-        })),
-        totals: {
-          subtotal: billRecord.subtotal_amount || billRecord.total_amount,
-          discountType: billRecord.discount_type,
-          discountValue: billRecord.discount_value,
-          discountAmount: billRecord.discount_amount,
-          taxableAmount: billRecord.total_amount,
-          taxAmount: 0,
-          grandTotal: billRecord.total_amount,
-        },
-        amountInWords: billRecord.amount_in_words,
-        isNormalBill: true,
-        billTitle: 'NORMAL BILL',
-      });
+      const pdfBuffer = await generateTaxInvoicePdf(
+        this.buildPdfDataFromRecord(billRecord, companyForPdf)
+      );
 
       if (this.storageService.isConfigured()) {
         const [year, month] = getBusinessDateISO(env.BUSINESS_TIME_ZONE).split('-');
-        r2Key = `normal-bills/${year}/${month}/${billRecord.id}.pdf`;
+        const candidateKey = `normal-bills/${year}/${month}/${billRecord.id}.pdf`;
 
         try {
           await this.storageService.uploadBufferToR2({
             buffer: pdfBuffer,
-            objectKey: r2Key,
+            objectKey: candidateKey,
             contentType: 'application/pdf',
           });
+          r2Key = candidateKey;
           pdfStatus = 'uploaded';
         } catch (uploadErr) {
           console.error('[NORMAL BILL R2 UPLOAD] Upload failed:', uploadErr);
+          r2Key = null;
           pdfStatus = 'failed';
         }
       }
     } catch (pdfErr) {
       console.error('[NORMAL BILL PDF GENERATION] PDF generation failed:', pdfErr);
+      r2Key = null;
       pdfStatus = 'failed';
     }
 
@@ -633,6 +647,7 @@ export class NormalBillsService {
         phone: companyProfile.phone,
         state: companyProfile.state,
         stateCode: companyProfile.stateCode,
+        jurisdiction: companyProfile.jurisdiction,
       },
       customer: {
         name: input.customerName || 'Valued Customer',
@@ -851,49 +866,62 @@ export class NormalBillsService {
     }
 
     const company = await this.getOptionalPdfCompany();
-    const buffer = await generateTaxInvoicePdf({
-      invoiceNumber: bill.bill_number,
-      invoiceDate: bill.bill_date,
-      state: bill.state,
-      stateCode: bill.state_code,
-      transportationMode: bill.transportation_mode,
-      vehicleNumber: bill.vehicle_number,
-      dateOfSupply: bill.date_of_supply,
-      placeOfSupply: bill.place_of_supply,
-      company,
-      customer: {
-        name: bill.customer_name,
-        address: bill.customer_address,
-        phone: bill.customer_phone,
-        state: bill.customer_state,
-        stateCode: bill.customer_state_code,
-      },
-      items: (bill.items || []).map((item) => ({
-        name: item.description,
-        hsn: item.hsn_code,
-        quantity: item.quantity,
-        unit: item.unit,
-        rate: item.rate,
-        rateUnit: item.rate_unit,
-        amount: item.amount,
-      })),
-      totals: {
-        subtotal: bill.subtotal_amount || bill.total_amount,
-        discountType: bill.discount_type,
-        discountValue: bill.discount_value,
-        discountAmount: bill.discount_amount,
-        taxableAmount: bill.total_amount,
-        taxAmount: 0,
-        grandTotal: bill.total_amount,
-      },
-      amountInWords: bill.amount_in_words,
-      isNormalBill: true,
-      billTitle: 'NORMAL BILL',
-    });
+    const buffer = await generateTaxInvoicePdf(this.buildPdfDataFromRecord(bill, company));
 
     return {
       buffer,
       filename,
+    };
+  }
+
+  /**
+   * Idempotently retries PDF generation & R2 upload for a failed or pending Normal Bill
+   * outside of any database transaction. Never persists r2_object_key unless R2 upload succeeds.
+   */
+  public async retryBillPdf(id: number): Promise<NormalBillRecord> {
+    this.storageService.assertConfigured();
+    const bill = await this.getBillById(id);
+
+    if (bill.pdf_status === 'uploaded' && bill.r2_object_key) {
+      return bill;
+    }
+
+    const company = await this.getOptionalPdfCompany();
+    const pdfBuffer = await generateTaxInvoicePdf(this.buildPdfDataFromRecord(bill, company));
+
+    const dateStr =
+      typeof bill.bill_date === 'string' && /^\d{4}-\d{2}/.test(bill.bill_date)
+        ? bill.bill_date
+        : getBusinessDateISO(env.BUSINESS_TIME_ZONE);
+    const [year, month] = dateStr.split('-');
+    const candidateKey = `normal-bills/${year}/${month}/${bill.id}.pdf`;
+
+    try {
+      await this.storageService.uploadBufferToR2({
+        buffer: pdfBuffer,
+        objectKey: candidateKey,
+        contentType: 'application/pdf',
+      });
+    } catch (uploadErr) {
+      await appPool.query(
+        'UPDATE normal_bills SET pdf_status = $1, r2_object_key = NULL, updated_at = NOW() WHERE id = $2',
+        ['failed', bill.id]
+      );
+      throw new AppError(
+        `Failed to upload bill PDF to storage: ${(uploadErr as Error).message}`,
+        502,
+        'PDF_UPLOAD_FAILED'
+      );
+    }
+
+    await appPool.query(
+      'UPDATE normal_bills SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3',
+      ['uploaded', candidateKey, bill.id]
+    );
+    return {
+      ...bill,
+      pdf_status: 'uploaded',
+      r2_object_key: candidateKey,
     };
   }
 }

@@ -30,6 +30,9 @@ export default defineConfig({
           ) {
             return 'react-vendor';
           }
+          if (id.includes('pdfjs-dist')) {
+            return 'pdfjs-vendor';
+          }
           if (id.includes('@zxing')) {
             return 'barcode-scanner';
           }

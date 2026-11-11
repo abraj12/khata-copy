@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import Decimal from 'decimal.js';
 import './MannatTaxInvoice.css';
 
 export interface MannatInvoiceCompany {
@@ -20,6 +21,16 @@ const DEFAULT_COMPANY: MannatInvoiceCompany = Object.freeze({
   stateCode: '',
   jurisdiction: 'Subject to seller jurisdiction.',
 });
+
+function toDec(value: unknown): Decimal {
+  if (value === null || value === undefined || value === '') return new Decimal(0);
+  try {
+    const parsed = new Decimal(String(value).trim());
+    return parsed.isFinite() ? parsed : new Decimal(0);
+  } catch {
+    return new Decimal(0);
+  }
+}
 
 export const numberWords = (value: number | string): string => {
   const ones = [
@@ -51,22 +62,24 @@ export const numberWords = (value: number | string): string => {
     return parts.join(' ');
   };
 
-  const amount = Number(value || 0);
-  if (!Number.isFinite(amount)) return '';
-  const rounded = Math.round((amount + Number.EPSILON) * 100) / 100;
-  const rupees = Math.floor(rounded);
-  const paise = Math.round((rounded - rupees) * 100);
+  const dec = toDec(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  if (!dec.isFinite() || dec.lt(0)) return '';
+  const fixedStr = dec.toFixed(2);
+  const [rupeesStr, paiseStr] = fixedStr.split('.');
+  const rupees = parseInt(rupeesStr, 10) || 0;
+  const paise = parseInt(paiseStr, 10) || 0;
   return `Rupees ${indianInteger(rupees)}${paise ? ` and ${indianInteger(paise)} Paise` : ''} Only`;
 };
 
-const money = (value: any): string => {
-  const n = Number(value ?? 0);
-  return Number.isFinite(n)
-    ? n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const money = (value: unknown): string => {
+  const dec = toDec(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const num = dec.toNumber();
+  return Number.isFinite(num)
+    ? num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : '0.00';
 };
 
-const printableDate = (value: any): string => {
+const printableDate = (value: unknown): string => {
   if (!value) return '';
   if (value instanceof Date) {
     const y = value.getFullYear();
@@ -111,8 +124,11 @@ export interface MannatInvoiceCustomer {
 }
 
 export interface MannatInvoiceTotals {
-  taxableAmount?: number | string;
   subtotal?: number | string;
+  discountType?: 'percentage' | 'fixed' | null;
+  discountValue?: number | string;
+  discountAmount?: number | string;
+  taxableAmount?: number | string;
   cgstRate?: number | string;
   cgstAmount?: number | string;
   sgstRate?: number | string;
@@ -142,6 +158,7 @@ export interface MannatTaxInvoiceComponentProps {
   invoice?: MannatInvoiceProps;
   showPrintButton?: boolean;
   onDownloadPdf?: () => void;
+  onExportImages?: () => void;
   isDownloadingPdf?: boolean;
   isNormalBill?: boolean;
   billTitle?: string;
@@ -156,6 +173,7 @@ export default function MannatTaxInvoice({
   invoice = {},
   showPrintButton = true,
   onDownloadPdf,
+  onExportImages,
   isDownloadingPdf,
   isNormalBill = false,
   billTitle,
@@ -203,23 +221,61 @@ export default function MannatTaxInvoice({
     }
   };
 
-  const lineAmounts = items.map((item) => {
-    const explicitAmount = item.amount;
-    const calculated = Number(item.quantity || 0) * Number(item.rate || 0);
-    return Number(explicitAmount ?? calculated) || 0;
+  const lineAmountsDec = items.map((item) => {
+    if (item.amount !== undefined && item.amount !== null && item.amount !== '') {
+      return toDec(item.amount).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    }
+    return toDec(item.quantity).times(toDec(item.rate)).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
   });
 
-  const taxableAmount = Number(
-    suppliedTotals.taxableAmount ??
-    suppliedTotals.subtotal ??
-    lineAmounts.reduce((sum, amount) => sum + amount, 0)
-  );
-  const cgstAmount = isNormalBill ? 0 : Number(suppliedTotals.cgstAmount || 0);
-  const sgstAmount = isNormalBill ? 0 : Number(suppliedTotals.sgstAmount || 0);
-  const igstAmount = isNormalBill ? 0 : Number(suppliedTotals.igstAmount || 0);
-  const taxAmount = isNormalBill ? 0 : Number(suppliedTotals.taxAmount ?? (cgstAmount + sgstAmount + igstAmount));
-  const grandTotal = Number(suppliedTotals.grandTotal ?? (taxableAmount + taxAmount));
-  const amountWords = invoice.amountInWords || numberWords(grandTotal);
+  const rawItemsSubtotalDec = lineAmountsDec.reduce((sum, amt) => sum.plus(amt), new Decimal(0));
+  const subtotalDec =
+    suppliedTotals.subtotal !== undefined && suppliedTotals.subtotal !== ''
+      ? toDec(suppliedTotals.subtotal)
+      : rawItemsSubtotalDec;
+  const discountAmountDec = toDec(suppliedTotals.discountAmount).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+
+  const hasExplicitTaxable =
+    suppliedTotals.taxableAmount !== undefined && suppliedTotals.taxableAmount !== '';
+  const taxableAmountDec = hasExplicitTaxable
+    ? toDec(suppliedTotals.taxableAmount)
+    : Decimal.max(0, subtotalDec.minus(discountAmountDec));
+
+  const effectiveDiscountDec = discountAmountDec.gt(0)
+    ? discountAmountDec
+    : Decimal.max(0, subtotalDec.minus(taxableAmountDec));
+  const hasDiscount = effectiveDiscountDec.gt(0);
+
+  const cgstAmountDec = isNormalBill ? new Decimal(0) : toDec(suppliedTotals.cgstAmount);
+  const sgstAmountDec = isNormalBill ? new Decimal(0) : toDec(suppliedTotals.sgstAmount);
+  const igstAmountDec = isNormalBill ? new Decimal(0) : toDec(suppliedTotals.igstAmount);
+  const igstRateDec = toDec(suppliedTotals.igstRate);
+
+  const hasExplicitTax = suppliedTotals.taxAmount !== undefined && suppliedTotals.taxAmount !== '';
+  const taxAmountDec = isNormalBill
+    ? new Decimal(0)
+    : hasExplicitTax
+      ? toDec(suppliedTotals.taxAmount)
+      : cgstAmountDec.plus(sgstAmountDec).plus(igstAmountDec);
+
+  const hasExplicitGrandTotal =
+    suppliedTotals.grandTotal !== undefined && suppliedTotals.grandTotal !== '';
+  const grandTotalDec = hasExplicitGrandTotal
+    ? toDec(suppliedTotals.grandTotal)
+    : taxableAmountDec.plus(taxAmountDec);
+
+  const isInterState =
+    !isNormalBill &&
+    (igstAmountDec.gt(0) || igstRateDec.gt(0)) &&
+    cgstAmountDec.eq(0) &&
+    sgstAmountDec.eq(0);
+
+  const discountLabel =
+    suppliedTotals.discountType === 'percentage' && toDec(suppliedTotals.discountValue).gt(0)
+      ? `Discount (${toDec(suppliedTotals.discountValue).toFixed(2).replace(/\.00$/, '')}%)`
+      : 'Discount';
+
+  const amountWords = invoice.amountInWords || numberWords(grandTotalDec.toFixed(2));
 
   const printInvoice = () => window.print();
   const displayTitle = billTitle || (isNormalBill ? 'NORMAL BILL' : 'TAX INVOICE');
@@ -258,6 +314,16 @@ export default function MannatTaxInvoice({
                 className="bg-neutral-800 hover:bg-neutral-900 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold transition disabled:opacity-50 flex items-center justify-center gap-1.5"
               >
                 {isDownloadingPdf ? 'Generating PDF...' : 'Download Official PDF'}
+              </button>
+            )}
+
+            {onExportImages && (
+              <button
+                type="button"
+                onClick={onExportImages}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5"
+              >
+                Export Images (.webp)
               </button>
             )}
 
@@ -349,7 +415,7 @@ export default function MannatTaxInvoice({
                     <div>{item.hsn || ''}</div>
                     <div>{item.quantity ?? ''}{item.unit ? ` ${item.unit}` : ''}</div>
                     <div>{item.rate === undefined || item.rate === null ? '' : money(item.rate)}{item.rateUnit ? ` / ${item.rateUnit}` : ''}</div>
-                    <div>{money(lineAmounts[index])}</div>
+                    <div>{money(lineAmountsDec[index].toFixed(2))}</div>
                   </div>
                 ))}
               </div>
@@ -357,23 +423,61 @@ export default function MannatTaxInvoice({
               <div className="mhi-tax-summary">
                 {isNormalBill ? (
                   <>
+                    {hasDiscount && (
+                      <>
+                        <div>
+                          <strong>Subtotal</strong>
+                          <span>{money(subtotalDec.toFixed(2))}</span>
+                        </div>
+                        <div>
+                          <strong>{discountLabel}</strong>
+                          <span>- {money(effectiveDiscountDec.toFixed(2))}</span>
+                        </div>
+                      </>
+                    )}
                     <div>
                       <strong>Total Amount</strong>
-                      <span>{money(taxableAmount || grandTotal)}</span>
+                      <span>{money((taxableAmountDec.gt(0) || hasDiscount ? taxableAmountDec : grandTotalDec).toFixed(2))}</span>
                     </div>
                     <div className="mhi-grand-total">
                       <strong>Grand Total</strong>
-                      <span>{money(grandTotal)}</span>
+                      <span>{money(grandTotalDec.toFixed(2))}</span>
                     </div>
                   </>
                 ) : (
                   <>
-                    <div><strong>T. Amt. Before Tax</strong><span>{money(taxableAmount)}</span></div>
-                    <div><strong>CGST @ {suppliedTotals.cgstRate ?? ''}{suppliedTotals.cgstRate !== undefined && suppliedTotals.cgstRate !== '' ? '%' : ''}</strong><span>{money(cgstAmount)}</span></div>
-                    <div><strong>SGST @ {suppliedTotals.sgstRate ?? ''}{suppliedTotals.sgstRate !== undefined && suppliedTotals.sgstRate !== '' ? '%' : ''}</strong><span>{money(sgstAmount)}</span></div>
-                    <div><strong>IGST @ {suppliedTotals.igstRate ?? ''}{suppliedTotals.igstRate !== undefined && suppliedTotals.igstRate !== '' ? '%' : ''}</strong><span>{money(igstAmount)}</span></div>
-                    <div><strong>Tax Amount GST</strong><span>{money(taxAmount)}</span></div>
-                    <div className="mhi-grand-total"><strong>T. Amount After Tax</strong><span>{money(grandTotal)}</span></div>
+                    {hasDiscount && (
+                      <>
+                        <div>
+                          <strong>Subtotal</strong>
+                          <span>{money(subtotalDec.toFixed(2))}</span>
+                        </div>
+                        <div>
+                          <strong>{discountLabel}</strong>
+                          <span>- {money(effectiveDiscountDec.toFixed(2))}</span>
+                        </div>
+                      </>
+                    )}
+                    <div><strong>T. Amt. Before Tax</strong><span>{money(taxableAmountDec.toFixed(2))}</span></div>
+                    {isInterState ? (
+                      <div>
+                        <strong>IGST @ {suppliedTotals.igstRate ?? ''}{suppliedTotals.igstRate !== undefined && suppliedTotals.igstRate !== '' ? '%' : ''}</strong>
+                        <span>{money(igstAmountDec.toFixed(2))}</span>
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          <strong>CGST @ {suppliedTotals.cgstRate ?? ''}{suppliedTotals.cgstRate !== undefined && suppliedTotals.cgstRate !== '' ? '%' : ''}</strong>
+                          <span>{money(cgstAmountDec.toFixed(2))}</span>
+                        </div>
+                        <div>
+                          <strong>SGST @ {suppliedTotals.sgstRate ?? ''}{suppliedTotals.sgstRate !== undefined && suppliedTotals.sgstRate !== '' ? '%' : ''}</strong>
+                          <span>{money(sgstAmountDec.toFixed(2))}</span>
+                        </div>
+                      </>
+                    )}
+                    <div><strong>Tax Amount GST</strong><span>{money(taxAmountDec.toFixed(2))}</span></div>
+                    <div className="mhi-grand-total"><strong>T. Amount After Tax</strong><span>{money(grandTotalDec.toFixed(2))}</span></div>
                   </>
                 )}
               </div>

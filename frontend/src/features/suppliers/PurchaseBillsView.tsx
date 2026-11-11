@@ -21,6 +21,7 @@ import {
 import { getBusinessDateISO } from '../../utils/businessDate.js';
 import { validateQuantityInput, validateSellingRateInput } from '../../utils/lineItemDraft.js';
 import { safeDecimal } from '../../lib/formatters.js';
+import { downloadBlobSafely } from '../../utils/blobDownload.js';
 import {
   cancelPurchaseBillApi,
   computeDraftPurchaseBillTotals,
@@ -442,14 +443,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
   const handleDownloadAttachment = async (bill: PurchaseBillDetail) => {
     try {
       const blob = await fetchPurchaseBillAttachmentBlob(bill.id, true);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = bill.attachmentFilename || `purchase-bill-${bill.invoiceNumber}`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      downloadBlobSafely(blob, bill.attachmentFilename || `purchase-bill-${bill.invoiceNumber}`);
     } catch (err: any) {
       setNotice({ type: 'error', text: err?.message || 'Unable to download attachment.' });
     }

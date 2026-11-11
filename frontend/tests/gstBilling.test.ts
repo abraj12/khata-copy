@@ -323,7 +323,7 @@ describe('Release #023: GstBillingView Races, Live Decimal Safety, 20-Item Limit
     expect(container.textContent).not.toContain('GST-FIRST');
   });
 
-  it('7. Enforces 20-item cap and discovers >1000 server products & customers via debounced search', async () => {
+  it('7. Enforces 100-item cap and discovers >1000 server products & customers via debounced search', async () => {
     await act(async () => {
       root.render(React.createElement(GstBillingView));
     });
@@ -332,12 +332,13 @@ describe('Release #023: GstBillingView Races, Live Decimal Safety, 20-Item Limit
       Array.from(container.querySelectorAll('button')).find((b) =>
         b.textContent?.includes('Add Item')
       )!;
-    for (let i = 1; i < MAX_BILL_LINE_ITEMS; i++) {
-      vi.advanceTimersByTime(1);
-      await act(async () => {
-        getAddBtn().click();
-      });
-    }
+    const addBtn = getAddBtn();
+    await act(async () => {
+      for (let i = 1; i < MAX_BILL_LINE_ITEMS; i++) {
+        vi.advanceTimersByTime(1);
+        addBtn.click();
+      }
+    });
     expect(getAddBtn().disabled).toBe(true);
     expect(container.textContent).toContain(`Maximum limit of ${MAX_BILL_LINE_ITEMS} line items reached`);
 
@@ -387,5 +388,5 @@ describe('Release #023: GstBillingView Races, Live Decimal Safety, 20-Item Limit
       prod1150.click();
     });
     expect(container.textContent).toContain('GST Product 1150');
-  });
+  }, 45_000);
 });

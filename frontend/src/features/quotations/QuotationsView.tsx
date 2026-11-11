@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { INDIAN_STATES, getStateByCode } from '../../lib/indianStates.js';
+import { downloadBlobSafely } from '../../utils/blobDownload.js';
 import {
   FileText,
   Plus,
@@ -137,14 +138,7 @@ export const QuotationsView: React.FC = () => {
   const handleDownloadPdf = async (quotation: Quotation) => {
     try {
       const blob = await fetchSavedQuotationPdfBlob(quotation.id);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `Quotation-${quotation.quotation_number}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      downloadBlobSafely(blob, `Quotation-${quotation.quotation_number}.pdf`);
     } catch (err: any) {
       showNotification('error', err?.message || 'Failed to download PDF.');
     }
@@ -848,6 +842,17 @@ export const QuotationsView: React.FC = () => {
                     className="neu-input w-full text-xs"
                     min={1}
                     max={365}
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-[var(--khata-text-muted)] mb-1">Jurisdiction Caption</label>
+                  <input
+                    type="text"
+                    value={settings.jurisdiction || ''}
+                    onChange={(e) => setSettings({ ...settings, jurisdiction: e.target.value })}
+                    placeholder="Subject to seller jurisdiction."
+                    maxLength={200}
+                    className="neu-input w-full text-xs"
                   />
                 </div>
               </div>

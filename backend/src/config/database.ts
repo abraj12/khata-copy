@@ -97,6 +97,7 @@ export const EXPECTED_MIGRATIONS = [
   '023_supplier_audit_truncate_guard.sql',
   '024_home_dashboard_profitability.sql',
   '025_performance_reporting_hardening.sql',
+  '026_company_jurisdiction.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [

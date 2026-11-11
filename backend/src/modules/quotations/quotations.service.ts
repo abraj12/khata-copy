@@ -106,6 +106,7 @@ export interface QuotationSettingsRecord {
   standard_warranty_terms: string | null;
   standard_declaration: string | null;
   signatory_title: string;
+  jurisdiction?: string | null;
   updated_at: string;
 }
 
@@ -182,6 +183,7 @@ export class QuotationsService {
       gstin: normalizedGstin,
       email: typeof data.email === 'string' && data.email.trim() === '' ? null : data.email,
       logoUrl: typeof data.logoUrl === 'string' && data.logoUrl.trim() === '' ? null : data.logoUrl,
+      jurisdiction: typeof data.jurisdiction === 'string' && data.jurisdiction.trim() === '' ? null : data.jurisdiction,
     };
 
     const fields: string[] = [];
@@ -208,6 +210,7 @@ export class QuotationsService {
       standardWarrantyTerms: 'standard_warranty_terms',
       standardDeclaration: 'standard_declaration',
       signatoryTitle: 'signatory_title',
+      jurisdiction: 'jurisdiction',
     };
 
     Object.entries(normalizedPayload).forEach(([key, val]) => {
@@ -454,6 +457,7 @@ export class QuotationsService {
         bankIfsc: companyProfile.bankIfsc,
         bankBranch: companyProfile.bankBranch,
         signatoryTitle: companyProfile.signatoryTitle,
+        jurisdiction: companyProfile.jurisdiction,
       };
 
       const quotationDate = input.quotationDate || getBusinessDateISO(env.BUSINESS_TIME_ZONE);

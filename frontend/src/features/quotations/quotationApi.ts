@@ -25,6 +25,7 @@ export function toQuotationSettingsPayload(
     standard_warranty_terms: 'standardWarrantyTerms',
     standard_declaration: 'standardDeclaration',
     signatory_title: 'signatoryTitle',
+    jurisdiction: 'jurisdiction',
   };
 
   Object.entries(settings).forEach(([key, val]) => {
@@ -163,18 +164,26 @@ export async function convertQuotationToBill(
 /**
  * Preview PDF on the fly: fetches PDF blob using CSRF-protected apiClientBlob.
  */
-export async function previewQuotationPdf(payload: CreateQuotationPayload): Promise<Blob> {
+export async function previewQuotationPdf(
+  payload: CreateQuotationPayload,
+  signal?: AbortSignal
+): Promise<Blob> {
   return apiClientBlob('/api/v1/quotations/preview-pdf', {
     method: 'POST',
     body: JSON.stringify(payload),
+    signal,
   });
 }
 
 /**
  * Fetch saved quotation PDF as Blob for printing / downloading
  */
-export async function fetchSavedQuotationPdfBlob(id: number): Promise<Blob> {
+export async function fetchSavedQuotationPdfBlob(
+  id: number,
+  signal?: AbortSignal
+): Promise<Blob> {
   return apiClientBlob(`/api/v1/quotations/${id}/pdf`, {
     method: 'GET',
+    signal,
   });
 }

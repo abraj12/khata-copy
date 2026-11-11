@@ -127,6 +127,7 @@ router.post('/preview-pdf', async (req: Request, res: Response, next: NextFuncti
         bankIfsc: companyProfile.bankIfsc,
         bankBranch: companyProfile.bankBranch,
         signatoryTitle: companyProfile.signatoryTitle,
+        jurisdiction: companyProfile.jurisdiction,
       },
       customer: {
         name: parsed.data.customerName,

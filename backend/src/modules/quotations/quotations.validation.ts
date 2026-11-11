@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { isValidCalendarDate } from '../../utils/businessDate.js';
+import { env } from '../../config/env.js';
+import { getBusinessDateISO, isValidCalendarDate } from '../../utils/businessDate.js';
 import { validateDecimalQuantityInput } from '../../utils/validation.js';
 
 export { isValidCalendarDate };
@@ -56,7 +57,7 @@ export const gstRateValidator = z.union([z.number(), z.string()]).refine((val) =
 
 export const quotationItemInputSchema = z.object({
   productId: z.coerce.number().int().positive().nullable().optional(),
-  description: z.string().trim().min(1, 'Item description is required').max(255),
+  description: z.string().trim().min(1, 'Item description is required').max(2000, 'Item description cannot exceed 2000 characters'),
   hsnCode: z.string().trim().max(20, 'HSN code cannot exceed 20 characters').nullable().optional(),
   barcode: z.string().trim().max(64, 'Barcode cannot exceed 64 characters').nullable().optional(),
   quantity: quantityValidator,
@@ -65,35 +66,48 @@ export const quotationItemInputSchema = z.object({
   rateUnit: z.string().trim().max(20).nullable().optional(),
 });
 
-export const createQuotationSchema = z.object({
-  quotationNumber: z.string().trim().max(50).optional(),
-  quotationDate: z
-    .string()
-    .refine(isValidCalendarDate, 'Quotation date must be a valid calendar date in YYYY-MM-DD format')
-    .optional(),
-  validUntil: z
-    .string()
-    .refine(isValidCalendarDate, 'Valid until must be a valid calendar date in YYYY-MM-DD format')
-    .nullable()
-    .optional(),
-  initialStatus: z.enum(['draft', 'sent']).optional().default('draft'),
-  customerId: z.coerce.number().int().positive().nullable().optional(),
-  customerName: z.string().trim().min(1, 'Customer name is required').max(255),
-  customerAddress: z.string().trim().nullable().optional(),
-  customerPhone: z.string().trim().max(20).nullable().optional(),
-  customerGstin: z.string().trim().max(20).nullable().optional(),
-  customerState: z.string().trim().max(100).nullable().optional(),
-  customerStateCode: z.string().trim().max(10).nullable().optional(),
-  projectTitle: z.string().trim().max(255).nullable().optional(),
-  subject: z.string().trim().nullable().optional(),
-  items: z.array(quotationItemInputSchema).min(1, 'At least one line item is required'),
-  discountType: z.enum(['percentage', 'fixed']).nullable().optional(),
-  discountValue: discountValueValidator.optional().default(0),
-  gstEnabled: z.boolean().optional().default(false),
-  gstRate: gstRateValidator.optional().default(18),
-  termsAndConditions: z.string().trim().nullable().optional(),
-  notes: z.string().trim().nullable().optional(),
-});
+export const createQuotationSchema = z
+  .object({
+    quotationNumber: z.string().trim().max(50).optional(),
+    quotationDate: z
+      .string()
+      .refine(isValidCalendarDate, 'Quotation date must be a valid calendar date in YYYY-MM-DD format')
+      .optional(),
+    validUntil: z
+      .string()
+      .refine(isValidCalendarDate, 'Valid until must be a valid calendar date in YYYY-MM-DD format')
+      .nullable()
+      .optional(),
+    initialStatus: z.enum(['draft', 'sent']).optional().default('draft'),
+    customerId: z.coerce.number().int().positive().nullable().optional(),
+    customerName: z.string().trim().min(1, 'Customer name is required').max(255),
+    customerAddress: z.string().trim().nullable().optional(),
+    customerPhone: z.string().trim().max(20).nullable().optional(),
+    customerGstin: z.string().trim().max(20).nullable().optional(),
+    customerState: z.string().trim().max(100).nullable().optional(),
+    customerStateCode: z.string().trim().max(10).nullable().optional(),
+    projectTitle: z.string().trim().max(255).nullable().optional(),
+    subject: z.string().trim().nullable().optional(),
+    items: z.array(quotationItemInputSchema).min(1, 'At least one line item is required'),
+    discountType: z.enum(['percentage', 'fixed']).nullable().optional(),
+    discountValue: discountValueValidator.optional().default(0),
+    gstEnabled: z.boolean().optional().default(false),
+    gstRate: gstRateValidator.optional().default(18),
+    termsAndConditions: z.string().trim().nullable().optional(),
+    notes: z.string().trim().nullable().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.validUntil) {
+      const effectiveQuotationDate = data.quotationDate || getBusinessDateISO(env.BUSINESS_TIME_ZONE);
+      if (data.validUntil < effectiveQuotationDate) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['validUntil'],
+          message: 'Valid until date cannot be earlier than the quotation date',
+        });
+      }
+    }
+  });
 
 export const updateQuotationStatusSchema = z.object({
   status: z.enum(['draft', 'sent', 'accepted', 'rejected', 'expired']),
@@ -133,6 +147,7 @@ export const quotationSettingsSchema = z.object({
   standardWarrantyTerms: z.string().trim().nullable().optional(),
   standardDeclaration: z.string().trim().nullable().optional(),
   signatoryTitle: z.string().trim().max(100).default('Authorized Signatory'),
+  jurisdiction: z.string().trim().max(200).nullable().optional(),
 });
 
 export const quotationQuerySchema = z.object({

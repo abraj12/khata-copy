@@ -18,6 +18,8 @@ import {
   Building,
   Truck,
   Loader2,
+  RefreshCw,
+  Image as ImageIcon,
   Check,
   X,
 } from 'lucide-react';
@@ -33,8 +35,12 @@ import {
   listNormalBills,
   downloadNormalBillPdf,
   downloadNormalBillDraftPdf,
+  fetchNormalBillPdfBlob,
+  fetchNormalBillDraftPdfBlob,
+  retryNormalBillPdf,
   mapNormalBillToInvoiceProps,
 } from './normalBillsApi.js';
+import { PdfImageExportModal } from '../../components/PdfImageExportModal.js';
 import Decimal from 'decimal.js';
 import { fetchQuotationSettings } from '../quotations/quotationApi.js';
 import {
@@ -94,6 +100,7 @@ export const NormalBillingView: React.FC = () => {
     phone: string | null;
     state: string;
     stateCode: string;
+    jurisdiction?: string | null;
   } | null>(null);
   const [billNumber, setBillNumber] = useState('');
   const [isManualBillNumber, setIsManualBillNumber] = useState(false);
@@ -149,6 +156,12 @@ export const NormalBillingView: React.FC = () => {
   const [previewInvoice, setPreviewInvoice] = useState<MannatInvoiceProps | null>(null);
   const [autoPrintAfterPreview, setAutoPrintAfterPreview] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [retryingPdfId, setRetryingPdfId] = useState<number | null>(null);
+  const [imageExportTarget, setImageExportTarget] = useState<{
+    title: string;
+    baseFileName: string;
+    fetchPdfBlob: (signal: AbortSignal) => Promise<Blob>;
+  } | null>(null);
 
   const handleDirectPrint = (bill: NormalBillRecord) => {
     setPreviewInvoice(mapNormalBillToInvoiceProps(bill, companyProfile || undefined));
@@ -239,6 +252,7 @@ export const NormalBillingView: React.FC = () => {
             phone: settings.phone,
             state: settings.state,
             stateCode: settings.state_code,
+            jurisdiction: settings.jurisdiction || null,
           });
           setState(settings.state || '');
           setStateCode(settings.state_code || '');
@@ -547,6 +561,33 @@ export const NormalBillingView: React.FC = () => {
     return null;
   };
 
+  const buildDraftNormalBillPayload = (): CreateNormalBillPayload => ({
+    billNumber: isManualBillNumber ? billNumber.trim() || undefined : undefined,
+    billDate,
+    state,
+    stateCode,
+    transportationMode: transportationMode.trim() || null,
+    vehicleNumber: vehicleNumber.trim() || null,
+    dateOfSupply: dateOfSupply || null,
+    placeOfSupply: placeOfSupply.trim() || null,
+    customerId: customerId ? Number(customerId) : null,
+    customerName: customerName.trim() || 'Customer / Receiver',
+    customerAddress: customerAddress.trim() || null,
+    customerPhone: customerPhone.trim() || null,
+    customerState: customerState.trim() || null,
+    customerStateCode: customerStateCode.trim() || null,
+    items: items.map((item) => ({
+      productId: item.productId ? Number(item.productId) : null,
+      description: item.description.trim() || 'Item Description',
+      hsnCode: item.hsnCode.trim() || null,
+      quantity: item.quantity || '1',
+      unit: item.unit.trim() || null,
+      rate: item.rate,
+      rateUnit: item.rateUnit.trim() || null,
+    })),
+    notes: notes.trim() || null,
+  });
+
   const handleDownloadPdf = async (id: number, bNumber: string) => {
     try {
       setIsDownloadingPdf(true);
@@ -558,6 +599,20 @@ export const NormalBillingView: React.FC = () => {
     }
   };
 
+  const handleRetryPdf = async (id: number) => {
+    try {
+      setRetryingPdfId(id);
+      setErrorMessage(null);
+      const updated = await retryNormalBillPdf(id);
+      setHistoryBills((prev) => prev.map((row) => (row.id === id ? updated : row)));
+      setSuccessRecord((prev) => (prev && prev.id === id ? updated : prev));
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to sync bill PDF to R2 storage.');
+    } finally {
+      setRetryingPdfId(null);
+    }
+  };
+
   const handleDownloadDraftPdf = async () => {
     const err = validateForm();
     if (err) {
@@ -566,32 +621,7 @@ export const NormalBillingView: React.FC = () => {
     }
     try {
       setIsDownloadingPdf(true);
-      await downloadNormalBillDraftPdf({
-        billNumber: isManualBillNumber ? billNumber.trim() || undefined : undefined,
-        billDate,
-        state,
-        stateCode,
-        transportationMode: transportationMode.trim() || null,
-        vehicleNumber: vehicleNumber.trim() || null,
-        dateOfSupply: dateOfSupply || null,
-        placeOfSupply: placeOfSupply.trim() || null,
-        customerId: customerId ? Number(customerId) : null,
-        customerName: customerName.trim(),
-        customerAddress: customerAddress.trim() || null,
-        customerPhone: customerPhone.trim() || null,
-        customerState: customerState.trim() || null,
-        customerStateCode: customerStateCode.trim() || null,
-        items: items.map((item) => ({
-          productId: item.productId ? Number(item.productId) : null,
-          description: item.description.trim(),
-          hsnCode: item.hsnCode.trim() || null,
-          quantity: item.quantity,
-          unit: item.unit.trim() || null,
-          rate: item.rate,
-          rateUnit: item.rateUnit.trim() || null,
-        })),
-        notes: notes.trim() || null,
-      });
+      await downloadNormalBillDraftPdf(buildDraftNormalBillPayload());
     } catch (dErr: any) {
       setErrorMessage(dErr.message || 'Failed to download draft bill PDF.');
     } finally {
@@ -1565,15 +1595,35 @@ export const NormalBillingView: React.FC = () => {
                             ₹{Number(bill.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                           </td>
                           <td className="p-3 text-center">
-                            <span
-                              className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
-                                bill.pdf_status === 'uploaded'
-                                  ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
-                                  : 'bg-neutral-500/10 text-neutral-600 border border-neutral-500/20'
-                              }`}
-                            >
-                              {bill.pdf_status === 'uploaded' ? 'Saved (R2)' : 'Saved (Local)'}
-                            </span>
+                            <div className="inline-flex items-center gap-1.5">
+                              <span
+                                className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  bill.pdf_status === 'uploaded'
+                                    ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                                    : bill.pdf_status === 'failed'
+                                    ? 'bg-rose-500/10 text-rose-600 border border-rose-500/20'
+                                    : 'bg-neutral-500/10 text-neutral-600 border border-neutral-500/20'
+                                }`}
+                              >
+                                {bill.pdf_status === 'uploaded'
+                                  ? 'Saved (R2)'
+                                  : bill.pdf_status === 'failed'
+                                  ? 'R2 Failed'
+                                  : 'Saved (Local)'}
+                              </span>
+                              {bill.pdf_status === 'failed' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRetryPdf(bill.id)}
+                                  disabled={retryingPdfId === bill.id}
+                                  className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-700 hover:bg-amber-500/25 disabled:opacity-50 inline-flex items-center gap-1"
+                                  title="Retry R2 Sync"
+                                >
+                                  <RefreshCw className={`w-3 h-3 ${retryingPdfId === bill.id ? 'animate-spin' : ''}`} />
+                                  <span>Retry</span>
+                                </button>
+                              )}
+                            </div>
                           </td>
                           <td className="p-3 text-right">
                             <div className="flex flex-wrap items-center justify-end gap-1.5">
@@ -1597,7 +1647,23 @@ export const NormalBillingView: React.FC = () => {
                               </button>
                               <button
                                 type="button"
-                                onClick={() => downloadNormalBillPdf(bill.id, bill.bill_number)}
+                                onClick={() =>
+                                  setImageExportTarget({
+                                    title: `Normal Bill #${bill.bill_number} WebP Images`,
+                                    baseFileName: `Normal_Bill_${bill.bill_number}`,
+                                    fetchPdfBlob: (sig) => fetchNormalBillPdfBlob(bill.id, sig),
+                                  })
+                                }
+                                className="neu-btn-secondary text-xs px-2.5 py-1 flex items-center gap-1 font-bold text-emerald-700"
+                                title="Export Images (.webp)"
+                              >
+                                <ImageIcon className="w-3.5 h-3.5" />
+                                <span>Images</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadPdf(bill.id, bill.bill_number)}
+                                disabled={isDownloadingPdf}
                                 className="neu-btn-primary text-xs px-2.5 py-1 flex items-center gap-1 font-bold"
                                 title="Download PDF"
                               >
@@ -1629,10 +1695,16 @@ export const NormalBillingView: React.FC = () => {
                           className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                             bill.pdf_status === 'uploaded'
                               ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                              : bill.pdf_status === 'failed'
+                              ? 'bg-rose-500/10 text-rose-600 border border-rose-500/20'
                               : 'bg-neutral-500/10 text-neutral-600 border border-neutral-500/20'
                           }`}
                         >
-                          {bill.pdf_status === 'uploaded' ? 'Saved (R2)' : 'Saved (Local)'}
+                          {bill.pdf_status === 'uploaded'
+                            ? 'Saved (R2)'
+                            : bill.pdf_status === 'failed'
+                            ? 'R2 Failed'
+                            : 'Saved (Local)'}
                         </span>
                       </div>
                       <div>
@@ -1666,7 +1738,33 @@ export const NormalBillingView: React.FC = () => {
                           </button>
                           <button
                             type="button"
-                            onClick={() => downloadNormalBillPdf(bill.id, bill.bill_number)}
+                            onClick={() =>
+                              setImageExportTarget({
+                                title: `Normal Bill #${bill.bill_number} WebP Images`,
+                                baseFileName: `Normal_Bill_${bill.bill_number}`,
+                                fetchPdfBlob: (sig) => fetchNormalBillPdfBlob(bill.id, sig),
+                              })
+                            }
+                            className="neu-btn-secondary text-xs px-2.5 py-1.5 flex items-center gap-1 font-bold text-emerald-700"
+                          >
+                            <ImageIcon className="w-3.5 h-3.5" />
+                            <span>Images</span>
+                          </button>
+                          {bill.pdf_status === 'failed' && (
+                            <button
+                              type="button"
+                              onClick={() => handleRetryPdf(bill.id)}
+                              disabled={retryingPdfId === bill.id}
+                              className="neu-btn-secondary text-xs px-2.5 py-1.5 flex items-center gap-1 font-bold text-amber-700"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${retryingPdfId === bill.id ? 'animate-spin' : ''}`} />
+                              <span>Retry</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadPdf(bill.id, bill.bill_number)}
+                            disabled={isDownloadingPdf}
                             className="neu-btn-primary text-xs px-2.5 py-1.5 flex items-center gap-1 font-bold"
                           >
                             <Download className="w-3.5 h-3.5" />
@@ -1731,11 +1829,24 @@ export const NormalBillingView: React.FC = () => {
                 <br />
                 {successRecord.pdf_status === 'uploaded'
                   ? 'Archived securely in Cloudflare R2 object storage.'
+                  : successRecord.pdf_status === 'failed'
+                  ? 'Bill saved in PostgreSQL, but Cloudflare R2 sync failed. You can retry below.'
                   : 'Bill saved to Neon database.'}
               </p>
             </div>
 
             <div className="space-y-2 pt-2">
+              {successRecord.pdf_status === 'failed' && (
+                <button
+                  type="button"
+                  onClick={() => handleRetryPdf(successRecord.id)}
+                  disabled={retryingPdfId === successRecord.id}
+                  className="neu-btn-secondary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold text-amber-700"
+                >
+                  <RefreshCw className={`w-4 h-4 ${retryingPdfId === successRecord.id ? 'animate-spin' : ''}`} />
+                  <span>{retryingPdfId === successRecord.id ? 'Retrying R2 Sync...' : 'Retry R2 Cloud Sync'}</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -1754,6 +1865,21 @@ export const NormalBillingView: React.FC = () => {
               >
                 <Download className="w-4 h-4 text-emerald-600" />
                 <span>Download PDF File</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setImageExportTarget({
+                    title: `Normal Bill #${successRecord.bill_number} WebP Images`,
+                    baseFileName: `Normal_Bill_${successRecord.bill_number}`,
+                    fetchPdfBlob: (sig) => fetchNormalBillPdfBlob(successRecord.id, sig),
+                  })
+                }
+                className="neu-btn-secondary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold text-emerald-700"
+              >
+                <ImageIcon className="w-4 h-4 text-emerald-600" />
+                <span>Share / Export Images (.webp)</span>
               </button>
 
               <button
@@ -1803,10 +1929,52 @@ export const NormalBillingView: React.FC = () => {
                   handleDownloadDraftPdf();
                 }
               }}
+              onExportImages={() => {
+                if (previewInvoice?.id) {
+                  const billId = previewInvoice.id;
+                  const billNum = previewInvoice.invoiceNumber || 'Bill';
+                  setImageExportTarget({
+                    title: `Normal Bill #${billNum} WebP Images`,
+                    baseFileName: `Normal_Bill_${billNum}`,
+                    fetchPdfBlob: (sig) => fetchNormalBillPdfBlob(billId, sig),
+                  });
+                } else if (successRecord?.id) {
+                  const recId = successRecord.id;
+                  const recNum = successRecord.bill_number;
+                  setImageExportTarget({
+                    title: `Normal Bill #${recNum} WebP Images`,
+                    baseFileName: `Normal_Bill_${recNum}`,
+                    fetchPdfBlob: (sig) => fetchNormalBillPdfBlob(recId, sig),
+                  });
+                } else {
+                  const err = validateForm();
+                  if (err) {
+                    setErrorMessage(err);
+                    return;
+                  }
+                  const draftPayload = buildDraftNormalBillPayload();
+                  const label = draftPayload.billNumber || 'Draft';
+                  setImageExportTarget({
+                    title: `Normal Bill Draft (${label}) WebP Images`,
+                    baseFileName: `Normal_Bill_${label}`,
+                    fetchPdfBlob: (sig) => fetchNormalBillDraftPdfBlob(draftPayload, sig),
+                  });
+                }
+              }}
               isDownloadingPdf={isDownloadingPdf}
             />
           </div>
         </div>
+      )}
+
+      {imageExportTarget && (
+        <PdfImageExportModal
+          isOpen={true}
+          onClose={() => setImageExportTarget(null)}
+          title={imageExportTarget.title}
+          baseFileName={imageExportTarget.baseFileName}
+          fetchPdfBlob={imageExportTarget.fetchPdfBlob}
+        />
       )}
     </div>
   );

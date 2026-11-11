@@ -36,7 +36,7 @@ const optionalIntegerIdSchema = z
 
 const gstInvoiceItemSchema = z.object({
   productId: optionalIntegerIdSchema,
-  description: z.string().trim().min(1, 'Item description is required').max(255),
+  description: z.string().trim().min(1, 'Item description is required').max(2000),
   hsnCode: z.string().trim().max(20).nullable().optional(),
   quantity: z.union([z.number(), z.string()]).refine((val) => {
     try {
@@ -92,7 +92,7 @@ export const createGstInvoiceSchema = z
     items: z
       .array(gstInvoiceItemSchema)
       .min(1, 'At least one item is required in the invoice')
-      .max(20, 'A single invoice can have at most 20 line items to ensure standard A4 print layout integrity'),
+      .max(100, 'A single invoice can have at most 100 line items'),
     notes: z.string().trim().max(1000).nullable().optional(),
     idempotencyKey: z.string().trim().nullable().optional(),
   })
@@ -243,6 +243,24 @@ router.get('/:id/pdf', async (req: Request, res: Response, next: NextFunction) =
     res.setHeader('Content-Length', buffer.length);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.send(buffer);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/v1/gst-invoices/:id/retry-pdf - Retry generating & uploading a failed/pending invoice PDF to R2
+ */
+router.post('/:id/retry-pdf', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id) || id <= 0) {
+      res.status(400).json({ success: false, code: 'VALIDATION_ERROR', message: 'Invalid invoice ID.' });
+      return;
+    }
+
+    const data = await gstInvoicesService.retryInvoicePdf(id);
+    res.json({ success: true, data });
   } catch (err) {
     next(err);
   }

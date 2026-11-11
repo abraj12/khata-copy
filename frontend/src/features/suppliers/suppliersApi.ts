@@ -8,6 +8,7 @@ import {
   getCsrfToken,
 } from '../../lib/apiClient.js';
 import { formatCurrency, safeDecimal } from '../../lib/formatters.js';
+import { downloadBlobSafely } from '../../utils/blobDownload.js';
 import type {
   CatalogProductOption,
   CreatePurchaseBillPayload,
@@ -606,19 +607,12 @@ export async function downloadSupplierStatementCsvApi(
   if (params?.toDate) qs.set('toDate', params.toDate);
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   const blob = await apiClientBlob(`/api/v1/suppliers/${supplierId}/statement/export${suffix}`);
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
   const slug =
     supplierName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '') || 'supplier';
-  a.href = url;
-  a.download = `supplier-statement-${slug}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  downloadBlobSafely(blob, `supplier-statement-${slug}.csv`);
 }
 
 export async function fetchCatalogProductsForSupplierBills(

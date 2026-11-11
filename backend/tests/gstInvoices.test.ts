@@ -748,7 +748,7 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
       }
     }
 
-    const twentyOneItems = Array.from({ length: 21 }, (_, idx) => ({
+    const tooManyItems = Array.from({ length: 101 }, (_, idx) => ({
       description: `Hardware ${idx + 1}`,
       quantity: 1,
       rate: 10,
@@ -757,7 +757,7 @@ describe('GST Billing Module (Algions AI Labs Private Limited) Test Suite', () =
       .post('/api/v1/gst-invoices')
       .set('Cookie', authCookie)
       .set('X-CSRF-Token', csrfToken)
-      .send({ ...basePayload, items: twentyOneItems });
+      .send({ ...basePayload, items: tooManyItems });
     expect(tooManyRes.status).toBe(400);
 
     // Valid boundary GST rates: 0, 5.5, 100

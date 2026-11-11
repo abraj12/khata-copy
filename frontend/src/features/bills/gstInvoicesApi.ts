@@ -1,4 +1,7 @@
-import { apiClient, API_BASE_URL, getCsrfToken, fetchCsrfToken } from '../../lib/apiClient.js';
+import Decimal from 'decimal.js';
+import { apiClient } from '../../lib/apiClient.js';
+import { fetchAuthorizedBlob, fetchPostPdfBlob } from '../../lib/pdfFetch.js';
+import { downloadBlobSafely } from '../../utils/blobDownload.js';
 import { MannatInvoiceProps } from '../../components/MannatTaxInvoice/MannatTaxInvoice.js';
 
 export interface GstInvoiceItemPayload {
@@ -26,6 +29,10 @@ export interface CreateGstInvoicePayload {
   customerGstin?: string | null;
   customerState?: string;
   customerStateCode?: string;
+  subtotalAmount?: number | string | null;
+  discountType?: 'percentage' | 'fixed' | null;
+  discountValue?: number | string | null;
+  discountAmount?: number | string | null;
   gstRate: number | string;
   items: GstInvoiceItemPayload[];
   notes?: string | null;
@@ -48,6 +55,10 @@ export interface GstInvoiceRecord {
   customer_gstin: string | null;
   customer_state: string;
   customer_state_code: string;
+  subtotal_amount?: string;
+  discount_type?: 'percentage' | 'fixed' | null;
+  discount_value?: string;
+  discount_amount?: string;
   taxable_amount: string;
   cgst_rate: string;
   cgst_amount: string;
@@ -130,89 +141,70 @@ export async function getGstInvoiceById(id: number): Promise<GstInvoiceRecord> {
   return data.data;
 }
 
+export async function retryGstInvoicePdf(id: number): Promise<GstInvoiceRecord> {
+  const { data } = await apiClient<{ success: boolean; data: GstInvoiceRecord }>(
+    `/api/v1/gst-invoices/${id}/retry-pdf`,
+    { method: 'POST' }
+  );
+  return data.data;
+}
+
+export async function fetchInvoicePdfBlob(id: number, signal?: AbortSignal): Promise<Blob> {
+  return fetchAuthorizedBlob(
+    `/api/v1/gst-invoices/${id}/pdf?download=true`,
+    'Failed to fetch invoice PDF',
+    signal
+  );
+}
+
+export async function fetchDraftPdfBlob(
+  payload: CreateGstInvoicePayload,
+  signal?: AbortSignal
+): Promise<Blob> {
+  return fetchPostPdfBlob(
+    '/api/v1/gst-invoices/preview-pdf',
+    payload,
+    'Failed to generate draft invoice PDF',
+    signal
+  );
+}
+
 export async function downloadInvoicePdf(id: number, invoiceNumber: string): Promise<void> {
-  const url = `${API_BASE_URL}/api/v1/gst-invoices/${id}/pdf?download=true`;
-  const response = await fetch(url, {
-    credentials: 'include',
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to download invoice PDF');
-  }
-
-  const blob = await response.blob();
-  const blobUrl = window.URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = blobUrl;
-  a.download = `Invoice_${invoiceNumber}.pdf`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  window.URL.revokeObjectURL(blobUrl);
+  const blob = await fetchInvoicePdfBlob(id);
+  downloadBlobSafely(blob, `Invoice_${invoiceNumber}.pdf`);
 }
 
 export async function downloadDraftPdf(payload: CreateGstInvoicePayload): Promise<void> {
-  const url = `${API_BASE_URL}/api/v1/gst-invoices/preview-pdf`;
-  let csrfToken = getCsrfToken();
-  if (!csrfToken) {
-    csrfToken = await fetchCsrfToken();
+  const blob = await fetchDraftPdfBlob(payload);
+  downloadBlobSafely(blob, `Invoice_${payload.invoiceNumber || 'Draft'}.pdf`);
+}
+
+function toDecSafe(value: string | number | null | undefined): Decimal {
+  if (value === null || value === undefined || value === '') return new Decimal(0);
+  try {
+    const parsed = new Decimal(String(value).trim());
+    return parsed.isFinite() ? parsed : new Decimal(0);
+  } catch {
+    return new Decimal(0);
   }
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  if (csrfToken) {
-    headers['X-CSRF-Token'] = csrfToken;
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    credentials: 'include',
-    body: JSON.stringify(payload),
-  });
-
-  let res = response;
-  if (!res.ok) {
-    const errorJson = await res.json().catch(() => ({}));
-    if (res.status === 403 && (errorJson.message?.includes('CSRF token') || errorJson.message?.includes('Origin'))) {
-      const refreshedToken = await fetchCsrfToken();
-      if (refreshedToken) {
-        const retryRes = await fetch(url, {
-          method: 'POST',
-          headers: { ...headers, 'X-CSRF-Token': refreshedToken },
-          credentials: 'include',
-          body: JSON.stringify(payload),
-        });
-        if (retryRes.ok) {
-          res = retryRes;
-        } else {
-          const retryErr = await retryRes.json().catch(() => ({}));
-          throw new Error(retryErr.message || 'Failed to download draft PDF');
-        }
-      } else {
-        throw new Error(errorJson.message || 'Failed to download draft PDF');
-      }
-    } else {
-      throw new Error(errorJson.message || 'Failed to download draft PDF');
-    }
-  }
-
-  const blob = await res.blob();
-  const blobUrl = window.URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = blobUrl;
-  a.download = `Invoice_${payload.invoiceNumber || 'Draft'}.pdf`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  window.URL.revokeObjectURL(blobUrl);
 }
 
 export function mapRecordToInvoiceProps(
   record: GstInvoiceRecord,
-  company?: { name?: string; address?: string | null; gstin?: string | null; phone?: string | null }
+  company?: {
+    name?: string;
+    address?: string | null;
+    gstin?: string | null;
+    phone?: string | null;
+    jurisdiction?: string | null;
+  }
 ): MannatInvoiceProps {
+  const discountDec = toDecSafe(record.discount_amount);
+  const taxableDec = toDecSafe(record.taxable_amount);
+  const derivedSubtotal = record.subtotal_amount
+    ? toDecSafe(record.subtotal_amount).toFixed(2)
+    : taxableDec.plus(discountDec).toFixed(2);
+
   return {
     id: record.id,
     invoiceNumber: record.invoice_number,
@@ -226,6 +218,7 @@ export function mapRecordToInvoiceProps(
       address: company?.address,
       gstin: company?.gstin,
       phone: company?.phone,
+      jurisdiction: company?.jurisdiction,
       state: record.state,
       stateCode: record.state_code,
     },
@@ -247,6 +240,10 @@ export function mapRecordToInvoiceProps(
       amount: itm.amount,
     })),
     totals: {
+      subtotal: derivedSubtotal,
+      discountType: record.discount_type ?? null,
+      discountValue: record.discount_value ?? '0.00',
+      discountAmount: record.discount_amount ?? '0.00',
       taxableAmount: record.taxable_amount,
       cgstRate: Number(record.cgst_rate) > 0 ? record.cgst_rate : '',
       cgstAmount: record.cgst_amount,

@@ -289,7 +289,7 @@ describe('Release #023: NormalBillingView History Races, 20-Item Limit & Large C
     expect(container.textContent).not.toContain('NB-ALPHA');
   });
 
-  it('5. Enforces max 20 line items cleanly and searches/selects beyond entry 1000 across >1200 server records', async () => {
+  it('5. Enforces max 100 line items cleanly and searches/selects beyond entry 1000 across >1200 server records', async () => {
     await act(async () => {
       root.render(React.createElement(NormalBillingView));
     });
@@ -299,12 +299,13 @@ describe('Release #023: NormalBillingView History Races, 20-Item Limit & Large C
       Array.from(container.querySelectorAll('button')).find((b) =>
         b.textContent?.includes('Add Item')
       )!;
-    for (let i = 1; i < MAX_BILL_LINE_ITEMS; i++) {
-      vi.advanceTimersByTime(1);
-      await act(async () => {
-        getAddBtn().click();
-      });
-    }
+    const addBtn = getAddBtn();
+    await act(async () => {
+      for (let i = 1; i < MAX_BILL_LINE_ITEMS; i++) {
+        vi.advanceTimersByTime(1);
+        addBtn.click();
+      }
+    });
     expect(getAddBtn().disabled).toBe(true);
     expect(container.textContent).toContain(`Maximum limit of ${MAX_BILL_LINE_ITEMS} line items reached`);
 
@@ -386,5 +387,5 @@ describe('Release #023: NormalBillingView History Races, 20-Item Limit & Large C
       prodBtn.click();
     });
     expect(container.textContent).toContain('Product 1185');
-  });
+  }, 45_000);
 });

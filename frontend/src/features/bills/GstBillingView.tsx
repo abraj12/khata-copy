@@ -16,6 +16,7 @@ import {
   Building2,
   User,
   Package,
+  Image as ImageIcon,
   X,
 } from 'lucide-react';
 import MannatTaxInvoice, {
@@ -28,9 +29,14 @@ import {
   listGstInvoices,
   downloadInvoicePdf,
   downloadDraftPdf,
+  fetchInvoicePdfBlob,
+  fetchDraftPdfBlob,
+  retryGstInvoicePdf,
   mapRecordToInvoiceProps,
+  CreateGstInvoicePayload,
   GstInvoiceRecord,
 } from './gstInvoicesApi.js';
+import { PdfImageExportModal } from '../../components/PdfImageExportModal.js';
 import { fetchQuotationSettings } from '../quotations/quotationApi.js';
 import {
   INDIAN_STATES,
@@ -89,6 +95,7 @@ export const GstBillingView: React.FC = () => {
     phone: string | null;
     state: string;
     stateCode: string;
+    jurisdiction?: string | null;
   } | null>(null);
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [isManualInvoiceNumber, setIsManualInvoiceNumber] = useState(false);
@@ -147,6 +154,12 @@ export const GstBillingView: React.FC = () => {
   const [previewInvoice, setPreviewInvoice] = useState<MannatInvoiceProps | null>(null);
   const [autoPrintAfterPreview, setAutoPrintAfterPreview] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [retryingPdfId, setRetryingPdfId] = useState<number | null>(null);
+  const [imageExportTarget, setImageExportTarget] = useState<{
+    title: string;
+    baseFileName: string;
+    fetchPdfBlob: (signal: AbortSignal) => Promise<Blob>;
+  } | null>(null);
 
   const handleDirectPrint = (inv: GstInvoiceRecord) => {
     setPreviewInvoice(mapRecordToInvoiceProps(inv, companyProfile || undefined));
@@ -241,6 +254,7 @@ export const GstBillingView: React.FC = () => {
           phone: settings.phone,
           state: settings.state,
           stateCode: settings.state_code,
+          jurisdiction: settings.jurisdiction || null,
         });
         setState(settings.state || '');
         setStateCode(settings.state_code || '');
@@ -640,15 +654,57 @@ export const GstBillingView: React.FC = () => {
     fetchNextNumber();
   };
 
+  const buildDraftPdfPayload = (): CreateGstInvoicePayload => ({
+    invoiceNumber: isManualInvoiceNumber ? invoiceNumber.trim() || undefined : undefined,
+    invoiceDate,
+    state,
+    stateCode,
+    transportationMode: transportationMode.trim() || null,
+    vehicleNumber: vehicleNumber.trim() || null,
+    dateOfSupply,
+    placeOfSupply,
+    customerId: customerId ? Number(customerId) : null,
+    customerName: customerName.trim() || 'Customer / Receiver',
+    customerAddress: customerAddress.trim() || null,
+    customerGstin: customerGstin.trim() || null,
+    customerState: customerState.trim(),
+    customerStateCode: customerStateCode.trim(),
+    gstRate,
+    items: items.map((i) => ({
+      productId: i.productId ? Number(i.productId) : null,
+      description: i.description.trim() || 'Item Description',
+      hsnCode: i.hsnCode.trim() || null,
+      quantity: i.quantity || '1',
+      unit: i.unit.trim() || null,
+      rate: i.rate,
+      rateUnit: i.rateUnit.trim() || null,
+    })),
+    notes: notes.trim() || null,
+  });
+
   // Download PDF helper
   const handleDownloadPdf = async (id: number, invNum: string) => {
     try {
       setIsDownloadingPdf(true);
       await downloadInvoicePdf(id, invNum);
     } catch (err: any) {
-      alert(err.message || 'Unable to download PDF.');
+      setErrorMessage(err.message || 'Unable to download PDF.');
     } finally {
       setIsDownloadingPdf(false);
+    }
+  };
+
+  const handleRetryPdf = async (id: number) => {
+    try {
+      setRetryingPdfId(id);
+      setErrorMessage(null);
+      const updated = await retryGstInvoicePdf(id);
+      setHistoryInvoices((prev) => prev.map((row) => (row.id === id ? updated : row)));
+      setSuccessRecord((prev) => (prev && prev.id === id ? updated : prev));
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to sync invoice PDF to R2 storage.');
+    } finally {
+      setRetryingPdfId(null);
     }
   };
 
@@ -661,35 +717,9 @@ export const GstBillingView: React.FC = () => {
     }
     try {
       setIsDownloadingPdf(true);
-      await downloadDraftPdf({
-        invoiceNumber: isManualInvoiceNumber ? invoiceNumber.trim() || undefined : undefined,
-        invoiceDate,
-        state,
-        stateCode,
-        transportationMode: transportationMode.trim() || null,
-        vehicleNumber: vehicleNumber.trim() || null,
-        dateOfSupply,
-        placeOfSupply,
-        customerId: customerId ? Number(customerId) : null,
-        customerName: customerName.trim() || 'Customer / Receiver',
-        customerAddress: customerAddress.trim() || null,
-        customerGstin: customerGstin.trim() || null,
-        customerState: customerState.trim(),
-        customerStateCode: customerStateCode.trim(),
-        gstRate,
-        items: items.map((i) => ({
-          productId: i.productId ? Number(i.productId) : null,
-          description: i.description.trim() || 'Item Description',
-          hsnCode: i.hsnCode.trim() || null,
-          quantity: i.quantity || '1',
-          unit: i.unit.trim() || null,
-          rate: i.rate,
-          rateUnit: i.rateUnit.trim() || null,
-        })),
-        notes: notes.trim() || null,
-      });
+      await downloadDraftPdf(buildDraftPdfPayload());
     } catch (err: any) {
-      alert(err.message || 'Unable to download draft PDF.');
+      setErrorMessage(err.message || 'Unable to download draft PDF.');
     } finally {
       setIsDownloadingPdf(false);
     }
@@ -1590,15 +1620,35 @@ export const GstBillingView: React.FC = () => {
                           ₹{inv.grand_total}
                         </td>
                         <td className="py-3 px-4 text-center">
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              inv.pdf_status === 'uploaded'
-                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
-                                : 'bg-blue-100 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300'
-                            }`}
-                          >
-                            {inv.pdf_status === 'uploaded' ? 'R2 Synced' : 'Ready'}
-                          </span>
+                          <div className="inline-flex items-center gap-1.5">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                inv.pdf_status === 'uploaded'
+                                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                                  : inv.pdf_status === 'failed'
+                                  ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300'
+                                  : 'bg-blue-100 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300'
+                              }`}
+                            >
+                              {inv.pdf_status === 'uploaded'
+                                ? 'R2 Synced'
+                                : inv.pdf_status === 'failed'
+                                ? 'R2 Failed'
+                                : 'Ready'}
+                            </span>
+                            {inv.pdf_status === 'failed' && (
+                              <button
+                                type="button"
+                                onClick={() => handleRetryPdf(inv.id)}
+                                disabled={retryingPdfId === inv.id}
+                                className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 hover:bg-amber-200 disabled:opacity-50 inline-flex items-center gap-1 cursor-pointer"
+                                title="Retry R2 PDF Sync"
+                              >
+                                <RefreshCw className={`w-3 h-3 ${retryingPdfId === inv.id ? 'animate-spin' : ''}`} />
+                                <span>Retry</span>
+                              </button>
+                            )}
+                          </div>
                         </td>
                         <td className="py-3 px-4 text-right">
                           <div className="flex items-center justify-end gap-1.5">
@@ -1618,6 +1668,21 @@ export const GstBillingView: React.FC = () => {
                               title="Print A4 Invoice"
                             >
                               <Printer className="w-3.5 h-3.5 text-blue-600" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setImageExportTarget({
+                                  title: `Invoice #${inv.invoice_number} WebP Images`,
+                                  baseFileName: `Invoice_${inv.invoice_number}`,
+                                  fetchPdfBlob: (sig) => fetchInvoicePdfBlob(inv.id, sig),
+                                })
+                              }
+                              className="p-1.5 rounded-lg border border-[var(--khata-border)] hover:bg-[var(--khata-surface)] text-emerald-700 cursor-pointer"
+                              title="Export / Share WebP Images"
+                            >
+                              <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
                             </button>
 
                             <button
@@ -1657,10 +1722,16 @@ export const GstBillingView: React.FC = () => {
                         className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                           inv.pdf_status === 'uploaded'
                             ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                            : inv.pdf_status === 'failed'
+                            ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300'
                             : 'bg-blue-100 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300'
                         }`}
                       >
-                        {inv.pdf_status === 'uploaded' ? 'R2 Synced' : 'Ready'}
+                        {inv.pdf_status === 'uploaded'
+                          ? 'R2 Synced'
+                          : inv.pdf_status === 'failed'
+                          ? 'R2 Failed'
+                          : 'Ready'}
                       </span>
                     </div>
 
@@ -1699,6 +1770,35 @@ export const GstBillingView: React.FC = () => {
                           <Printer className="w-3.5 h-3.5 text-blue-600" />
                           <span>Print</span>
                         </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setImageExportTarget({
+                              title: `Invoice #${inv.invoice_number} WebP Images`,
+                              baseFileName: `Invoice_${inv.invoice_number}`,
+                              fetchPdfBlob: (sig) => fetchInvoicePdfBlob(inv.id, sig),
+                            })
+                          }
+                          className="neu-btn-secondary px-2.5 py-1.5 flex items-center gap-1 text-xs font-bold text-emerald-700"
+                          title="Export Images (.webp)"
+                        >
+                          <ImageIcon className="w-3.5 h-3.5" />
+                          <span>Images</span>
+                        </button>
+
+                        {inv.pdf_status === 'failed' && (
+                          <button
+                            type="button"
+                            onClick={() => handleRetryPdf(inv.id)}
+                            disabled={retryingPdfId === inv.id}
+                            className="neu-btn-secondary px-2.5 py-1.5 flex items-center gap-1 text-xs font-bold text-amber-700"
+                            title="Retry R2 PDF Sync"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${retryingPdfId === inv.id ? 'animate-spin' : ''}`} />
+                            <span>Retry</span>
+                          </button>
+                        )}
 
                         <button
                           type="button"
@@ -1767,11 +1867,24 @@ export const GstBillingView: React.FC = () => {
                 <br />
                 {successRecord.pdf_status === 'uploaded'
                   ? 'Archived securely in Cloudflare R2 object storage.'
+                  : successRecord.pdf_status === 'failed'
+                  ? 'Saved in PostgreSQL, but Cloudflare R2 sync failed. You can retry below.'
                   : 'Invoice saved to Neon database.'}
               </p>
             </div>
 
             <div className="space-y-2 pt-2">
+              {successRecord.pdf_status === 'failed' && (
+                <button
+                  type="button"
+                  onClick={() => handleRetryPdf(successRecord.id)}
+                  disabled={retryingPdfId === successRecord.id}
+                  className="neu-btn-secondary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold text-amber-700"
+                >
+                  <RefreshCw className={`w-4 h-4 ${retryingPdfId === successRecord.id ? 'animate-spin' : ''}`} />
+                  <span>{retryingPdfId === successRecord.id ? 'Retrying R2 Sync...' : 'Retry R2 Cloud Sync'}</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -1790,6 +1903,21 @@ export const GstBillingView: React.FC = () => {
               >
                 <Download className="w-4 h-4 text-emerald-600" />
                 <span>Download PDF File</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setImageExportTarget({
+                    title: `Invoice #${successRecord.invoice_number} WebP Images`,
+                    baseFileName: `Invoice_${successRecord.invoice_number}`,
+                    fetchPdfBlob: (sig) => fetchInvoicePdfBlob(successRecord.id, sig),
+                  })
+                }
+                className="neu-btn-secondary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold text-emerald-700"
+              >
+                <ImageIcon className="w-4 h-4 text-emerald-600" />
+                <span>Share / Export Images (.webp)</span>
               </button>
 
               <button
@@ -1835,10 +1963,52 @@ export const GstBillingView: React.FC = () => {
                   handleDownloadDraftPdf();
                 }
               }}
+              onExportImages={() => {
+                if (previewInvoice?.id) {
+                  const invId = previewInvoice.id;
+                  const invNum = previewInvoice.invoiceNumber || 'Invoice';
+                  setImageExportTarget({
+                    title: `Invoice #${invNum} WebP Images`,
+                    baseFileName: `Invoice_${invNum}`,
+                    fetchPdfBlob: (sig) => fetchInvoicePdfBlob(invId, sig),
+                  });
+                } else if (successRecord?.id) {
+                  const recId = successRecord.id;
+                  const recNum = successRecord.invoice_number;
+                  setImageExportTarget({
+                    title: `Invoice #${recNum} WebP Images`,
+                    baseFileName: `Invoice_${recNum}`,
+                    fetchPdfBlob: (sig) => fetchInvoicePdfBlob(recId, sig),
+                  });
+                } else {
+                  const validationErr = validateGstForm(false);
+                  if (validationErr) {
+                    setErrorMessage(validationErr);
+                    return;
+                  }
+                  const draftPayload = buildDraftPdfPayload();
+                  const label = draftPayload.invoiceNumber || 'Draft';
+                  setImageExportTarget({
+                    title: `Invoice Draft (${label}) WebP Images`,
+                    baseFileName: `Invoice_${label}`,
+                    fetchPdfBlob: (sig) => fetchDraftPdfBlob(draftPayload, sig),
+                  });
+                }
+              }}
               isDownloadingPdf={isDownloadingPdf}
             />
           </div>
         </div>
+      )}
+
+      {imageExportTarget && (
+        <PdfImageExportModal
+          isOpen={true}
+          onClose={() => setImageExportTarget(null)}
+          title={imageExportTarget.title}
+          baseFileName={imageExportTarget.baseFileName}
+          fetchPdfBlob={imageExportTarget.fetchPdfBlob}
+        />
       )}
     </div>
   );

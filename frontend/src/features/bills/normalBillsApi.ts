@@ -1,4 +1,7 @@
-import { apiClient, API_BASE_URL, getCsrfToken, fetchCsrfToken } from '../../lib/apiClient.js';
+import Decimal from 'decimal.js';
+import { apiClient } from '../../lib/apiClient.js';
+import { fetchAuthorizedBlob, fetchPostPdfBlob } from '../../lib/pdfFetch.js';
+import { downloadBlobSafely } from '../../utils/blobDownload.js';
 import { MannatInvoiceProps } from '../../components/MannatTaxInvoice/MannatTaxInvoice.js';
 
 export interface NormalBillItemPayload {
@@ -26,6 +29,10 @@ export interface CreateNormalBillPayload {
   customerPhone?: string | null;
   customerState?: string | null;
   customerStateCode?: string | null;
+  subtotalAmount?: number | string | null;
+  discountType?: 'percentage' | 'fixed' | null;
+  discountValue?: number | string | null;
+  discountAmount?: number | string | null;
   items: NormalBillItemPayload[];
   notes?: string | null;
   idempotencyKey?: string | null;
@@ -47,6 +54,10 @@ export interface NormalBillRecord {
   customer_phone: string | null;
   customer_state: string | null;
   customer_state_code: string | null;
+  subtotal_amount?: string;
+  discount_type?: 'percentage' | 'fixed' | null;
+  discount_value?: string;
+  discount_amount?: string;
   total_amount: string;
   amount_in_words: string;
   r2_object_key: string | null;
@@ -121,89 +132,70 @@ export async function getNormalBillById(id: number): Promise<NormalBillRecord> {
   return data.bill;
 }
 
+export async function retryNormalBillPdf(id: number): Promise<NormalBillRecord> {
+  const { data } = await apiClient<{ success: boolean; bill: NormalBillRecord }>(
+    `/api/v1/normal-bills/${id}/retry-pdf`,
+    { method: 'POST' }
+  );
+  return data.bill;
+}
+
+export async function fetchNormalBillPdfBlob(id: number, signal?: AbortSignal): Promise<Blob> {
+  return fetchAuthorizedBlob(
+    `/api/v1/normal-bills/${id}/pdf?download=true`,
+    'Failed to fetch normal bill PDF',
+    signal
+  );
+}
+
+export async function fetchNormalBillDraftPdfBlob(
+  payload: CreateNormalBillPayload,
+  signal?: AbortSignal
+): Promise<Blob> {
+  return fetchPostPdfBlob(
+    '/api/v1/normal-bills/preview-pdf',
+    payload,
+    'Failed to generate draft bill PDF',
+    signal
+  );
+}
+
 export async function downloadNormalBillPdf(id: number, billNumber: string): Promise<void> {
-  const url = `${API_BASE_URL}/api/v1/normal-bills/${id}/pdf?download=true`;
-  const response = await fetch(url, {
-    credentials: 'include',
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to download bill PDF');
-  }
-
-  const blob = await response.blob();
-  const blobUrl = window.URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = blobUrl;
-  a.download = `Normal_Bill_${billNumber}.pdf`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  window.URL.revokeObjectURL(blobUrl);
+  const blob = await fetchNormalBillPdfBlob(id);
+  downloadBlobSafely(blob, `Normal_Bill_${billNumber}.pdf`);
 }
 
 export async function downloadNormalBillDraftPdf(payload: CreateNormalBillPayload): Promise<void> {
-  const url = `${API_BASE_URL}/api/v1/normal-bills/preview-pdf`;
-  let csrfToken = getCsrfToken();
-  if (!csrfToken) {
-    csrfToken = await fetchCsrfToken();
+  const blob = await fetchNormalBillDraftPdfBlob(payload);
+  downloadBlobSafely(blob, `Normal_Bill_${payload.billNumber || 'Draft'}.pdf`);
+}
+
+function toDecSafe(value: string | number | null | undefined): Decimal {
+  if (value === null || value === undefined || value === '') return new Decimal(0);
+  try {
+    const parsed = new Decimal(String(value).trim());
+    return parsed.isFinite() ? parsed : new Decimal(0);
+  } catch {
+    return new Decimal(0);
   }
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  if (csrfToken) {
-    headers['X-CSRF-Token'] = csrfToken;
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    credentials: 'include',
-    body: JSON.stringify(payload),
-  });
-
-  let res = response;
-  if (!res.ok) {
-    const errorJson = await res.json().catch(() => ({}));
-    if (res.status === 403 && (errorJson.message?.includes('CSRF token') || errorJson.message?.includes('Origin'))) {
-      const refreshedToken = await fetchCsrfToken();
-      if (refreshedToken) {
-        const retryRes = await fetch(url, {
-          method: 'POST',
-          headers: { ...headers, 'X-CSRF-Token': refreshedToken },
-          credentials: 'include',
-          body: JSON.stringify(payload),
-        });
-        if (retryRes.ok) {
-          res = retryRes;
-        } else {
-          const retryErr = await retryRes.json().catch(() => ({}));
-          throw new Error(retryErr.message || 'Failed to download draft bill PDF');
-        }
-      } else {
-        throw new Error(errorJson.message || 'Failed to download draft bill PDF');
-      }
-    } else {
-      throw new Error(errorJson.message || 'Failed to download draft bill PDF');
-    }
-  }
-
-  const blob = await res.blob();
-  const blobUrl = window.URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = blobUrl;
-  a.download = `Normal_Bill_${payload.billNumber || 'Draft'}.pdf`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  window.URL.revokeObjectURL(blobUrl);
 }
 
 export function mapNormalBillToInvoiceProps(
   record: NormalBillRecord,
-  company?: { name?: string; address?: string | null; gstin?: string | null; phone?: string | null }
+  company?: {
+    name?: string;
+    address?: string | null;
+    gstin?: string | null;
+    phone?: string | null;
+    jurisdiction?: string | null;
+  }
 ): MannatInvoiceProps {
+  const discountDec = toDecSafe(record.discount_amount);
+  const totalDec = toDecSafe(record.total_amount);
+  const derivedSubtotal = record.subtotal_amount
+    ? toDecSafe(record.subtotal_amount).toFixed(2)
+    : totalDec.plus(discountDec).toFixed(2);
+
   return {
     id: record.id,
     invoiceNumber: record.bill_number,
@@ -217,6 +209,7 @@ export function mapNormalBillToInvoiceProps(
       address: company?.address,
       gstin: company?.gstin,
       phone: company?.phone,
+      jurisdiction: company?.jurisdiction,
       state: record.state,
       stateCode: record.state_code,
     },
@@ -238,8 +231,11 @@ export function mapNormalBillToInvoiceProps(
       amount: itm.amount,
     })),
     totals: {
+      subtotal: derivedSubtotal,
+      discountType: record.discount_type ?? null,
+      discountValue: record.discount_value ?? '0.00',
+      discountAmount: record.discount_amount ?? '0.00',
       taxableAmount: record.total_amount,
-      subtotal: record.total_amount,
       taxAmount: 0,
       grandTotal: record.total_amount,
     },

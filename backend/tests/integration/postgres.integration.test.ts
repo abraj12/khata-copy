@@ -29,6 +29,7 @@ import { normalBillsService } from '../../src/modules/normalBills/normalBills.se
 import { productsService } from '../../src/modules/products/products.service.js';
 import { suppliersService } from '../../src/modules/suppliers/suppliers.service.js';
 import { dashboardService } from '../../src/modules/dashboard/dashboard.service.js';
+import { getCompanyTaxProfile } from '../../src/services/companyTaxProfile.service.js';
 
 const { Pool } = pg;
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
@@ -117,6 +118,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '023_supplier_audit_truncate_guard.sql',
         '024_home_dashboard_profitability.sql',
         '025_performance_reporting_hardening.sql',
+        '026_company_jurisdiction.sql',
       ];
 
       await client.query(`
@@ -178,6 +180,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '023_supplier_audit_truncate_guard.sql',
       '024_home_dashboard_profitability.sql',
       '025_performance_reporting_hardening.sql',
+      '026_company_jurisdiction.sql',
     ]);
 
     const expectedTables = [
@@ -3395,5 +3398,66 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+
+  // 33. Release #026 Configurable Jurisdiction Migration, Blank Reset & Expanded Bill Items
+  it('33. Release #026: applies 026_company_jurisdiction.sql, persists/clears jurisdiction via getCompanyTaxProfile, and commits 25-item GST invoice + Rs. 531 discount normal bill', async () => {
+    const colRes = await pool.query(
+      "SELECT data_type, character_maximum_length FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'quotation_settings' AND column_name = 'jurisdiction'"
+    );
+    expect(colRes.rows).toHaveLength(1);
+    expect(colRes.rows[0].data_type).toBe('character varying');
+    expect(Number(colRes.rows[0].character_maximum_length)).toBe(200);
+
+    await quotationsService.updateSettings({
+      state: 'Bihar',
+      stateCode: '10',
+      jurisdiction: 'Patna Commercial Jurisdiction',
+    });
+    const configuredProfile = await getCompanyTaxProfile();
+    expect(configuredProfile.jurisdiction).toBe('Patna Commercial Jurisdiction');
+
+    await quotationsService.updateSettings({
+      state: 'Bihar',
+      stateCode: '10',
+      jurisdiction: '   ',
+    });
+    const rawDbRow = await pool.query('SELECT jurisdiction FROM quotation_settings LIMIT 1');
+    expect(rawDbRow.rows[0].jurisdiction).toBeNull();
+    const clearedProfile = await getCompanyTaxProfile();
+    expect(clearedProfile.jurisdiction).not.toBe('Gopalganj Jurisdiction only');
+
+    const items25 = Array.from({ length: 25 }, (_, i) => ({
+      description: `Release 026 Multi-Page Item #${i + 1}`,
+      quantity: 1,
+      rate: 100,
+    }));
+    const inv25 = await gstInvoicesService.createInvoice({
+      invoiceNumber: 'R26-GST-25',
+      invoiceDate: '2026-12-22',
+      state: 'Bihar',
+      stateCode: '10',
+      customerName: 'Release 026 25-Item Buyer',
+      customerState: 'Bihar',
+      customerStateCode: '10',
+      gstRate: 18,
+      items: items25,
+    });
+    expect(inv25.items).toHaveLength(25);
+    expect(inv25.taxable_amount).toBe('2500.00');
+    expect(inv25.grand_total).toBe('2950.00');
+
+    const nb531 = await normalBillsService.createBill({
+      billNumber: 'R26-NB-531',
+      billDate: '2026-12-22',
+      customerName: 'Release 026 Discount Buyer',
+      discountType: 'fixed',
+      discountValue: '531.00',
+      discountAmount: '531.00',
+      items: [{ description: 'Heavy Steel Channel', quantity: 10, rate: 531 }],
+    });
+    expect(nb531.subtotal_amount).toBe('5310.00');
+    expect(nb531.discount_amount).toBe('531.00');
+    expect(nb531.total_amount).toBe('4779.00');
   });
 });

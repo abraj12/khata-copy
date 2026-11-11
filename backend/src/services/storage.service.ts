@@ -19,6 +19,57 @@ export const MAX_SUPPLIER_DOC_BYTES = 10 * 1024 * 1024; // 10 MB
 
 export type StorageFolder = 'products' | 'offline-bills' | 'supplier-bills';
 
+export const MAX_BYTES_BY_FOLDER: Record<StorageFolder, number> = {
+  products: MAX_PRODUCT_IMAGE_BYTES,
+  'offline-bills': MAX_OFFLINE_BILL_BYTES,
+  'supplier-bills': MAX_SUPPLIER_DOC_BYTES,
+};
+
+function sanitizeReferenceSegment(referenceId: string | number): string {
+  const clean = String(referenceId).trim();
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(clean)) {
+    throw new AppError('Invalid storage reference identifier.', 400, 'INVALID_REFERENCE_ID');
+  }
+  return clean;
+}
+
+function assertSafeScopedObjectKey(
+  objectKey: string,
+  expectedFolder: StorageFolder,
+  expectedReferenceId?: string | number
+): void {
+  if (
+    !objectKey ||
+    objectKey !== objectKey.trim() ||
+    objectKey.includes('..') ||
+    objectKey.includes('\\') ||
+    objectKey.includes('//') ||
+    objectKey.includes('?') ||
+    objectKey.includes('#')
+  ) {
+    throw new AppError('Invalid object key path for requested operation.', 400, 'INVALID_OBJECT_KEY');
+  }
+
+  const expectedPrefix =
+    expectedReferenceId !== undefined
+      ? `${expectedFolder}/${String(expectedReferenceId).trim()}/`
+      : `${expectedFolder}/`;
+
+  if (!objectKey.startsWith(expectedPrefix)) {
+    throw new AppError('Invalid object key path for requested operation.', 400, 'INVALID_OBJECT_KEY');
+  }
+
+  const segments = objectKey.split('/');
+  const validSegment = /^[a-zA-Z0-9._-]+$/;
+  if (
+    segments.some((seg) => !seg || seg === '.' || seg === '..' || !validSegment.test(seg)) ||
+    (expectedReferenceId !== undefined && segments.length !== 3) ||
+    (expectedReferenceId === undefined && (segments.length < 2 || segments.length > 3))
+  ) {
+    throw new AppError('Invalid object key path for requested operation.', 400, 'INVALID_OBJECT_KEY');
+  }
+}
+
 export interface UploadIntentOptions {
   folder: StorageFolder;
   referenceId: string | number;
@@ -165,11 +216,13 @@ export class StorageService {
       throw new AppError(msg, 400, 'INVALID_CONTENT_TYPE');
     }
 
-    // Validate size limit based on folder
-    const maxBytes = folder === 'products' ? MAX_PRODUCT_IMAGE_BYTES : MAX_OFFLINE_BILL_BYTES;
+    const safeReferenceId = sanitizeReferenceSegment(referenceId);
+
+    // Validate size limit strictly against per-folder authoritative map
+    const maxBytes = MAX_BYTES_BY_FOLDER[folder];
     const maxMb = maxBytes / (1024 * 1024);
 
-    if (sizeBytes <= 0) {
+    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
       throw new AppError('File size must be greater than zero bytes.', 400, 'INVALID_FILE_SIZE');
     }
     if (sizeBytes > maxBytes) {
@@ -189,11 +242,12 @@ export class StorageService {
 
     // Server-controlled random object key to prevent directory traversal
     const randomId = crypto.randomUUID();
-    const objectKey = `${folder}/${referenceId}/${randomId}.${ext}`;
+    const objectKey = `${folder}/${safeReferenceId}/${randomId}.${ext}`;
 
     const command = new PutObjectCommand({
       Bucket: env.R2_BUCKET_NAME!,
       Key: objectKey,
+      ContentType: cleanContentType,
     });
 
     const expiresIn = 300; // 5 minutes
@@ -203,7 +257,9 @@ export class StorageService {
       uploadUrl,
       objectKey,
       expiresIn,
-      headers: {},
+      headers: {
+        'Content-Type': cleanContentType,
+      },
     };
   }
 
@@ -217,18 +273,8 @@ export class StorageService {
   ): Promise<VerifiedObjectResult> {
     this.assertConfigured();
 
-    // Guard against directory traversal or spoofed key
-    const expectedPrefix = expectedReferenceId !== undefined
-      ? `${expectedFolder}/${expectedReferenceId}/`
-      : `${expectedFolder}/`;
-
-    if (!objectKey.startsWith(expectedPrefix)) {
-      throw new AppError(
-        'Invalid object key path for requested operation.',
-        400,
-        'INVALID_OBJECT_KEY'
-      );
-    }
+    // Guard against directory traversal, cross-entity key reuse, or spoofed key BEFORE any S3 access or delete
+    assertSafeScopedObjectKey(objectKey, expectedFolder, expectedReferenceId);
 
     try {
       // 1. HeadObject: verify object existence and metadata
@@ -242,8 +288,9 @@ export class StorageService {
       const contentLength = head.ContentLength || 0;
       const contentType = (head.ContentType || '').toLowerCase().trim();
 
-      const maxBytes = expectedFolder === 'products' ? MAX_PRODUCT_IMAGE_BYTES : MAX_OFFLINE_BILL_BYTES;
+      const maxBytes = MAX_BYTES_BY_FOLDER[expectedFolder];
       if (contentLength <= 0 || contentLength > maxBytes) {
+        await this.deleteObject(objectKey);
         throw new AppError(
           `Uploaded object size (${contentLength} bytes) is outside permitted limits.`,
           400,
@@ -253,6 +300,7 @@ export class StorageService {
 
       const allowedSet = expectedFolder === 'supplier-bills' ? ALLOWED_SUPPLIER_DOC_TYPES : ALLOWED_IMAGE_TYPES;
       if (!allowedSet.has(contentType)) {
+        await this.deleteObject(objectKey);
         throw new AppError(
           `Uploaded object Content-Type "${contentType}" is not an accepted file format.`,
           400,
@@ -270,13 +318,13 @@ export class StorageService {
       );
 
       if (!getRange.Body) {
+        await this.deleteObject(objectKey);
         throw new AppError('Unable to inspect uploaded image contents from storage.', 502, 'STORAGE_VERIFICATION_FAILED');
       }
 
       const chunk = await getRange.Body.transformToByteArray();
       const validSignature = validateImageMagicBytes(chunk, contentType);
       if (!validSignature) {
-        // Delete invalid spoofed object immediately
         await this.deleteObject(objectKey);
         throw new AppError(
           'Uploaded file contents do not match a valid JPEG, PNG, or WebP image signature.',
@@ -413,8 +461,10 @@ export class StorageService {
       throw new AppError(msg, 400, 'INVALID_CONTENT_TYPE');
     }
 
-    // Validate size limit
-    const maxBytes = folder === 'products' ? MAX_PRODUCT_IMAGE_BYTES : MAX_OFFLINE_BILL_BYTES;
+    const safeReferenceId = sanitizeReferenceSegment(referenceId);
+
+    // Validate size limit strictly against per-folder authoritative map
+    const maxBytes = MAX_BYTES_BY_FOLDER[folder];
     const maxMb = maxBytes / (1024 * 1024);
     if (buffer.length <= 0) {
       throw new AppError('File size must be greater than zero bytes.', 400, 'INVALID_FILE_SIZE');
@@ -442,7 +492,7 @@ export class StorageService {
     else if (cleanMime === 'image/webp') ext = 'webp';
     else if (cleanMime === 'application/pdf') ext = 'pdf';
     const randomId = crypto.randomUUID();
-    const objectKey = `${folder}/${referenceId}/${randomId}.${ext}`;
+    const objectKey = `${folder}/${safeReferenceId}/${randomId}.${ext}`;
 
     await this.uploadBufferToR2({ buffer, objectKey, contentType: cleanMime });
 

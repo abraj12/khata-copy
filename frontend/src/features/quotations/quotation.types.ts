@@ -92,6 +92,7 @@ export interface QuotationSettings {
   standard_warranty_terms: string | null;
   standard_declaration: string | null;
   signatory_title: string;
+  jurisdiction?: string | null;
   updated_at: string;
 }
 

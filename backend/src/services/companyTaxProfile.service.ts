@@ -1,5 +1,6 @@
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { appPool } from '../config/database.js';
+import { env } from '../config/env.js';
 import { AppError } from '../utils/errors.js';
 import { resolveValidatedState, validateGstinForState } from '../utils/indianTax.js';
 
@@ -26,6 +27,7 @@ export interface CompanyTaxProfile {
   standardWarrantyTerms: string | null;
   standardDeclaration: string | null;
   signatoryTitle: string;
+  jurisdiction: string | null;
 }
 
 interface QuotationSettingsRow extends QueryResultRow {
@@ -50,6 +52,7 @@ interface QuotationSettingsRow extends QueryResultRow {
   standard_warranty_terms: string | null;
   standard_declaration: string | null;
   signatory_title: string;
+  jurisdiction?: string | null;
 }
 
 /**
@@ -111,5 +114,6 @@ export async function getCompanyTaxProfile(db: DbQueryable = appPool): Promise<C
     standardWarrantyTerms: row.standard_warranty_terms ?? null,
     standardDeclaration: row.standard_declaration ?? null,
     signatoryTitle: row.signatory_title,
+    jurisdiction: row.jurisdiction?.trim() || env.COMPANY_JURISDICTION?.trim() || null,
   };
 }

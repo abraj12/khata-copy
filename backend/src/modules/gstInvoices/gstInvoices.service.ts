@@ -187,10 +187,61 @@ export class GstInvoicesService {
         phone: profile.phone,
         state: profile.state,
         stateCode: profile.stateCode,
+        jurisdiction: profile.jurisdiction,
       };
     } catch {
       return undefined;
     }
+  }
+
+  private buildPdfDataFromRecord(
+    invoice: GstInvoiceRecord,
+    company?: GstInvoicePdfCompany
+  ): GstInvoicePdfData {
+    return {
+      invoiceNumber: invoice.invoice_number,
+      invoiceDate: invoice.invoice_date,
+      state: invoice.state,
+      stateCode: invoice.state_code,
+      transportationMode: invoice.transportation_mode,
+      vehicleNumber: invoice.vehicle_number,
+      dateOfSupply: invoice.date_of_supply,
+      placeOfSupply: invoice.place_of_supply,
+      company,
+      customer: {
+        name: invoice.customer_name,
+        address: invoice.customer_address,
+        gstin: invoice.customer_gstin,
+        state: invoice.customer_state,
+        stateCode: invoice.customer_state_code,
+      },
+      items: (invoice.items || []).map((itm) => ({
+        name: itm.description,
+        hsn: itm.hsn_code,
+        quantity: itm.quantity,
+        unit: itm.unit,
+        rate: itm.rate,
+        rateUnit: itm.rate_unit,
+        amount: itm.amount,
+      })),
+      totals: {
+        subtotal: invoice.subtotal_amount || invoice.taxable_amount,
+        discountType: invoice.discount_type,
+        discountValue: invoice.discount_value,
+        discountAmount: invoice.discount_amount,
+        taxableAmount: invoice.taxable_amount,
+        cgstRate: invoice.cgst_rate,
+        cgstAmount: invoice.cgst_amount,
+        sgstRate: invoice.sgst_rate,
+        sgstAmount: invoice.sgst_amount,
+        igstRate: invoice.igst_rate,
+        igstAmount: invoice.igst_amount,
+        taxAmount: invoice.tax_amount,
+        grandTotal: invoice.grand_total,
+      },
+      amountInWords: invoice.amount_in_words,
+      isNormalBill: false,
+    };
   }
 
   /**
@@ -458,69 +509,31 @@ export class GstInvoicesService {
     let r2ObjectKey: string | null = null;
 
     try {
-      const pdfBuffer = await generateTaxInvoicePdf({
-        invoiceNumber: createdInvoice.invoice_number,
-        invoiceDate: createdInvoice.invoice_date,
-        state: createdInvoice.state,
-        stateCode: createdInvoice.state_code,
-        transportationMode: createdInvoice.transportation_mode,
-        vehicleNumber: createdInvoice.vehicle_number,
-        dateOfSupply: createdInvoice.date_of_supply,
-        placeOfSupply: createdInvoice.place_of_supply,
-        company: companyForPdf,
-        customer: {
-          name: createdInvoice.customer_name,
-          address: createdInvoice.customer_address,
-          gstin: createdInvoice.customer_gstin,
-          state: createdInvoice.customer_state,
-          stateCode: createdInvoice.customer_state_code,
-        },
-        items: (createdInvoice.items || []).map((itm) => ({
-          name: itm.description,
-          hsn: itm.hsn_code,
-          quantity: itm.quantity,
-          unit: itm.unit,
-          rate: itm.rate,
-          rateUnit: itm.rate_unit,
-          amount: itm.amount,
-        })),
-        totals: {
-          subtotal: createdInvoice.subtotal_amount || createdInvoice.taxable_amount,
-          discountType: createdInvoice.discount_type,
-          discountValue: createdInvoice.discount_value,
-          discountAmount: createdInvoice.discount_amount,
-          taxableAmount: createdInvoice.taxable_amount,
-          cgstRate: createdInvoice.cgst_rate,
-          cgstAmount: createdInvoice.cgst_amount,
-          sgstRate: createdInvoice.sgst_rate,
-          sgstAmount: createdInvoice.sgst_amount,
-          igstRate: createdInvoice.igst_rate,
-          igstAmount: createdInvoice.igst_amount,
-          taxAmount: createdInvoice.tax_amount,
-          grandTotal: createdInvoice.grand_total,
-        },
-        amountInWords: createdInvoice.amount_in_words,
-        isNormalBill: false,
-      });
+      const pdfBuffer = await generateTaxInvoicePdf(
+        this.buildPdfDataFromRecord(createdInvoice, companyForPdf)
+      );
 
       if (this.storageService.isConfigured()) {
         const [year, month] = getBusinessDateISO(env.BUSINESS_TIME_ZONE).split('-');
-        r2ObjectKey = `gst-invoices/${year}/${month}/${createdInvoice.id}.pdf`;
+        const candidateKey = `gst-invoices/${year}/${month}/${createdInvoice.id}.pdf`;
 
         try {
           await this.storageService.uploadBufferToR2({
             buffer: pdfBuffer,
-            objectKey: r2ObjectKey,
+            objectKey: candidateKey,
             contentType: 'application/pdf',
           });
+          r2ObjectKey = candidateKey;
           pdfStatus = 'uploaded';
         } catch (uploadErr) {
           console.error('[GST INVOICE R2 UPLOAD] Upload failed:', uploadErr);
+          r2ObjectKey = null;
           pdfStatus = 'failed';
         }
       }
     } catch (pdfErr) {
       console.error('[GST INVOICE PDF GENERATION] PDF generation failed:', pdfErr);
+      r2ObjectKey = null;
       pdfStatus = 'failed';
     }
 
@@ -687,53 +700,62 @@ export class GstInvoicesService {
     }
 
     const company = await this.getOptionalPdfCompany();
-    const pdfData: GstInvoicePdfData = {
-      invoiceNumber: invoice.invoice_number,
-      invoiceDate: invoice.invoice_date,
-      state: invoice.state,
-      stateCode: invoice.state_code,
-      transportationMode: invoice.transportation_mode,
-      vehicleNumber: invoice.vehicle_number,
-      dateOfSupply: invoice.date_of_supply,
-      placeOfSupply: invoice.place_of_supply,
-      company,
-      customer: {
-        name: invoice.customer_name,
-        address: invoice.customer_address,
-        gstin: invoice.customer_gstin,
-        state: invoice.customer_state,
-        stateCode: invoice.customer_state_code,
-      },
-      items: (invoice.items || []).map((itm) => ({
-        name: itm.description,
-        hsn: itm.hsn_code,
-        quantity: itm.quantity,
-        unit: itm.unit,
-        rate: itm.rate,
-        rateUnit: itm.rate_unit,
-        amount: itm.amount,
-      })),
-      totals: {
-        subtotal: invoice.subtotal_amount || invoice.taxable_amount,
-        discountType: invoice.discount_type,
-        discountValue: invoice.discount_value,
-        discountAmount: invoice.discount_amount,
-        taxableAmount: invoice.taxable_amount,
-        cgstRate: invoice.cgst_rate,
-        cgstAmount: invoice.cgst_amount,
-        sgstRate: invoice.sgst_rate,
-        sgstAmount: invoice.sgst_amount,
-        igstRate: invoice.igst_rate,
-        igstAmount: invoice.igst_amount,
-        taxAmount: invoice.tax_amount,
-        grandTotal: invoice.grand_total,
-      },
-      amountInWords: invoice.amount_in_words,
-      isNormalBill: false,
-    };
-
-    const buffer = await generateTaxInvoicePdf(pdfData);
+    const buffer = await generateTaxInvoicePdf(this.buildPdfDataFromRecord(invoice, company));
     return { buffer, filename };
+  }
+
+  /**
+   * Idempotently retries PDF generation & R2 upload for a failed or pending GST invoice
+   * outside of any database transaction. Never persists r2_object_key unless R2 upload succeeds.
+   */
+  public async retryInvoicePdf(id: number): Promise<GstInvoiceRecord> {
+    this.storageService.assertConfigured();
+    const invoice = await this.getInvoiceById(id);
+    if (!invoice) {
+      throw new AppError('Invoice not found.', 404, 'NOT_FOUND');
+    }
+
+    if (invoice.pdf_status === 'uploaded' && invoice.r2_object_key) {
+      return invoice;
+    }
+
+    const company = await this.getOptionalPdfCompany();
+    const pdfBuffer = await generateTaxInvoicePdf(this.buildPdfDataFromRecord(invoice, company));
+
+    const dateStr =
+      typeof invoice.invoice_date === 'string' && /^\d{4}-\d{2}/.test(invoice.invoice_date)
+        ? invoice.invoice_date
+        : getBusinessDateISO(env.BUSINESS_TIME_ZONE);
+    const [year, month] = dateStr.split('-');
+    const candidateKey = `gst-invoices/${year}/${month}/${invoice.id}.pdf`;
+
+    try {
+      await this.storageService.uploadBufferToR2({
+        buffer: pdfBuffer,
+        objectKey: candidateKey,
+        contentType: 'application/pdf',
+      });
+    } catch (uploadErr) {
+      await appPool.query(
+        'UPDATE gst_invoices SET pdf_status = $1, r2_object_key = NULL, updated_at = NOW() WHERE id = $2',
+        ['failed', invoice.id]
+      );
+      throw new AppError(
+        `Failed to upload invoice PDF to storage: ${(uploadErr as Error).message}`,
+        502,
+        'PDF_UPLOAD_FAILED'
+      );
+    }
+
+    await appPool.query(
+      'UPDATE gst_invoices SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3',
+      ['uploaded', candidateKey, invoice.id]
+    );
+    return {
+      ...invoice,
+      pdf_status: 'uploaded',
+      r2_object_key: candidateKey,
+    };
   }
 
   /**
@@ -824,6 +846,7 @@ export class GstInvoicesService {
         phone: companyProfile.phone,
         state: companyProfile.state,
         stateCode: companyProfile.stateCode,
+        jurisdiction: companyProfile.jurisdiction,
       },
       customer: {
         name: input.customerName || 'Valued Customer',

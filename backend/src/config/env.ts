@@ -94,6 +94,8 @@ export const envSchema = z.object({
 
   // Configured Business Timezone
   BUSINESS_TIME_ZONE: z.string().default('Asia/Kolkata'),
+  // Optional fallback jurisdiction label for invoices/quotations when DB setting is null
+  COMPANY_JURISDICTION: z.string().trim().min(1).max(200).optional(),
 
   // Login abuse protection thresholds
   LOGIN_MAX_ATTEMPTS: strictPositiveIntSchema.default(5),

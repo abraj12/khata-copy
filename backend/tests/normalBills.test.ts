@@ -393,8 +393,8 @@ describe('Normal Billing Module (Non-GST Standard Bills) Test Suite', () => {
       }
     }
 
-    // Over 20 line items must also fail with 400
-    const twentyOneItems = Array.from({ length: 21 }, (_, idx) => ({
+    // Over 100 line items must also fail with 400
+    const tooManyItems = Array.from({ length: 101 }, (_, idx) => ({
       description: `Item ${idx + 1}`,
       quantity: 1,
       rate: 10,
@@ -403,7 +403,7 @@ describe('Normal Billing Module (Non-GST Standard Bills) Test Suite', () => {
       .post('/api/v1/normal-bills')
       .set('Cookie', authCookie)
       .set('X-CSRF-Token', csrfToken)
-      .send({ ...basePayload, items: twentyOneItems });
+      .send({ ...basePayload, items: tooManyItems });
     expect(tooManyRes.status).toBe(400);
   });
 

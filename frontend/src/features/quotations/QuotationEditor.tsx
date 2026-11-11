@@ -27,7 +27,11 @@ import { QuotationPreview } from './QuotationPreview.js';
 import { apiClient } from '../../lib/apiClient.js';
 import { formatCurrency } from '../../lib/formatters.js';
 import { INDIAN_STATES, getStateByCode, resolveCustomerStateSelection } from '../../lib/indianStates.js';
-import { getBusinessDateISO, addBusinessCalendarDays } from '../../utils/businessDate.js';
+import {
+  getBusinessDateISO,
+  addBusinessCalendarDays,
+  isValidBusinessDate,
+} from '../../utils/businessDate.js';
 import {
   applyCatalogProductToDraftLine,
   ProductCatalogReference,
@@ -43,11 +47,42 @@ export interface QuotationEditorProps {
   onSaved: (quotation: Quotation) => void;
 }
 
+interface DraftQuotationItem extends QuotationItem {
+  draftKey: string;
+}
+
+interface RowSearchState {
+  reqId: number;
+  timer?: ReturnType<typeof setTimeout>;
+  controller?: AbortController;
+}
+
+let draftKeySequence = 0;
+function createDraftKey(): string {
+  draftKeySequence += 1;
+  return `qt-row-${Date.now()}-${draftKeySequence}`;
+}
+
+function createEmptyDraftItem(): DraftQuotationItem {
+  return {
+    draftKey: createDraftKey(),
+    description: '',
+    hsnCode: '',
+    barcode: '',
+    quantity: 1,
+    unit: 'pcs',
+    rate: '',
+    rateUnit: 'pcs',
+    amount: '0.00',
+  };
+}
+
 export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSaved }) => {
   const [settings, setSettings] = useState<QuotationSettings | null>(null);
   const [quotationNumber, setQuotationNumber] = useState('QT-001');
   const [quotationDate, setQuotationDate] = useState(() => getBusinessDateISO());
   const [validUntil, setValidUntil] = useState('');
+  const [isValidUntilManuallyEdited, setIsValidUntilManuallyEdited] = useState(false);
 
   // Customer
   const [customerId, setCustomerId] = useState<number | null>(null);
@@ -61,29 +96,19 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
   const [matchedCustomers, setMatchedCustomers] = useState<any[]>([]);
   const [isSearchingCustomer, setIsSearchingCustomer] = useState(false);
   const customerReqIdRef = useRef(0);
-  const productReqIdRef = useRef<{ [rowIdx: number]: number }>({});
+  const customerAbortRef = useRef<AbortController | null>(null);
+  const productSearchStateRef = useRef<Record<string, RowSearchState>>({});
 
   // Project
   const [projectTitle, setProjectTitle] = useState('');
   const [subject, setSubject] = useState('');
 
-  // Items
-  const [items, setItems] = useState<QuotationItem[]>([
-    {
-      description: '',
-      hsnCode: '',
-      barcode: '',
-      quantity: 1,
-      unit: 'pcs',
-      rate: '',
-      rateUnit: 'pcs',
-      amount: '0.00',
-    },
-  ]);
-  const itemsRef = useRef<QuotationItem[]>(items);
+  // Items (stable draftKey eliminates row-index autocomplete races on insert/delete/reorder)
+  const [items, setItems] = useState<DraftQuotationItem[]>(() => [createEmptyDraftItem()]);
+  const itemsRef = useRef<DraftQuotationItem[]>(items);
 
   const commitItems = useCallback(
-    (updater: QuotationItem[] | ((prev: QuotationItem[]) => QuotationItem[])) => {
+    (updater: DraftQuotationItem[] | ((prev: DraftQuotationItem[]) => DraftQuotationItem[])) => {
       const next =
         typeof updater === 'function' ? updater(itemsRef.current) : updater;
       itemsRef.current = next;
@@ -93,8 +118,8 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     []
   );
 
-  // Product Autocomplete for active item row
-  const [productSearchResults, setProductSearchResults] = useState<{ [rowIdx: number]: any[] }>({});
+  // Product Autocomplete keyed strictly by stable item.draftKey
+  const [productSearchResults, setProductSearchResults] = useState<Record<string, any[]>>({});
 
   // Discount
   const [discountType, setDiscountType] = useState<'percentage' | 'fixed' | null>(null);
@@ -129,8 +154,11 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
           setQuotationNumber(nextNum);
           setSettings(s);
 
-          // Calculate default valid until without UTC timezone shift
-          setValidUntil(addBusinessCalendarDays(s?.standard_validity_days || 30));
+          // Calculate default valid until relative to active quotationDate unless user already customized it
+          const validityDays = s?.standard_validity_days || 30;
+          setValidUntil((prev) =>
+            isValidUntilManuallyEdited ? prev : addBusinessCalendarDays(validityDays, quotationDate)
+          );
 
           // Default terms
           const defaultTerms = [
@@ -155,36 +183,66 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     setIsIntraState(Boolean(supplierState && customerStateCode && supplierState === customerStateCode));
   }, [customerStateCode, settings]);
 
-  // Customer search helper (using authoritative /api/v1/khata/customers and request ID guard)
+  // Customer search helper with AbortController + request ID guard on clear/short queries too
   useEffect(() => {
-    if (!customerSearch.trim() || customerSearch.length < 2) {
+    const currentReqId = ++customerReqIdRef.current;
+    customerAbortRef.current?.abort();
+    customerAbortRef.current = null;
+
+    const trimmed = customerSearch.trim();
+    if (!trimmed || trimmed.length < 2) {
       setMatchedCustomers([]);
+      setIsSearchingCustomer(false);
       return;
     }
-    const currentReqId = ++customerReqIdRef.current;
+
+    const controller = new AbortController();
+    customerAbortRef.current = controller;
+
     const t = setTimeout(async () => {
+      if (currentReqId !== customerReqIdRef.current || controller.signal.aborted) return;
       setIsSearchingCustomer(true);
       try {
         const res = await apiClient<{ success: boolean; customers: any[] }>(
-          `/api/v1/khata/customers?search=${encodeURIComponent(customerSearch.trim())}&limit=5`,
-          { method: 'GET' }
+          `/api/v1/khata/customers?search=${encodeURIComponent(trimmed)}&limit=5`,
+          { method: 'GET', signal: controller.signal }
         );
-        if (currentReqId === customerReqIdRef.current) {
+        if (currentReqId === customerReqIdRef.current && !controller.signal.aborted) {
           setMatchedCustomers(res.data?.customers || []);
         }
-      } catch {
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || controller.signal.aborted) return;
         if (currentReqId === customerReqIdRef.current) {
           setMatchedCustomers([]);
         }
       } finally {
-        if (currentReqId === customerReqIdRef.current) {
+        if (currentReqId === customerReqIdRef.current && !controller.signal.aborted) {
           setIsSearchingCustomer(false);
         }
       }
     }, 250);
 
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+      if (customerAbortRef.current === controller) {
+        customerAbortRef.current = null;
+      }
+    };
   }, [customerSearch]);
+
+  // Abort all per-row autocomplete requests & debounce timers when unmounting
+  useEffect(() => {
+    return () => {
+      customerAbortRef.current?.abort();
+      const map = productSearchStateRef.current;
+      Object.keys(map).forEach((key) => {
+        if (map[key].timer) clearTimeout(map[key].timer);
+        map[key].controller?.abort();
+      });
+      productSearchStateRef.current = {};
+    };
+  }, []);
 
   const selectCustomer = (c: any) => {
     setCustomerId(c.id || null);
@@ -199,95 +257,138 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     setMatchedCustomers([]);
   };
 
-  // Add line item
-  const handleAddItem = () => {
-    commitItems((prev) => [
-      ...prev,
-      {
-        description: '',
-        hsnCode: '',
-        barcode: '',
-        quantity: 1,
-        unit: 'pcs',
-        rate: '',
-        rateUnit: 'pcs',
-        amount: '0.00',
-      },
-    ]);
-  };
-
-  // Remove line item
-  const handleRemoveItem = (index: number) => {
-    if (itemsRef.current.length <= 1) return;
-    commitItems((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
-  };
-
-  // Update item field
-  const handleUpdateItem = (index: number, field: keyof QuotationItem, value: any) => {
-    commitItems((prev) => {
-      const next = [...prev];
-      const target = { ...next[index], [field]: value };
-
-      if (field === 'quantity' || field === 'rate') {
-        try {
-          const q = new Decimal(String(target.quantity || 0));
-          const r = new Decimal(String(target.rate || 0));
-          target.amount = q.times(r).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
-        } catch {
-          target.amount = '0.00';
-        }
-      }
-
-      next[index] = target;
+  const cleanupRowSearch = useCallback((draftKey: string) => {
+    const existing = productSearchStateRef.current[draftKey];
+    if (existing) {
+      if (existing.timer) clearTimeout(existing.timer);
+      existing.controller?.abort();
+      existing.reqId += 1;
+      existing.timer = undefined;
+      existing.controller = undefined;
+    }
+    setProductSearchResults((prev) => {
+      if (!(draftKey in prev)) return prev;
+      const next = { ...prev };
+      delete next[draftKey];
       return next;
     });
+  }, []);
+
+  // Add line item
+  const handleAddItem = () => {
+    commitItems((prev) => [...prev, createEmptyDraftItem()]);
   };
 
-  // Search product catalogue for autocomplete on a row with request ID guard
-  const handleSearchRowProduct = async (rowIdx: number, text: string) => {
-    handleUpdateItem(rowIdx, 'description', text);
-    if (!text.trim() || text.length < 2) {
-      setProductSearchResults((prev) => ({ ...prev, [rowIdx]: [] }));
+  // Remove line item by stable draftKey
+  const handleRemoveItem = (draftKey: string) => {
+    if (itemsRef.current.length <= 1) return;
+    cleanupRowSearch(draftKey);
+    delete productSearchStateRef.current[draftKey];
+    commitItems((prev) => (prev.length <= 1 ? prev : prev.filter((item) => item.draftKey !== draftKey)));
+  };
+
+  // Update item field by stable draftKey
+  const handleUpdateItem = (draftKey: string, field: keyof QuotationItem, value: any) => {
+    commitItems((prev) =>
+      prev.map((item) => {
+        if (item.draftKey !== draftKey) return item;
+        const target = { ...item, [field]: value };
+
+        if (field === 'quantity' || field === 'rate') {
+          try {
+            const q = new Decimal(String(target.quantity || 0));
+            const r = new Decimal(String(target.rate || 0));
+            target.amount = q.times(r).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+          } catch {
+            target.amount = '0.00';
+          }
+        }
+        return target;
+      })
+    );
+  };
+
+  // Debounced + AbortController per-row product autocomplete keyed by stable draftKey
+  const handleSearchRowProduct = (draftKey: string, text: string) => {
+    handleUpdateItem(draftKey, 'description', text);
+
+    const prevState = productSearchStateRef.current[draftKey];
+    if (prevState?.timer) clearTimeout(prevState.timer);
+    prevState?.controller?.abort();
+
+    const currentReqId = (prevState?.reqId || 0) + 1;
+    const trimmed = text.trim();
+
+    if (!trimmed || trimmed.length < 2) {
+      productSearchStateRef.current[draftKey] = { reqId: currentReqId };
+      setProductSearchResults((prev) => {
+        if (!(draftKey in prev)) return prev;
+        const next = { ...prev };
+        delete next[draftKey];
+        return next;
+      });
       return;
     }
 
-    const currentReqId = (productReqIdRef.current[rowIdx] || 0) + 1;
-    productReqIdRef.current[rowIdx] = currentReqId;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      const liveState = productSearchStateRef.current[draftKey];
+      if (!liveState || liveState.reqId !== currentReqId || controller.signal.aborted) return;
 
-    try {
-      const res = await apiClient<{ success: boolean; data: any[] }>(
-        `/api/v1/products?search=${encodeURIComponent(text.trim())}&limit=5`,
-        { method: 'GET' }
-      );
-      if (productReqIdRef.current[rowIdx] === currentReqId) {
-        setProductSearchResults((prev) => ({ ...prev, [rowIdx]: res.data?.data || [] }));
+      try {
+        const res = await apiClient<{ success: boolean; data: any[] }>(
+          `/api/v1/products?search=${encodeURIComponent(trimmed)}&limit=5`,
+          { method: 'GET', signal: controller.signal }
+        );
+        const latestState = productSearchStateRef.current[draftKey];
+        const rowStillExists = itemsRef.current.some((item) => item.draftKey === draftKey);
+        if (
+          latestState &&
+          latestState.reqId === currentReqId &&
+          !controller.signal.aborted &&
+          rowStillExists
+        ) {
+          setProductSearchResults((prev) => ({
+            ...prev,
+            [draftKey]: res.data?.data || [],
+          }));
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || controller.signal.aborted) return;
+        const latestState = productSearchStateRef.current[draftKey];
+        if (latestState && latestState.reqId === currentReqId) {
+          setProductSearchResults((prev) => ({ ...prev, [draftKey]: [] }));
+        }
       }
-    } catch {
-      if (productReqIdRef.current[rowIdx] === currentReqId) {
-        setProductSearchResults((prev) => ({ ...prev, [rowIdx]: [] }));
-      }
-    }
+    }, 250);
+
+    productSearchStateRef.current[draftKey] = {
+      reqId: currentReqId,
+      timer,
+      controller,
+    };
   };
 
-  const handleSelectRowProduct = (rowIdx: number, p: any) => {
-    commitItems((prev) => {
-      const next = [...prev];
-      const parsedQty = decimalOrZero(next[rowIdx].quantity, 1);
-      const qty = parsedQty.isPositive() ? parsedQty : new Decimal(1);
-      const nextLine = applyCatalogProductToDraftLine(next[rowIdx], p);
-      const rate = nextLine.rate ? decimalOrZero(nextLine.rate) : null;
-      next[rowIdx] = {
-        ...next[rowIdx],
-        productId: p.id,
-        description: p.name,
-        hsnCode: p.hsn_code || '',
-        barcode: p.barcode || '',
-        rate: nextLine.rate,
-        amount: rate ? qty.times(rate).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2) : '0.00',
-      };
-      return next;
-    });
-    setProductSearchResults((prev) => ({ ...prev, [rowIdx]: [] }));
+  const handleSelectRowProduct = (draftKey: string, p: any) => {
+    cleanupRowSearch(draftKey);
+    commitItems((prev) =>
+      prev.map((item) => {
+        if (item.draftKey !== draftKey) return item;
+        const parsedQty = decimalOrZero(item.quantity, 1);
+        const qty = parsedQty.isPositive() ? parsedQty : new Decimal(1);
+        const nextLine = applyCatalogProductToDraftLine(item, p);
+        const rate = nextLine.rate ? decimalOrZero(nextLine.rate) : null;
+        return {
+          ...item,
+          productId: p.id,
+          description: p.name,
+          hsnCode: p.hsn_code || '',
+          barcode: p.barcode || '',
+          rate: nextLine.rate,
+          amount: rate ? qty.times(rate).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2) : '0.00',
+        };
+      })
+    );
   };
 
   // Shared Barcode Resolution Handler (USB/BT Scanner, Manual Entry & Camera Scanner)
@@ -299,19 +400,13 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
         rate: String(it.rate ?? ''),
       }));
       const res = upsertScannedProductLine(normalizedLines, product, () => ({
-        productId: null,
-        description: '',
-        hsnCode: '',
-        barcode: '',
+        ...createEmptyDraftItem(),
         quantity: '1',
-        unit: 'pcs',
         rate: '',
-        rateUnit: 'pcs',
-        amount: '0.00',
       }));
       if (!res.error) {
         commitItems(
-          res.nextLines.map((line) => {
+          res.nextLines.map((line: any) => {
             let amt = '0.00';
             try {
               const q = new Decimal(String(line.quantity || 0));
@@ -322,6 +417,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
             }
             return {
               ...line,
+              draftKey: line.draftKey || createDraftKey(),
               unit: line.unit || 'pcs',
               rateUnit: line.rateUnit || 'pcs',
               amount: amt,
@@ -411,7 +507,27 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
     };
   };
 
+  const dateValidationError =
+    quotationDate && validUntil && validUntil < quotationDate
+      ? 'Valid Until date cannot be earlier than Quotation Date.'
+      : null;
+
+  const handleQuotationDateChange = (nextDate: string) => {
+    setQuotationDate(nextDate);
+    if (!isValidUntilManuallyEdited && isValidBusinessDate(nextDate)) {
+      setValidUntil(addBusinessCalendarDays(settings?.standard_validity_days || 30, nextDate));
+    }
+  };
+
+  const handleValidUntilChange = (nextDate: string) => {
+    setValidUntil(nextDate);
+    setIsValidUntilManuallyEdited(true);
+  };
+
   const validateQuotationForm = (): string | null => {
+    if (dateValidationError) {
+      return dateValidationError;
+    }
     if (!customerName.trim()) {
       return 'Customer name is required.';
     }
@@ -505,26 +621,27 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
           </button>
           <button
             type="button"
+            disabled={Boolean(dateValidationError)}
             onClick={handleOpenPreview}
-            className="neu-btn-secondary text-xs px-3.5 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1 sm:flex-initial"
+            className="neu-btn-secondary text-xs px-3.5 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1 sm:flex-initial disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
             <span>Preview PDF</span>
           </button>
           <button
             type="button"
-            disabled={isSaving}
+            disabled={isSaving || Boolean(dateValidationError)}
             onClick={() => handleSave(false)}
-            className="neu-btn-secondary text-xs px-4 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1 sm:flex-initial"
+            className="neu-btn-secondary text-xs px-4 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1 sm:flex-initial disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Save className="w-4 h-4" />
             <span>Save Draft</span>
           </button>
           <button
             type="button"
-            disabled={isSaving}
+            disabled={isSaving || Boolean(dateValidationError)}
             onClick={() => handleSave(true)}
-            className="neu-btn-primary text-xs px-5 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1 sm:flex-initial"
+            className="neu-btn-primary text-xs px-5 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1 sm:flex-initial disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSaving ? (
               <Loader2 className="w-4 h-4 animate-spin text-[var(--khata-accent)]" />
@@ -565,8 +682,9 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
             </label>
             <input
               type="date"
+              aria-label="Quotation Date"
               value={quotationDate}
-              onChange={(e) => setQuotationDate(e.target.value)}
+              onChange={(e) => handleQuotationDateChange(e.target.value)}
               className="neu-input w-full text-sm font-medium"
             />
           </div>
@@ -577,10 +695,17 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
             </label>
             <input
               type="date"
+              aria-label="Valid Until"
+              min={quotationDate || undefined}
               value={validUntil}
-              onChange={(e) => setValidUntil(e.target.value)}
-              className="neu-input w-full text-sm font-medium"
+              onChange={(e) => handleValidUntilChange(e.target.value)}
+              className={`neu-input w-full text-sm font-medium ${dateValidationError ? 'border-rose-500 focus:ring-rose-500' : ''}`}
             />
+            {dateValidationError && (
+              <p role="alert" className="text-[11px] font-semibold text-rose-500 mt-1">
+                {dateValidationError}
+              </p>
+            )}
           </div>
         </div>
 
@@ -776,7 +901,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
         <div className="sm:hidden space-y-3">
           {items.map((item, idx) => (
             <div
-              key={idx}
+              key={item.draftKey}
               className="p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/30 space-y-2.5"
             >
               <div className="flex items-center justify-between">
@@ -784,7 +909,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                 <button
                   type="button"
                   disabled={items.length <= 1}
-                  onClick={() => handleRemoveItem(idx)}
+                  onClick={() => handleRemoveItem(item.draftKey)}
                   className="p-1 rounded text-[var(--khata-text-muted)] hover:text-rose-500 disabled:opacity-30 transition"
                   title="Remove item"
                 >
@@ -800,20 +925,20 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                 <input
                   type="text"
                   value={item.description}
-                  onChange={(e) => handleSearchRowProduct(idx, e.target.value)}
+                  onChange={(e) => handleSearchRowProduct(item.draftKey, e.target.value)}
                   placeholder="Type item description..."
                   className="neu-input w-full text-xs py-2"
                 />
-                {productSearchResults[idx]?.length > 0 && (
+                {productSearchResults[item.draftKey]?.length > 0 && (
                   <div
                     className="absolute left-0 right-0 top-full mt-1 p-1 rounded-xl border border-[var(--khata-border)] shadow-xl z-20 space-y-1 max-h-40 overflow-y-auto"
                     style={{ background: 'var(--khata-surface)' }}
                   >
-                    {productSearchResults[idx].map((p) => (
+                    {productSearchResults[item.draftKey].map((p) => (
                       <button
                         key={p.id}
                         type="button"
-                        onClick={() => handleSelectRowProduct(idx, p)}
+                        onClick={() => handleSelectRowProduct(item.draftKey, p)}
                         className="w-full text-left p-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] transition flex justify-between items-center"
                       >
                         <span className="font-bold">{p.name}</span>
@@ -835,7 +960,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                     step="0.01"
                     min="0.01"
                     value={item.quantity}
-                    onChange={(e) => handleUpdateItem(idx, 'quantity', e.target.value)}
+                    onChange={(e) => handleUpdateItem(item.draftKey, 'quantity', e.target.value)}
                     className="neu-input w-full text-xs py-1.5 text-center font-bold"
                   />
                 </div>
@@ -846,7 +971,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                   <input
                     type="text"
                     value={item.unit || 'pcs'}
-                    onChange={(e) => handleUpdateItem(idx, 'unit', e.target.value)}
+                    onChange={(e) => handleUpdateItem(item.draftKey, 'unit', e.target.value)}
                     className="neu-input w-full text-xs py-1.5 text-center"
                   />
                 </div>
@@ -859,7 +984,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                     step="0.01"
                     min="0"
                     value={item.rate}
-                    onChange={(e) => handleUpdateItem(idx, 'rate', e.target.value)}
+                    onChange={(e) => handleUpdateItem(item.draftKey, 'rate', e.target.value)}
                     className="neu-input w-full text-xs py-1.5 text-right font-medium"
                   />
                 </div>
@@ -882,7 +1007,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                   <input
                     type="text"
                     value={item.hsnCode || ''}
-                    onChange={(e) => handleUpdateItem(idx, 'hsnCode', e.target.value)}
+                    onChange={(e) => handleUpdateItem(item.draftKey, 'hsnCode', e.target.value)}
                     placeholder="e.g. 8471"
                     className="neu-input w-full text-xs py-1 font-mono"
                   />
@@ -894,7 +1019,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                   <input
                     type="text"
                     value={item.barcode || ''}
-                    onChange={(e) => handleUpdateItem(idx, 'barcode', e.target.value)}
+                    onChange={(e) => handleUpdateItem(item.draftKey, 'barcode', e.target.value)}
                     placeholder="Barcode"
                     className="neu-input w-full text-xs py-1 font-mono"
                   />
@@ -931,7 +1056,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
             </thead>
             <tbody className="divide-y divide-[var(--khata-border)]">
               {items.map((item, idx) => (
-                <tr key={idx} className="hover:bg-[var(--khata-surface-inset)]/40 transition">
+                <tr key={item.draftKey} className="hover:bg-[var(--khata-surface-inset)]/40 transition">
                   <td className="py-2 px-3 text-center font-bold text-[var(--khata-text-muted)]">
                     {idx + 1}
                   </td>
@@ -941,20 +1066,20 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                     <input
                       type="text"
                       value={item.description}
-                      onChange={(e) => handleSearchRowProduct(idx, e.target.value)}
+                      onChange={(e) => handleSearchRowProduct(item.draftKey, e.target.value)}
                       placeholder="Type item description..."
                       className="neu-input w-full text-xs py-1.5"
                     />
-                    {productSearchResults[idx]?.length > 0 && (
+                    {productSearchResults[item.draftKey]?.length > 0 && (
                       <div
                         className="absolute left-3 right-3 top-full mt-1 p-1 rounded-xl border border-[var(--khata-border)] shadow-xl z-20 space-y-1 max-h-40 overflow-y-auto"
                         style={{ background: 'var(--khata-surface)' }}
                       >
-                        {productSearchResults[idx].map((p) => (
+                        {productSearchResults[item.draftKey].map((p) => (
                           <button
                             key={p.id}
                             type="button"
-                            onClick={() => handleSelectRowProduct(idx, p)}
+                            onClick={() => handleSelectRowProduct(item.draftKey, p)}
                             className="w-full text-left p-1.5 rounded-lg text-xs hover:bg-[var(--khata-surface-inset)] transition flex justify-between items-center"
                           >
                             <span className="font-bold">{p.name}</span>
@@ -970,7 +1095,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                     <input
                       type="text"
                       value={item.hsnCode || ''}
-                      onChange={(e) => handleUpdateItem(idx, 'hsnCode', e.target.value)}
+                      onChange={(e) => handleUpdateItem(item.draftKey, 'hsnCode', e.target.value)}
                       placeholder="e.g. 8471"
                       className="neu-input w-full text-xs py-1.5 font-mono"
                     />
@@ -981,7 +1106,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                     <input
                       type="text"
                       value={item.barcode || ''}
-                      onChange={(e) => handleUpdateItem(idx, 'barcode', e.target.value)}
+                      onChange={(e) => handleUpdateItem(item.draftKey, 'barcode', e.target.value)}
                       placeholder="Barcode"
                       className="neu-input w-full text-xs py-1.5 font-mono"
                     />
@@ -994,7 +1119,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                       step="0.01"
                       min="0.01"
                       value={item.quantity}
-                      onChange={(e) => handleUpdateItem(idx, 'quantity', e.target.value)}
+                      onChange={(e) => handleUpdateItem(item.draftKey, 'quantity', e.target.value)}
                       className="neu-input w-full text-xs py-1.5 text-center font-bold"
                     />
                   </td>
@@ -1004,7 +1129,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                     <input
                       type="text"
                       value={item.unit || 'pcs'}
-                      onChange={(e) => handleUpdateItem(idx, 'unit', e.target.value)}
+                      onChange={(e) => handleUpdateItem(item.draftKey, 'unit', e.target.value)}
                       className="neu-input w-full text-xs py-1.5 text-center"
                     />
                   </td>
@@ -1016,7 +1141,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                       step="0.01"
                       min="0"
                       value={item.rate}
-                      onChange={(e) => handleUpdateItem(idx, 'rate', e.target.value)}
+                      onChange={(e) => handleUpdateItem(item.draftKey, 'rate', e.target.value)}
                       className="neu-input w-full text-xs py-1.5 text-right font-medium"
                     />
                   </td>
@@ -1031,7 +1156,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
                     <button
                       type="button"
                       disabled={items.length <= 1}
-                      onClick={() => handleRemoveItem(idx)}
+                      onClick={() => handleRemoveItem(item.draftKey)}
                       className="p-1 rounded text-[var(--khata-text-muted)] hover:text-rose-500 disabled:opacity-30 transition"
                       title="Remove row"
                     >
@@ -1263,26 +1388,27 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
           </button>
           <button
             type="button"
+            disabled={Boolean(dateValidationError)}
             onClick={handleOpenPreview}
-            className="neu-btn-secondary text-xs px-3 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1"
+            className="neu-btn-secondary text-xs px-3 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
             <span>Preview</span>
           </button>
           <button
             type="button"
-            disabled={isSaving}
+            disabled={isSaving || Boolean(dateValidationError)}
             onClick={() => handleSave(false)}
-            className="neu-btn-secondary text-xs px-3 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1"
+            className="neu-btn-secondary text-xs px-3 py-2 font-bold inline-flex items-center justify-center gap-1.5 flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Save className="w-4 h-4" />
             <span>Save Draft</span>
           </button>
           <button
             type="button"
-            disabled={isSaving}
+            disabled={isSaving || Boolean(dateValidationError)}
             onClick={() => handleSave(true)}
-            className="neu-btn-primary text-xs px-4 py-2.5 font-bold inline-flex items-center justify-center gap-1.5 w-full mt-1"
+            className="neu-btn-primary text-xs px-4 py-2.5 font-bold inline-flex items-center justify-center gap-1.5 w-full mt-1 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSaving ? (
               <Loader2 className="w-4 h-4 animate-spin text-[var(--khata-accent)]" />
