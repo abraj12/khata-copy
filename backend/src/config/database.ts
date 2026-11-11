@@ -1,15 +1,49 @@
 import pg from 'pg';
 import { env } from './env.js';
+import { resolveValidatedTestPoolUrls } from './testDbGuard.js';
 
 const { Pool } = pg;
 
 // Parse PostgreSQL 64-bit integers (BIGINT / BIGSERIAL, OID 20) as JavaScript numbers
 pg.types.setTypeParser(20, (val: string) => (val === null ? null : parseInt(val, 10)));
 
-// Reusable single application connection pool (against Neon pooled endpoint)
+export function resolveDatabasePoolTargets(
+  rawEnv: Record<string, string | undefined> = process.env,
+  runtimeEnv: {
+    NODE_ENV: string;
+    DATABASE_URL_POOLED: string;
+    DATABASE_URL: string;
+  } = env
+): {
+  pooledConnectionString: string;
+  directConnectionString: string;
+  isTestDbActive: boolean;
+  ssl: boolean;
+} {
+  const { isTestDbActive, testDbUrl } = resolveValidatedTestPoolUrls(rawEnv);
+  if (isTestDbActive && testDbUrl) {
+    return {
+      pooledConnectionString: testDbUrl,
+      directConnectionString: testDbUrl,
+      isTestDbActive: true,
+      ssl: false,
+    };
+  }
+
+  return {
+    pooledConnectionString: runtimeEnv.DATABASE_URL_POOLED,
+    directConnectionString: runtimeEnv.DATABASE_URL,
+    isTestDbActive: false,
+    ssl: runtimeEnv.NODE_ENV === 'test' ? false : true,
+  };
+}
+
+const resolvedPoolTargets = resolveDatabasePoolTargets();
+
+// Reusable single application connection pool (against Neon pooled endpoint, or validated TEST_DATABASE_URL in tests)
 export const appPool = new Pool({
-  connectionString: env.DATABASE_URL_POOLED,
-  ssl: env.NODE_ENV === 'test' ? false : true, // Enforce TLS verification without disabling certificate checks
+  connectionString: resolvedPoolTargets.pooledConnectionString,
+  ssl: resolvedPoolTargets.ssl, // Enforce TLS verification without disabling certificate checks
   max: env.DB_POOL_MAX,
   idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT_MS,
   connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT_MS,
@@ -17,10 +51,10 @@ export const appPool = new Pool({
   keepAlive: true,
 });
 
-// Admin / migration pool (direct endpoint)
+// Admin / migration pool (direct endpoint, or validated TEST_DATABASE_URL in tests)
 export const directPool = new Pool({
-  connectionString: env.DATABASE_URL,
-  ssl: env.NODE_ENV === 'test' ? false : true,
+  connectionString: resolvedPoolTargets.directConnectionString,
+  ssl: resolvedPoolTargets.ssl,
   max: env.DB_DIRECT_POOL_MAX,
   connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT_MS,
   keepAlive: true,
@@ -98,6 +132,7 @@ export const EXPECTED_MIGRATIONS = [
   '024_home_dashboard_profitability.sql',
   '025_performance_reporting_hardening.sql',
   '026_company_jurisdiction.sql',
+  '027_outbox_events.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [
@@ -129,6 +164,7 @@ export const EXPECTED_CORE_TABLES = [
   'supplier_purchase_bill_cancellations',
   'business_expenses',
   'business_expense_events',
+  'app_outbox_events',
 ];
 
 export interface ReadinessReport {
@@ -240,4 +276,8 @@ export async function checkDatabaseReadiness(): Promise<ReadinessReport> {
       error: 'Database connection or query failed',
     };
   }
+}
+
+export async function closeDatabasePools(): Promise<void> {
+  await Promise.allSettled([appPool.end(), directPool.end()]);
 }

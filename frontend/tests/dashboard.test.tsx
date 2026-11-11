@@ -710,8 +710,8 @@ describe('Release #024: Home Dashboard Navigation, Profitability & Expenses UI S
     expect(container.querySelector('[data-testid="home-dashboard"]')).not.toBeNull();
     expect(container.textContent).not.toContain('Loading module...');
 
-    // Mock fetch cleanly so lazy-loaded ProductsView settles inside act(...) without network socket errors
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    // Mock fetch cleanly with fresh Response instances per call so concurrent effects never collide on shared Response body streams
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
       new Response(
         JSON.stringify({
           success: true,

@@ -1,6 +1,7 @@
 import { PoolClient } from 'pg';
 import { Decimal } from 'decimal.js';
 import { appPool } from '../../config/database.js';
+import { enqueueOutboxEvent, notifyOutboxCommitted } from '../readModels/outbox.service.js';
 import { env } from '../../config/env.js';
 import { AppError } from '../../utils/errors.js';
 import { getBusinessDateISO } from '../../utils/businessDate.js';
@@ -1006,7 +1007,14 @@ export class SuppliersService {
         ]
       );
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'supplier',
+        aggregateId: insertRes.rows[0].id,
+        eventType: 'supplier.created',
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return this.getSupplierById(insertRes.rows[0].id);
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -1111,7 +1119,14 @@ export class SuppliersService {
         ]
       );
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'supplier',
+        aggregateId: id,
+        eventType: 'supplier.updated',
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return this.getSupplierById(id);
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -1122,21 +1137,37 @@ export class SuppliersService {
   }
 
   public async archiveSupplier(id: string): Promise<SupplierRecord> {
-    const res = await appPool.query(
-      `UPDATE suppliers
-       SET archived_at = NOW(), updated_at = NOW()
-       WHERE id = $1 AND archived_at IS NULL
-       RETURNING id`,
-      [id]
-    );
-    if (res.rowCount === 0) {
-      const exists = await appPool.query('SELECT archived_at FROM suppliers WHERE id = $1', [id]);
-      if (exists.rows.length === 0) {
-        throw new AppError('Supplier not found.', 404, 'SUPPLIER_NOT_FOUND');
+    const client = await appPool.connect();
+    try {
+      await client.query('BEGIN');
+      const res = await client.query(
+        `UPDATE suppliers
+         SET archived_at = NOW(), updated_at = NOW()
+         WHERE id = $1 AND archived_at IS NULL
+         RETURNING id`,
+        [id]
+      );
+      if (res.rowCount === 0) {
+        const exists = await client.query('SELECT archived_at FROM suppliers WHERE id = $1', [id]);
+        if (exists.rows.length === 0) {
+          throw new AppError('Supplier not found.', 404, 'SUPPLIER_NOT_FOUND');
+        }
+        throw new AppError('Supplier is already archived.', 409, 'ALREADY_ARCHIVED');
       }
-      throw new AppError('Supplier is already archived.', 409, 'ALREADY_ARCHIVED');
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'supplier',
+        aggregateId: id,
+        eventType: 'supplier.archived',
+      });
+      await client.query('COMMIT');
+      notifyOutboxCommitted();
+      return this.getSupplierById(id);
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
     }
-    return this.getSupplierById(id);
   }
 
   public async restoreSupplier(id: string): Promise<SupplierRecord> {
@@ -1167,7 +1198,14 @@ export class SuppliersService {
         [id]
       );
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'supplier',
+        aggregateId: id,
+        eventType: 'supplier.restored',
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return this.getSupplierById(id);
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -1204,7 +1242,13 @@ export class SuppliersService {
       }
 
       await client.query('DELETE FROM suppliers WHERE id = $1', [id]);
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'supplier',
+        aggregateId: id,
+        eventType: 'supplier.deleted',
+      });
       await client.query('COMMIT');
+      notifyOutboxCommitted();
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
       throw err;
@@ -1747,7 +1791,21 @@ export class SuppliersService {
         ]
       );
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'supplier',
+        aggregateId: billId,
+        eventType: 'supplier.purchase_bill_created',
+        businessDate: invoiceDate,
+        payload: {
+          supplierId: input.supplierId,
+          productIds: input.items
+            .map((it) => it.productId)
+            .filter((pid): pid is number => typeof pid === 'number' && pid > 0),
+        },
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return this.getPurchaseBillById(billId);
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -1923,7 +1981,27 @@ export class SuppliersService {
         ]
       );
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'supplier',
+        aggregateId: billId,
+        eventType: 'supplier.purchase_bill_updated',
+        businessDate: input.invoiceDate,
+        payload: {
+          supplierId: existing.supplier_id,
+          previousBusinessDate: existing.invoice_date_iso,
+          productIds: Array.from(
+            new Set([
+              ...previouslyLinkedIds,
+              ...input.items
+                .map((it) => it.productId)
+                .filter((pid): pid is number => typeof pid === 'number' && pid > 0),
+            ])
+          ),
+        },
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return this.getPurchaseBillById(billId);
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -2004,7 +2082,19 @@ export class SuppliersService {
         ]
       );
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'supplier',
+        aggregateId: billId,
+        eventType: 'supplier.purchase_bill_cancelled',
+        businessDate: existing.invoice_date_iso,
+        payload: {
+          supplierId: existing.supplier_id,
+          previousBusinessDate: getBusinessDateISO(env.BUSINESS_TIME_ZONE, new Date(cancelledAt)),
+        },
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return this.getPurchaseBillById(billId);
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -2391,7 +2481,16 @@ export class SuppliersService {
         });
       }
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'supplier',
+        aggregateId: paymentId,
+        eventType: 'supplier.payment_created',
+        businessDate: paymentDate,
+        payload: { supplierId: input.supplierId },
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return createdPayment;
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -2507,7 +2606,15 @@ export class SuppliersService {
         });
       }
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'supplier',
+        aggregateId: paymentId,
+        eventType: 'supplier.advance_allocated',
+        payload: { supplierId: payment.supplier_id },
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return updatedPayment;
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -2551,7 +2658,7 @@ export class SuppliersService {
       }
 
       const payRes = await client.query(
-        `SELECT id, receipt_number, supplier_id, amount, status
+        `SELECT id, receipt_number, supplier_id, amount, status, TO_CHAR(payment_date, 'YYYY-MM-DD') AS payment_date_iso
          FROM supplier_payments
          WHERE id = $1
          FOR UPDATE`,
@@ -2633,7 +2740,19 @@ export class SuppliersService {
         });
       }
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'supplier',
+        aggregateId: paymentId,
+        eventType: 'supplier.payment_reversed',
+        businessDate: getBusinessDateISO(env.BUSINESS_TIME_ZONE, new Date(reversedAt)),
+        payload: {
+          supplierId: sp.supplier_id,
+          previousBusinessDate: sp.payment_date_iso,
+        },
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return reversedPayment;
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -2780,7 +2899,15 @@ export class SuppliersService {
         });
       }
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'supplier',
+        aggregateId: paymentId,
+        eventType: 'supplier.allocation_reversed',
+        payload: { supplierId: sp.supplier_id },
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return updatedPayment;
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});

@@ -1,5 +1,6 @@
 import { Decimal } from 'decimal.js';
 import { appPool } from '../../config/database.js';
+import { enqueueOutboxEvent, notifyOutboxCommitted } from '../readModels/outbox.service.js';
 import { env } from '../../config/env.js';
 import { AppError } from '../../utils/errors.js';
 import { getBusinessDateISO } from '../../utils/businessDate.js';
@@ -349,8 +350,15 @@ export class KhataService {
       );
 
       const newId = parseInt(insertRes.rows[0].id, 10);
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'customer',
+        aggregateId: newId,
+        eventType: 'customer.created',
+        businessDate: getBusinessDateISO(env.BUSINESS_TIME_ZONE),
+      });
       const detail = await this.getCustomerDetailWithDb(client, newId);
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return detail!;
     } catch (err) {
       try {
@@ -453,8 +461,18 @@ export class KhataService {
         );
       }
 
+      if (updates.length > 0) {
+        await enqueueOutboxEvent(client, {
+          aggregateType: 'customer',
+          aggregateId: customerId,
+          eventType: 'customer.updated',
+        });
+      }
       const detail = await this.getCustomerDetailWithDb(client, customerId);
       await client.query('COMMIT');
+      if (updates.length > 0) {
+        notifyOutboxCommitted();
+      }
       return detail!;
     } catch (err) {
       try {
@@ -1030,7 +1048,19 @@ export class KhataService {
         });
       }
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'customer',
+        aggregateId: customerId,
+        eventType: 'khata.udhar_created',
+        businessDate,
+        payload: {
+          transactionId,
+          productIds: verifiedItems.map((item) => item.productId),
+        },
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return responsePayload;
     } catch (err: unknown) {
       try {
@@ -1212,7 +1242,16 @@ export class KhataService {
         });
       }
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'customer',
+        aggregateId: customerId,
+        eventType: 'khata.payment_recorded',
+        businessDate: getBusinessDateISO(env.BUSINESS_TIME_ZONE),
+        payload: { paymentId },
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return responsePayload;
     } catch (err: unknown) {
       try {

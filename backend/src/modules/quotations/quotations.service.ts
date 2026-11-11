@@ -1,6 +1,7 @@
 import Decimal from 'decimal.js';
 import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
+import { enqueueOutboxEvent, notifyOutboxCommitted } from '../readModels/outbox.service.js';
 import { env } from '../../config/env.js';
 import { AppError } from '../../utils/errors.js';
 import { getBusinessDateISO } from '../../utils/businessDate.js';
@@ -579,7 +580,19 @@ export class QuotationsService {
             ).rows
           : [];
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'quotation',
+        aggregateId: quotationRecord.id,
+        eventType: 'quotation.created',
+        businessDate: quotationDate,
+        payload: {
+          customerId: input.customerId ?? null,
+          status: initialStatus,
+        },
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return { ...quotationRecord, items: itemRecords };
     } catch (err) {
       try {
@@ -724,24 +737,45 @@ export class QuotationsService {
     id: number,
     status: 'draft' | 'sent' | 'accepted' | 'rejected' | 'expired'
   ): Promise<QuotationRecord | null> {
-    const res = await appPool.query(
-      `UPDATE quotations
-       SET status = $1, updated_at = NOW()
-       WHERE id = $2 AND status <> 'converted'
-       RETURNING *`,
-      [status, id]
-    );
+    const client = await appPool.connect();
+    try {
+      await client.query('BEGIN');
+      const res = await client.query(
+        `UPDATE quotations
+         SET status = $1, updated_at = NOW()
+         WHERE id = $2 AND status <> 'converted'
+         RETURNING *, TO_CHAR(quotation_date, 'YYYY-MM-DD') AS quotation_date_iso`,
+        [status, id]
+      );
 
-    if ((res.rowCount ?? 0) === 0) {
-      const existing = await this.getQuotationById(id);
-      if (!existing) return null;
-      if (existing.status === 'converted') {
-        throw new AppError('Cannot alter the status of an already converted quotation.', 400, 'ALREADY_CONVERTED');
+      if ((res.rowCount ?? 0) === 0) {
+        const existingRes = await client.query('SELECT * FROM quotations WHERE id = $1', [id]);
+        await client.query('ROLLBACK');
+        if (existingRes.rows.length === 0) return null;
+        if (existingRes.rows[0].status === 'converted') {
+          throw new AppError('Cannot alter the status of an already converted quotation.', 400, 'ALREADY_CONVERTED');
+        }
+        return null;
       }
-      return null;
-    }
 
-    return res.rows[0];
+      const updated = res.rows[0];
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'quotation',
+        aggregateId: id,
+        eventType: 'quotation.status_updated',
+        businessDate: updated.quotation_date_iso || getBusinessDateISO(env.BUSINESS_TIME_ZONE),
+        payload: { status },
+      });
+
+      await client.query('COMMIT');
+      notifyOutboxCommitted();
+      return updated;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -982,7 +1016,24 @@ export class QuotationsService {
         updatedQuotation = updateRes.rows[0];
       }
 
+      const qDateRaw: unknown = updatedQuotation.quotation_date;
+      const qDateIso =
+        typeof qDateRaw === 'string' && /^\d{4}-\d{2}-\d{2}/.test(qDateRaw)
+          ? qDateRaw.slice(0, 10)
+          : qDateRaw instanceof Date
+            ? getBusinessDateISO(env.BUSINESS_TIME_ZONE, qDateRaw)
+            : getBusinessDateISO(env.BUSINESS_TIME_ZONE);
+
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'quotation',
+        aggregateId: id,
+        eventType: 'quotation.converted',
+        businessDate: qDateIso,
+        payload: { billType: input.billType, billId },
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
 
       // Post-commit: Asynchronously trigger background PDF generation/upload for the created bill
       // Never fail the conversion if R2 or background PDF generation fails

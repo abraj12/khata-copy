@@ -160,9 +160,17 @@ export interface DashboardActivityItem {
   targetTab: DashboardTargetTab;
 }
 
+export interface DashboardSyncStatus {
+  source: 'mongodb' | 'postgresql';
+  syncedAt: string | null;
+  ageMs: number | null;
+  isStale: boolean;
+}
+
 export interface DashboardOverviewData {
   businessDate: string;
   timeZone: string;
+  syncStatus?: DashboardSyncStatus;
   dateRange: {
     fromDate: string | null;
     toDate: string | null;

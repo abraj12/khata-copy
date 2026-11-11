@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { fetchPreferencesApi, updatePreferencesApi } from '../lib/appDataApi.js';
 import {
   NeuPresetId,
   TextSizeOption,
@@ -19,6 +20,8 @@ interface ThemeAccessibilityContextType {
   setIncreaseSpacing: (increase: boolean) => void;
   setStrongFocus: (focus: boolean) => void;
   resetToDefaults: () => void;
+  syncFromServer: () => Promise<void>;
+  resetServerSync: () => void;
   announcement: string;
 }
 
@@ -75,6 +78,50 @@ function loadSavedPreferences(): UIPreferences {
 export const ThemeAccessibilityProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [preferences, setPreferences] = useState<UIPreferences>(loadSavedPreferences);
   const [announcement, setAnnouncement] = useState<string>('');
+  const serverSyncEnabledRef = useRef(false);
+  const skipNextServerSaveRef = useRef(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const resetServerSync = useCallback(() => {
+    serverSyncEnabledRef.current = false;
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+  }, []);
+
+  const syncFromServer = useCallback(async () => {
+    try {
+      const res = await fetchPreferencesApi();
+      if (res?.source === 'mongodb') {
+        serverSyncEnabledRef.current = true;
+      }
+      if (res?.source === 'mongodb' && res.preferences?.theme) {
+        const t = res.preferences.theme;
+        const validPreset = NEUMORPHIC_PRESETS.some((p) => p.id === t.preset);
+        const nextPrefs: UIPreferences = {
+          version: 3,
+          preset: validPreset ? (t.preset as NeuPresetId) : DEFAULT_PREFERENCES.preset,
+          textSize: ['100', '115', '130', '145'].includes(String(t.textSize))
+            ? (t.textSize as TextSizeOption)
+            : DEFAULT_PREFERENCES.textSize,
+          contrastOverride: ['default', 'enhanced'].includes(String(t.contrastOverride))
+            ? (t.contrastOverride as ContrastOption)
+            : DEFAULT_PREFERENCES.contrastOverride,
+          reduceMotion: ['system', 'on', 'off'].includes(String(t.reduceMotion))
+            ? (t.reduceMotion as MotionOption)
+            : DEFAULT_PREFERENCES.reduceMotion,
+          increaseSpacing:
+            typeof t.increaseSpacing === 'boolean' ? t.increaseSpacing : DEFAULT_PREFERENCES.increaseSpacing,
+          strongFocus: typeof t.strongFocus === 'boolean' ? t.strongFocus : DEFAULT_PREFERENCES.strongFocus,
+        };
+        skipNextServerSaveRef.current = true;
+        setPreferences(nextPrefs);
+      }
+    } catch {
+      // Fail-open to localStorage defaults if offline or server unreachable
+    }
+  }, []);
 
   const announce = useCallback((message: string) => {
     setAnnouncement(message);
@@ -98,6 +145,21 @@ export const ThemeAccessibilityProvider: React.FC<{ children: React.ReactNode }>
     } catch {
       // safe fallback
     }
+
+    if (!serverSyncEnabledRef.current) return;
+    if (skipNextServerSaveRef.current) {
+      skipNextServerSaveRef.current = false;
+      return;
+    }
+
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = setTimeout(() => {
+      void updatePreferencesApi({ theme: preferences }).catch(() => {
+        // Non-blocking best-effort sync
+      });
+    }, 350);
   }, [preferences]);
 
   const setPreset = useCallback((preset: NeuPresetId) => {
@@ -147,6 +209,8 @@ export const ThemeAccessibilityProvider: React.FC<{ children: React.ReactNode }>
         setIncreaseSpacing,
         setStrongFocus,
         resetToDefaults,
+        syncFromServer,
+        resetServerSync,
         announcement,
       }}
     >

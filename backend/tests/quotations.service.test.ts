@@ -517,6 +517,11 @@ describe('Professional Quotations Module Test Suite', () => {
       return { rows: [], rowCount: 0 } as any;
     });
 
+    vi.spyOn(appPool, 'connect').mockImplementation(async () => ({
+      query: (sql: any, params?: any) => (appPool.query as any)(sql, params),
+      release: () => {},
+    }) as any);
+
     await expect(quotationsService.updateQuotationStatus(505, 'accepted')).rejects.toThrow(
       'Cannot alter the status of an already converted quotation.'
     );

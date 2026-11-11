@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { assertSafeTestDatabaseUrl } from '../src/config/testDbGuard.js';
+import { assertSafeTestDatabaseUrl, resolveValidatedTestPoolUrls } from '../src/config/testDbGuard.js';
+import { resolveDatabasePoolTargets } from '../src/config/database.js';
 
 describe('Destructive Test Database Safeguard Suite', () => {
   it('1. Rejects empty or invalid URL strings', () => {
@@ -83,5 +84,42 @@ describe('Destructive Test Database Safeguard Suite', () => {
     for (const url of validUrls) {
       expect(() => assertSafeTestDatabaseUrl(url)).not.toThrow();
     }
+  });
+
+  it('8. Rejects production role neondb_owner even on loopback host', () => {
+    expect(() =>
+      assertSafeTestDatabaseUrl('postgresql://neondb_owner:pass@localhost:5432/khata_test')
+    ).toThrow(/Production role 'neondb_owner' is forbidden/);
+  });
+
+  it('9. Forces both appPool and directPool to resolve to validated TEST_DATABASE_URL in test mode and blocks mismatched overrides', () => {
+    const testUrl = 'postgresql://postgres:pass@127.0.0.1:55432/khata_test';
+    const resolved = resolveDatabasePoolTargets(
+      {
+        NODE_ENV: 'test',
+        TEST_DATABASE_URL: testUrl,
+        DATABASE_URL: 'postgresql://neondb_owner:dummy@ep-shy-mud-94919289.us-east-2.aws.neon.tech/neondb?sslmode=require',
+        DATABASE_URL_POOLED: 'postgresql://neondb_owner:dummy@ep-shy-mud-94919289-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require',
+      },
+      {
+        NODE_ENV: 'test',
+        DATABASE_URL: 'postgresql://neondb_owner:dummy@ep-shy-mud-94919289.us-east-2.aws.neon.tech/neondb?sslmode=require',
+        DATABASE_URL_POOLED: 'postgresql://neondb_owner:dummy@ep-shy-mud-94919289-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require',
+      }
+    );
+
+    expect(resolved.isTestDbActive).toBe(true);
+    expect(resolved.pooledConnectionString).toBe(testUrl);
+    expect(resolved.directConnectionString).toBe(testUrl);
+    expect(resolved.ssl).toBe(false);
+
+    // Conflicting explicit DATABASE_URL in test mode must fail loudly
+    expect(() =>
+      resolveValidatedTestPoolUrls({
+        NODE_ENV: 'test',
+        TEST_DATABASE_URL: testUrl,
+        DATABASE_URL: 'postgresql://postgres:pass@localhost:5432/other_test',
+      })
+    ).toThrow(/Pool URL mismatch in test mode/);
   });
 });

@@ -58,8 +58,9 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { table_name: 'supplier_purchase_bill_cancellations' },
             { table_name: 'business_expenses' },
             { table_name: 'business_expense_events' },
+            { table_name: 'app_outbox_events' },
           ],
-          rowCount: 28,
+          rowCount: 29,
         } as any;
       }
       if (sqlText.includes('FROM schema_migrations')) {
@@ -95,8 +96,11 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
           {
             version: '012_normal_bills.sql',
           },
+          {
+            version: '027_outbox_events.sql',
+          },
           ],
-          rowCount: 26,
+          rowCount: 27,
         } as any;
       }
       return { rows: [], rowCount: 0 } as any;

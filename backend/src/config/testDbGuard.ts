@@ -76,4 +76,67 @@ export function assertSafeTestDatabaseUrl(urlStr: string, options: TestDbGuardOp
       `[TEST DB GUARD] DESTRUCTIVE TESTS BLOCKED: Non-loopback test host '${hostname}' requires explicit ALLOW_REMOTE_TEST_DB=true override (disposable CI only).`
     );
   }
+
+  // 5. Reject production role names even on loopback endpoints
+  const decodedUsername = decodeURIComponent(parsed.username || '').toLowerCase();
+  if (decodedUsername === 'neondb_owner') {
+    throw new Error(
+      `[TEST DB GUARD] DESTRUCTIVE TESTS BLOCKED: Production role 'neondb_owner' is forbidden in test database URLs.`
+    );
+  }
+}
+
+function normalizePgTarget(connectionString: string): string {
+  const parsed = new URL(connectionString);
+  const protocol = parsed.protocol === 'postgres:' ? 'postgresql:' : parsed.protocol;
+  const host = parsed.hostname.toLowerCase();
+  const port = parsed.port || '5432';
+  const dbName = parsed.pathname.replace(/^\/+/, '');
+  return `${protocol}//${host}:${port}/${dbName}`;
+}
+
+function isUnconfiguredDefaultNeonUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  return (
+    url.includes('neondb_owner:dummy@') &&
+    url.includes('ep-shy-mud-94919289')
+  );
+}
+
+/**
+ * Ensures that in test mode with TEST_DATABASE_URL set, BOTH appPool and directPool
+ * resolve to the exact same validated disposable test database.
+ * Rejects mismatched DATABASE_URL or DATABASE_URL_POOLED overrides.
+ */
+export function resolveValidatedTestPoolUrls(
+  rawEnv: Record<string, string | undefined> = process.env
+): { isTestDbActive: boolean; testDbUrl: string | null } {
+  if (rawEnv.NODE_ENV !== 'test') {
+    return { isTestDbActive: false, testDbUrl: null };
+  }
+
+  const testDbUrl = rawEnv.TEST_DATABASE_URL?.trim();
+  if (!testDbUrl) {
+    return { isTestDbActive: false, testDbUrl: null };
+  }
+
+  assertSafeTestDatabaseUrl(testDbUrl);
+  const expectedTarget = normalizePgTarget(testDbUrl);
+
+  for (const varName of ['DATABASE_URL', 'DATABASE_URL_POOLED'] as const) {
+    const candidate = rawEnv[varName]?.trim();
+    if (!candidate || isUnconfiguredDefaultNeonUrl(candidate)) {
+      continue;
+    }
+
+    assertSafeTestDatabaseUrl(candidate);
+    const candidateTarget = normalizePgTarget(candidate);
+    if (candidateTarget !== expectedTarget) {
+      throw new Error(
+        `[TEST DB GUARD] Pool URL mismatch in test mode: ${varName} target '${candidateTarget}' must match TEST_DATABASE_URL target '${expectedTarget}'.`
+      );
+    }
+  }
+
+  return { isTestDbActive: true, testDbUrl };
 }

@@ -1,6 +1,9 @@
 import { NextFunction, Request, Response, Router } from 'express';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { dashboardService } from './dashboard.service.js';
+import { isMongoEnabled } from '../../config/mongodb.js';
+import { readModelsQueryService, ReadModelUnavailableError } from '../readModels/readModelsQuery.service.js';
+import { appDataService } from '../appData/appData.service.js';
 import {
   createExpenseSchema,
   dashboardOverviewQuerySchema,
@@ -39,9 +42,34 @@ router.get('/overview', async (req: Request, res: Response, next: NextFunction) 
       return;
     }
 
+    if (isMongoEnabled()) {
+      const startedAt = Date.now();
+      const data = await readModelsQueryService.getDashboardOverviewFromMongo(parsed.data);
+      void appDataService.recordTelemetry({
+        kind: 'read_latency',
+        name: 'dashboard.overview',
+        durationMs: Date.now() - startedAt,
+        ok: true,
+        meta: {
+          source: 'mongodb',
+          filtered: Boolean(parsed.data.fromDate || parsed.data.toDate),
+        },
+      });
+      res.json({ success: true, data });
+      return;
+    }
+
     const data = await dashboardService.getOverview(parsed.data);
     res.json({ success: true, data });
   } catch (err) {
+    if (err instanceof ReadModelUnavailableError) {
+      res.status(503).json({
+        success: false,
+        code: err.code,
+        message: err.message,
+      });
+      return;
+    }
     next(err);
   }
 });

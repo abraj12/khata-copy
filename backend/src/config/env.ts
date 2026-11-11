@@ -1,6 +1,8 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import { z } from 'zod';
+import { resolveValidatedTestPoolUrls } from './testDbGuard.js';
+import { validateAndParseMongoEnv, type MongoEnvConfig } from './mongoEnv.js';
 
 // Load .env and .env.local if present with deterministic precedence (.env.local overrides .env)
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
@@ -132,7 +134,7 @@ export const envSchema = z.object({
   R2_PUBLIC_DOMAIN: z.string().optional(),
 });
 
-export type Env = z.infer<typeof envSchema>;
+export type Env = z.infer<typeof envSchema> & MongoEnvConfig & { TEST_DATABASE_URL?: string };
 
 export function loadAndValidateEnv(overrides: Partial<Record<string, string | undefined>> = {}): Env {
   const merged = { ...process.env, ...overrides };
@@ -206,7 +208,19 @@ export function loadAndValidateEnv(overrides: Partial<Record<string, string | un
     }
   }
 
-  return env;
+  const { isTestDbActive, testDbUrl } = resolveValidatedTestPoolUrls(merged);
+  if (isTestDbActive && testDbUrl) {
+    env.DATABASE_URL_POOLED = testDbUrl;
+    env.DATABASE_URL = testDbUrl;
+  }
+
+  const mongoConfig = validateAndParseMongoEnv(merged, env.NODE_ENV);
+
+  return {
+    ...env,
+    ...mongoConfig,
+    TEST_DATABASE_URL: testDbUrl ?? undefined,
+  };
 }
 
 export const env = loadAndValidateEnv();

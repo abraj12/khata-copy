@@ -23,8 +23,7 @@ import {
   Check,
   X,
 } from 'lucide-react';
-import MannatTaxInvoice, {
-  MannatInvoiceProps,
+import {
   numberWords,
 } from '../../components/MannatTaxInvoice/MannatTaxInvoice.js';
 import {
@@ -34,13 +33,12 @@ import {
   createNormalBill,
   listNormalBills,
   downloadNormalBillPdf,
-  downloadNormalBillDraftPdf,
   fetchNormalBillPdfBlob,
   fetchNormalBillDraftPdfBlob,
   retryNormalBillPdf,
-  mapNormalBillToInvoiceProps,
 } from './normalBillsApi.js';
 import { PdfImageExportModal } from '../../components/PdfImageExportModal.js';
+import { PdfDocumentPreviewModal } from '../../components/PdfDocumentPreviewModal.js';
 import Decimal from 'decimal.js';
 import { fetchQuotationSettings } from '../quotations/quotationApi.js';
 import {
@@ -153,8 +151,15 @@ export const NormalBillingView: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successRecord, setSuccessRecord] = useState<NormalBillRecord | null>(null);
-  const [previewInvoice, setPreviewInvoice] = useState<MannatInvoiceProps | null>(null);
-  const [autoPrintAfterPreview, setAutoPrintAfterPreview] = useState(false);
+  const [pdfPreviewTarget, setPdfPreviewTarget] = useState<{
+    key: string;
+    title: string;
+    subtitle: string;
+    fileName: string;
+    imageExportBaseName: string;
+    fetchPdfBlob: (signal: AbortSignal) => Promise<Blob>;
+    autoPrintOnLoad?: boolean;
+  } | null>(null);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [retryingPdfId, setRetryingPdfId] = useState<number | null>(null);
   const [imageExportTarget, setImageExportTarget] = useState<{
@@ -163,25 +168,25 @@ export const NormalBillingView: React.FC = () => {
     fetchPdfBlob: (signal: AbortSignal) => Promise<Blob>;
   } | null>(null);
 
+  const openRecordPdfPreview = (bill: NormalBillRecord, autoPrintOnLoad = false) => {
+    setPdfPreviewTarget({
+      key: `normal-${bill.id}-${autoPrintOnLoad ? 'print' : 'view'}-${Date.now()}`,
+      title: `Official Bill · #${bill.bill_number}`,
+      subtitle: 'Canonical multipage A4 bill PDF',
+      fileName: `Normal_Bill_${bill.bill_number}.pdf`,
+      imageExportBaseName: `Normal_Bill_${bill.bill_number}`,
+      fetchPdfBlob: (sig) => fetchNormalBillPdfBlob(bill.id, sig),
+      autoPrintOnLoad,
+    });
+  };
+
   const handleDirectPrint = (bill: NormalBillRecord) => {
-    setPreviewInvoice(mapNormalBillToInvoiceProps(bill, companyProfile || undefined));
-    setAutoPrintAfterPreview(true);
+    openRecordPdfPreview(bill, true);
   };
 
   const handleClosePreview = () => {
-    setPreviewInvoice(null);
-    setAutoPrintAfterPreview(false);
+    setPdfPreviewTarget(null);
   };
-
-  useEffect(() => {
-    if (previewInvoice && autoPrintAfterPreview) {
-      const timer = setTimeout(() => {
-        window.print();
-        setAutoPrintAfterPreview(false);
-      }, 200);
-      return () => clearTimeout(timer);
-    }
-  }, [previewInvoice, autoPrintAfterPreview]);
 
   // Server-side paginated product & customer search
   const {
@@ -484,58 +489,7 @@ export const NormalBillingView: React.FC = () => {
     };
   }, [items]);
 
-  // Assemble full Mannat Bill props for preview
-  const currentInvoiceDraft: MannatInvoiceProps = useMemo(() => {
-    return {
-      invoiceNumber: billNumber || 'DRAFT',
-      invoiceDate: billDate,
-      transportationMode,
-      vehicleNumber,
-      dateOfSupply,
-      placeOfSupply,
-      company: companyProfile || { state, stateCode },
-      customer: {
-        name: customerName,
-        address: customerAddress,
-        phone: customerPhone,
-        state: customerState,
-        stateCode: customerStateCode,
-      },
-      items: calculationSummary.lineCalculations.map((item) => ({
-        id: item.id,
-        name: item.description,
-        hsn: item.hsnCode,
-        quantity: item.quantity,
-        unit: item.unit,
-        rate: item.rate,
-        rateUnit: item.rateUnit,
-        amount: item.computedAmount,
-      })),
-      totals: {
-        taxableAmount: calculationSummary.totalAmount,
-        subtotal: calculationSummary.totalAmount,
-        taxAmount: 0,
-        grandTotal: calculationSummary.finalAmount,
-      },
-      amountInWords: calculationSummary.amountInWords,
-    };
-  }, [
-    billNumber,
-    billDate,
-    transportationMode,
-    vehicleNumber,
-    dateOfSupply,
-    placeOfSupply,
-    customerName,
-    customerAddress,
-    customerPhone,
-    customerState,
-    customerStateCode,
-    companyProfile,
-    state,
-    stateCode,
-    calculationSummary,
-  ]);
+  // Official draft preview uses canonical backend PDFKit renderer via openDraftPdfPreview
 
   // Form Validation
   const validateForm = (): string | null => {
@@ -613,20 +567,23 @@ export const NormalBillingView: React.FC = () => {
     }
   };
 
-  const handleDownloadDraftPdf = async () => {
+  const openDraftPdfPreview = () => {
     const err = validateForm();
     if (err) {
       setErrorMessage(err);
       return;
     }
-    try {
-      setIsDownloadingPdf(true);
-      await downloadNormalBillDraftPdf(buildDraftNormalBillPayload());
-    } catch (dErr: any) {
-      setErrorMessage(dErr.message || 'Failed to download draft bill PDF.');
-    } finally {
-      setIsDownloadingPdf(false);
-    }
+    const draftPayload = buildDraftNormalBillPayload();
+    const label = draftPayload.billNumber || 'Draft';
+    setPdfPreviewTarget({
+      key: `normal-draft-${Date.now()}`,
+      title: `Official Bill · #${label}`,
+      subtitle: 'Official A4 Normal Bill Draft (vector PDF)',
+      fileName: `Normal_Bill_${label}.pdf`,
+      imageExportBaseName: `Normal_Bill_${label}`,
+      fetchPdfBlob: (sig) => fetchNormalBillDraftPdfBlob(draftPayload, sig),
+      autoPrintOnLoad: false,
+    });
   };
 
   // Submit & Save Normal Bill
@@ -1146,7 +1103,7 @@ export const NormalBillingView: React.FC = () => {
             )}
 
             <BillingBarcodeControls
-              enableGlobalScanner={activeTab === 'create' && !successRecord && !previewInvoice}
+              enableGlobalScanner={activeTab === 'create' && !successRecord && !pdfPreviewTarget}
               onProductResolved={handleBarcodeResolved}
               onCatalogProductCreated={(created) => {
                 prependCatalogProduct({
@@ -1449,7 +1406,7 @@ export const NormalBillingView: React.FC = () => {
 
                     <button
                       type="button"
-                      onClick={() => setPreviewInvoice(currentInvoiceDraft)}
+                      onClick={openDraftPdfPreview}
                       className="neu-btn-secondary flex-1 py-2.5 flex items-center justify-center gap-1.5 text-xs font-bold"
                     >
                       <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
@@ -1629,7 +1586,7 @@ export const NormalBillingView: React.FC = () => {
                             <div className="flex flex-wrap items-center justify-end gap-1.5">
                               <button
                                 type="button"
-                                onClick={() => setPreviewInvoice(mapNormalBillToInvoiceProps(bill, companyProfile || undefined))}
+                                onClick={() => openRecordPdfPreview(bill, false)}
                                 className="neu-btn-secondary text-xs px-2.5 py-1 flex items-center gap-1 font-bold"
                                 title="Preview bill"
                               >
@@ -1722,7 +1679,7 @@ export const NormalBillingView: React.FC = () => {
                         <div className="flex flex-wrap items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setPreviewInvoice(mapNormalBillToInvoiceProps(bill, companyProfile || undefined))}
+                            onClick={() => openRecordPdfPreview(bill, false)}
                             className="neu-btn-secondary text-xs px-2.5 py-1.5 flex items-center gap-1 font-bold"
                           >
                             <Eye className="w-3.5 h-3.5" />
@@ -1849,9 +1806,7 @@ export const NormalBillingView: React.FC = () => {
               )}
               <button
                 type="button"
-                onClick={() => {
-                  setPreviewInvoice(mapNormalBillToInvoiceProps(successRecord, companyProfile || undefined));
-                }}
+                onClick={() => openRecordPdfPreview(successRecord, false)}
                 className="neu-btn-primary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold"
               >
                 <Printer className="w-4 h-4" />
@@ -1896,75 +1851,21 @@ export const NormalBillingView: React.FC = () => {
       </div>
 
       {/* ========================================================================= */}
-      {/* FULLSCREEN A4 NORMAL BILL PREVIEW MODAL                                   */}
+      {/* OFFICIAL CANONICAL A4 NORMAL BILL PDF PREVIEW & PRINT MODAL               */}
       {/* ========================================================================= */}
-      {previewInvoice && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-sm flex flex-col p-1 sm:p-4 mhi-print-modal-container">
-          <div className="max-w-[220mm] mx-auto w-full flex items-center justify-between pb-2 sm:pb-3 text-white mhi-modal-header mhi-no-print">
-            <span className="font-bold text-xs sm:text-sm truncate">
-              Official Bill · #{previewInvoice.invoiceNumber || 'Draft'}
-            </span>
-            <button
-              type="button"
-              onClick={handleClosePreview}
-              className="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white transition flex items-center gap-1 text-xs font-bold cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-              <span>Close</span>
-            </button>
-          </div>
-
-          <div className="flex-1 overflow-y-auto">
-            <MannatTaxInvoice
-              invoice={previewInvoice}
-              showPrintButton={true}
-              isNormalBill={true}
-              billTitle="NORMAL BILL"
-              onDownloadPdf={() => {
-                if (previewInvoice?.id) {
-                  handleDownloadPdf(previewInvoice.id, previewInvoice.invoiceNumber || 'Bill');
-                } else if (successRecord?.id) {
-                  handleDownloadPdf(successRecord.id, successRecord.bill_number);
-                } else {
-                  handleDownloadDraftPdf();
-                }
-              }}
-              onExportImages={() => {
-                if (previewInvoice?.id) {
-                  const billId = previewInvoice.id;
-                  const billNum = previewInvoice.invoiceNumber || 'Bill';
-                  setImageExportTarget({
-                    title: `Normal Bill #${billNum} WebP Images`,
-                    baseFileName: `Normal_Bill_${billNum}`,
-                    fetchPdfBlob: (sig) => fetchNormalBillPdfBlob(billId, sig),
-                  });
-                } else if (successRecord?.id) {
-                  const recId = successRecord.id;
-                  const recNum = successRecord.bill_number;
-                  setImageExportTarget({
-                    title: `Normal Bill #${recNum} WebP Images`,
-                    baseFileName: `Normal_Bill_${recNum}`,
-                    fetchPdfBlob: (sig) => fetchNormalBillPdfBlob(recId, sig),
-                  });
-                } else {
-                  const err = validateForm();
-                  if (err) {
-                    setErrorMessage(err);
-                    return;
-                  }
-                  const draftPayload = buildDraftNormalBillPayload();
-                  const label = draftPayload.billNumber || 'Draft';
-                  setImageExportTarget({
-                    title: `Normal Bill Draft (${label}) WebP Images`,
-                    baseFileName: `Normal_Bill_${label}`,
-                    fetchPdfBlob: (sig) => fetchNormalBillDraftPdfBlob(draftPayload, sig),
-                  });
-                }
-              }}
-              isDownloadingPdf={isDownloadingPdf}
-            />
-          </div>
-        </div>
+      {pdfPreviewTarget && (
+        <PdfDocumentPreviewModal
+          isOpen={true}
+          title={pdfPreviewTarget.title}
+          subtitle={pdfPreviewTarget.subtitle}
+          fileName={pdfPreviewTarget.fileName}
+          documentLabel="Normal Bill"
+          imageExportBaseName={pdfPreviewTarget.imageExportBaseName}
+          fetchPdfBlob={pdfPreviewTarget.fetchPdfBlob}
+          fetchKey={pdfPreviewTarget.key}
+          autoPrintOnLoad={pdfPreviewTarget.autoPrintOnLoad}
+          onClose={handleClosePreview}
+        />
       )}
 
       {imageExportTarget && (

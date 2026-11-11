@@ -4,7 +4,7 @@ import { AuthProvider } from './features/auth/AuthProvider.js';
 import { ProtectedRoute } from './components/ProtectedRoute.js';
 import { Navbar, NavTab } from './components/Navbar.js';
 import { HomeDashboard } from './features/dashboard/HomeDashboard.js';
-import { ThemeAccessibilityProvider } from './context/ThemeAccessibilityContext.js';
+import { ThemeAccessibilityProvider, useThemeAccessibility } from './context/ThemeAccessibilityContext.js';
 import { AppearanceAccessibilityModal } from './components/AppearanceAccessibilityModal.js';
 
 const KhataLedgerView = lazy(() =>
@@ -70,6 +70,14 @@ export function getInitialTab(): NavTab {
 export function KhataDashboard() {
   const [currentTab, setCurrentTab] = useState<NavTab>(getInitialTab);
   const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
+  const { syncFromServer, resetServerSync } = useThemeAccessibility();
+
+  useEffect(() => {
+    void syncFromServer();
+    return () => {
+      resetServerSync();
+    };
+  }, [syncFromServer, resetServerSync]);
 
   // Sync tab changes with browser URL and history
   const handleTabChange = (tab: NavTab) => {

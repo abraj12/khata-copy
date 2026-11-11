@@ -21,7 +21,8 @@
     "migrate": "npm run migrate --workspace=backend --",
     "hash-password": "npm run hash-password --workspace=backend",
     "preflight:legacy": "npm run preflight:legacy --workspace=backend",
-    "test:frontend": "vitest run frontend/tests"
+    "rebuild:read-models": "npm run rebuild:read-models --workspace=backend --",
+    "test:frontend": "vitest run --config vitest.frontend.config.ts"
   },
   "keywords": [
     "khata",

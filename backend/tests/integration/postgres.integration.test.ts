@@ -5,8 +5,17 @@ import path from 'path';
 import Decimal from 'decimal.js';
 import session from 'express-session';
 import connectPgSimple from 'connect-pg-simple';
+import request from 'supertest';
+import { createApp } from '../../src/app.js';
+import { env } from '../../src/config/env.js';
 import { assertSafeTestDatabaseUrl } from '../../src/config/testDbGuard.js';
-import { appPool } from '../../src/config/database.js';
+import { appPool, closeDatabasePools } from '../../src/config/database.js';
+import { connectMongo, disconnectMongo, isMongoReady } from '../../src/config/mongodb.js';
+import { READ_MODEL_MODELS } from '../../src/modules/readModels/models.js';
+import { APP_DATA_MODELS } from '../../src/modules/appData/models.js';
+import { ReadModelOutboxWorker, readModelOutboxWorker } from '../../src/modules/readModels/readModelOutbox.worker.js';
+import { readModelSyncService } from '../../src/modules/readModels/readModelSync.service.js';
+import { readModelsQueryService } from '../../src/modules/readModels/readModelsQuery.service.js';
 import {
   allocateDocumentNumber,
   getSuggestedNextDocumentNumber,
@@ -54,6 +63,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     try {
       // 1. Drop public schema tables cleanly for test isolation
       await client.query(`
+        DROP TABLE IF EXISTS "app_outbox_events" CASCADE;
         DROP TABLE IF EXISTS "business_expense_events" CASCADE;
         DROP TABLE IF EXISTS "business_expenses" CASCADE;
         DROP TABLE IF EXISTS "supplier_purchase_bill_cancellations" CASCADE;
@@ -119,6 +129,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '024_home_dashboard_profitability.sql',
         '025_performance_reporting_hardening.sql',
         '026_company_jurisdiction.sql',
+        '027_outbox_events.sql',
       ];
 
       await client.query(`
@@ -149,6 +160,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     if (pool) {
       await pool.end();
     }
+    await disconnectMongo().catch(() => {});
+    await closeDatabasePools().catch(() => {});
   });
 
   // 1. Migration tracking & Core Tables Verification
@@ -181,6 +194,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '024_home_dashboard_profitability.sql',
       '025_performance_reporting_hardening.sql',
       '026_company_jurisdiction.sql',
+      '027_outbox_events.sql',
     ]);
 
     const expectedTables = [
@@ -212,6 +226,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       'supplier_purchase_bill_cancellations',
       'business_expenses',
       'business_expense_events',
+      'app_outbox_events',
     ];
 
     const tablesRes = await pool.query(
@@ -3459,5 +3474,307 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     expect(nb531.subtotal_amount).toBe('5310.00');
     expect(nb531.discount_amount).toBe('531.00');
     expect(nb531.total_amount).toBe('4779.00');
+  });
+
+  it('34. Release #027: Real PostgreSQL Outbox -> MongoDB 8.2 Sync, Zero-PG-Query Reads, AppData Persistence & Fail-Closed 503', async () => {
+    const targetMongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/khata_integration_test';
+    if (process.env.MONGODB_ENABLED === 'false') {
+      return;
+    }
+
+    const prevMongoEnabled = env.MONGODB_ENABLED;
+    const prevMongoUri = env.MONGODB_URI;
+    const prevMongoDb = env.MONGODB_DATABASE;
+    const prevPhone = env.OWNER_PHONE;
+    const prevHash = env.OWNER_PASSWORD_HASH;
+    const prevCookieSecure = env.SESSION_COOKIE_SECURE;
+
+    const TEST_PHONE = '9876543210';
+    const TEST_PASSWORD = 'KhataOwner@2026!';
+    const TEST_HASH =
+      '$argon2id$v=19$m=65536,t=3,p=4$r8d9IIf2qq2yux48fjyp5g$NguetCKE39Yg87iMcaXXeobM8JnU+B4/BKokFoI5yR4';
+
+    env.OWNER_PHONE = TEST_PHONE;
+    env.OWNER_PASSWORD_HASH = TEST_HASH;
+    env.SESSION_COOKIE_SECURE = false;
+    env.MONGODB_ENABLED = true;
+    env.MONGODB_URI = targetMongoUri;
+    env.MONGODB_DATABASE = 'khata_integration_test';
+
+    const app = createApp({ useMemoryStoreInTest: true });
+
+    try {
+      await readModelOutboxWorker.stop();
+      const worker = new ReadModelOutboxWorker();
+      await connectMongo({ uri: targetMongoUri, dbName: 'khata_integration_test' });
+      expect(isMongoReady()).toBe(true);
+
+      // Clean Mongo integration collections before test
+      for (const Model of [...READ_MODEL_MODELS, ...APP_DATA_MODELS]) {
+        await Model.deleteMany({});
+      }
+
+      // Bind appPool spies onto real test PG pool during setup writes & rebuild
+      vi.spyOn(appPool, 'connect').mockImplementation(() => pool.connect());
+      vi.spyOn(appPool, 'query').mockImplementation((...args: any[]) => (pool.query as any)(...args));
+
+      // Ensure any prior pending rows in app_outbox_events are drained first
+      while ((await worker.drainNow()).processedCount > 0) {
+        // draining pre-existing batches
+      }
+      await readModelSyncService.rebuildAllReadModels({ confirm: true });
+
+      const maxIdBeforeRes = await pool.query('SELECT COALESCE(MAX(id), 0) AS max_id FROM app_outbox_events');
+      const maxIdBefore = Number(maxIdBeforeRes.rows[0].max_id);
+
+      // 1. Write across all real PostgreSQL modules on isolated business date 2026-12-28
+      const prod = await productsService.createProduct(
+        'R27 Integration Iron Bar',
+        '420.00',
+        '7214',
+        '8902700000123'
+      );
+      const cust = await khataService.createCustomer({
+        name: 'R27 Builders Ltd',
+        phone: '9876500271',
+        address: 'Kankarbagh, Patna',
+        state: 'Bihar',
+        stateCode: '10',
+      });
+      const udhar = await khataService.createTransaction({
+        customer: { id: cust.id, name: cust.name },
+        items: [{ productId: prod.id, quantity: '2', sellingPrice: '600.00' }],
+        note: 'R27 real integration udhar',
+      });
+      await pool.query(`UPDATE udhar_transactions SET transaction_date = '2026-12-28' WHERE id = $1`, [
+        udhar.transactionId,
+      ]);
+      await khataService.recordPayment(cust.id, '250.00', 'R27 advance receipt');
+
+      await dashboardService.createExpense({
+        expenseDate: '2026-12-28',
+        category: 'rent',
+        title: 'R27 Warehouse Rent',
+        amount: '150.00',
+        paymentMethod: 'upi',
+      });
+
+      const sup = await suppliersService.createSupplier({
+        name: 'R27 Steel Suppliers',
+        phone: '9811100271',
+      });
+      await suppliersService.createPurchaseBill({
+        supplierId: sup.id,
+        invoiceNumber: 'R27-SUP-001',
+        invoiceDate: '2026-12-28',
+        items: [{ description: 'Raw Iron Billet', quantity: '1', purchaseRate: '900.00' }],
+      });
+      await suppliersService.createSupplierPayment({
+        supplierId: sup.id,
+        paymentDate: '2026-12-28',
+        amount: '300.00',
+        paymentMethod: 'bank_transfer',
+        transactionReference: 'R27-NEFT-01',
+      });
+
+      await quotationsService.createQuotation({
+        quotationNumber: 'R27-QT-001',
+        quotationDate: '2026-12-28',
+        validUntil: '2027-01-15',
+        customerId: cust.id,
+        customerName: cust.name,
+        gstEnabled: false,
+        gstRate: 0,
+        items: [{ productId: prod.id, description: prod.name, quantity: 3, rate: 520 }],
+      });
+
+      await gstInvoicesService.createInvoice({
+        invoiceNumber: 'R27-GST-001',
+        invoiceDate: '2026-12-28',
+        state: 'Bihar',
+        stateCode: '10',
+        customerId: cust.id,
+        customerName: cust.name,
+        customerState: 'Bihar',
+        customerStateCode: '10',
+        gstRate: 18,
+        items: [{ productId: prod.id, description: prod.name, quantity: 2, rate: 500 }],
+      });
+
+      await normalBillsService.createBill({
+        billNumber: 'R27-NB-001',
+        billDate: '2026-12-28',
+        customerId: cust.id,
+        customerName: cust.name,
+        items: [{ productId: prod.id, description: prod.name, quantity: 1, rate: 600 }],
+      });
+
+      // Assert atomic outbox events were persisted in real PostgreSQL inside the write transactions
+      const outboxRowsRes = await pool.query(
+        `SELECT aggregate_type FROM app_outbox_events WHERE id > $1 AND status = 'pending' ORDER BY id ASC`,
+        [maxIdBefore]
+      );
+      expect(outboxRowsRes.rows.length).toBeGreaterThanOrEqual(8);
+      const aggregateTypes = new Set(outboxRowsRes.rows.map((r) => r.aggregate_type));
+      expect(aggregateTypes.has('product')).toBe(true);
+      expect(aggregateTypes.has('customer')).toBe(true);
+      expect(aggregateTypes.has('expense')).toBe(true);
+      expect(aggregateTypes.has('supplier')).toBe(true);
+      expect(aggregateTypes.has('quotation')).toBe(true);
+      expect(aggregateTypes.has('gst_invoice')).toBe(true);
+      expect(aggregateTypes.has('normal_bill')).toBe(true);
+
+      // 2. Drain outbox into real MongoDB 8.2
+      let totalDrained = 0;
+      while (true) {
+        const { processedCount } = await worker.drainNow();
+        totalDrained += processedCount;
+        if (processedCount === 0) break;
+      }
+      expect(totalDrained).toBeGreaterThanOrEqual(8);
+
+      const remainingPendingRes = await pool.query(
+        `SELECT COUNT(*)::int AS cnt FROM app_outbox_events WHERE status != 'processed'`
+      );
+      expect(remainingPendingRes.rows[0].cnt).toBe(0);
+
+      // Compute PG baseline truth BEFORE locking down PG queries
+      const pgWindowOverview = await dashboardService.getOverview({
+        fromDate: '2026-12-28',
+        toDate: '2026-12-28',
+      });
+      const pgAllTimeOverview = await dashboardService.getOverview({});
+
+      // Full rebuildAllReadModels also aligns ALL days including earlier integration tests cleanly
+      const rebuildRes = await readModelSyncService.rebuildAllReadModels({ confirm: true });
+      expect(rebuildRes.productsSynced).toBeGreaterThanOrEqual(1);
+      expect(rebuildRes.customersSynced).toBeGreaterThanOrEqual(1);
+      expect(rebuildRes.daysSynced).toBeGreaterThanOrEqual(1);
+
+      // Authenticate HTTP agent BEFORE replacing appPool with strict fail-on-PG-query spy
+      const agent = request.agent(app);
+      const csrfRes = await agent.get('/api/v1/auth/csrf-token');
+      const csrf1 = csrfRes.body.csrfToken as string;
+      const loginRes = await agent
+        .post('/api/v1/auth/login')
+        .set('X-CSRF-Token', csrf1)
+        .send({ phone: TEST_PHONE, password: TEST_PASSWORD });
+      expect(loginRes.status).toBe(200);
+      const csrfToken = (await agent.get('/api/v1/auth/csrf-token')).body.csrfToken as string;
+
+      // 3. Prove ZERO PostgreSQL calls across ALL read routes & AppData endpoints under MongoDB 8.2
+      vi.restoreAllMocks();
+      const pgAppQuerySpy = vi.spyOn(appPool, 'query').mockImplementation((..._args: any[]) => {
+        throw new Error('FORBIDDEN_PG_QUERY_ON_MONGO_READ');
+      });
+      const pgAppConnectSpy = vi.spyOn(appPool, 'connect').mockImplementation((..._args: any[]) => {
+        throw new Error('FORBIDDEN_PG_CONNECT_ON_MONGO_READ');
+      });
+      const pgRawPoolQuerySpy = vi.spyOn(pool, 'query');
+
+      const liveRes = await agent.get('/api/v1/health/live');
+      expect(liveRes.status).toBe(200);
+      expect(liveRes.body.status).toBe('alive');
+
+      const winRes = await agent.get('/api/v1/dashboard/overview?fromDate=2026-12-28&toDate=2026-12-28');
+      expect(winRes.status).toBe(200);
+      expect(winRes.body.data.syncStatus.source).toBe('mongodb');
+      expect(winRes.body.data.sales.totalSalesRevenue).toBe(pgWindowOverview.sales.totalSalesRevenue);
+      expect(winRes.body.data.sales.gstCollected).toBe(pgWindowOverview.sales.gstCollected);
+      expect(winRes.body.data.profitability.operatingExpenses).toBe(pgWindowOverview.profitability.operatingExpenses);
+      expect(winRes.body.data.profitability.estimatedNetOperatingResult).toBe(
+        pgWindowOverview.profitability.estimatedNetOperatingResult
+      );
+
+      const allRes = await agent.get('/api/v1/dashboard/overview');
+      expect(allRes.status).toBe(200);
+      expect(allRes.body.data.sales.totalSalesRevenue).toBe(pgAllTimeOverview.sales.totalSalesRevenue);
+      expect(allRes.body.data.profitability.operatingExpenses).toBe(
+        pgAllTimeOverview.profitability.operatingExpenses
+      );
+      expect(allRes.body.data.customersKhata.totalOutstandingReceivable).toBe(
+        pgAllTimeOverview.customersKhata.totalOutstandingReceivable
+      );
+
+      const prodRes = await agent.get('/api/v1/products?search=r27%20integration');
+      expect(prodRes.status).toBe(200);
+      expect(prodRes.body.data.length).toBeGreaterThanOrEqual(1);
+      const matchedProd = prodRes.body.data.find((p: any) => p.id === prod.id);
+      expect(matchedProd).toBeTruthy();
+      expect(matchedProd.buying_price).toBe('420.00');
+      expect(matchedProd.quantity).toBeUndefined();
+      expect(matchedProd.stock).toBeUndefined();
+
+      const barcodeRes = await agent.get('/api/v1/products/barcode/8902700000123');
+      expect(barcodeRes.status).toBe(200);
+      expect(barcodeRes.body.data.id).toBe(prod.id);
+
+      const khataSumRes = await agent.get('/api/v1/khata/summary');
+      expect(khataSumRes.status).toBe(200);
+      expect(khataSumRes.body.summary.totalCustomers).toBeGreaterThanOrEqual(1);
+
+      const khataCustRes = await agent.get('/api/v1/khata/customers?search=r27%20builders');
+      expect(khataCustRes.status).toBe(200);
+      expect(khataCustRes.body.customers[0].name).toBe('R27 Builders Ltd');
+
+      // MongoDB AppData routes: Preferences, Notifications, Telemetry
+      const prefPut = await agent
+        .put('/api/v1/preferences')
+        .set('X-CSRF-Token', csrfToken)
+        .send({ theme: { preset: 'soft-dark', contrastOverride: 'enhanced', strongFocus: true, textSize: '115' } });
+      expect(prefPut.status).toBe(200);
+      expect(prefPut.body.preferences.theme.preset).toBe('soft-dark');
+
+      const prefGet = await agent.get('/api/v1/preferences');
+      expect(prefGet.status).toBe(200);
+      expect(prefGet.body.source).toBe('mongodb');
+      expect(prefGet.body.preferences.theme.contrastOverride).toBe('enhanced');
+      expect(prefGet.body.preferences.theme.strongFocus).toBe(true);
+
+      const notifGet = await agent.get('/api/v1/notifications');
+      expect(notifGet.status).toBe(200);
+      expect(Array.isArray(notifGet.body.notifications)).toBe(true);
+
+      const telPost = await agent
+        .post('/api/v1/telemetry')
+        .set('X-CSRF-Token', csrfToken)
+        .send({ kind: 'pdf_render', name: 'integration_gst_preview', durationMs: 31, ok: true });
+      expect(telPost.status).toBe(202);
+
+      // ZERO PostgreSQL queries across ALL reads & health probes!
+      expect(pgAppQuerySpy).not.toHaveBeenCalled();
+      expect(pgAppConnectSpy).not.toHaveBeenCalled();
+      expect(pgRawPoolQuerySpy).not.toHaveBeenCalled();
+
+      // 4. Fail-closed 503 READ_MODEL_UNAVAILABLE when MongoDB disconnects (NO PG fallback)
+      await disconnectMongo();
+      expect(isMongoReady()).toBe(false);
+
+      const errDash = await agent.get('/api/v1/dashboard/overview');
+      expect(errDash.status).toBe(503);
+      expect(errDash.body.code).toBe('READ_MODEL_UNAVAILABLE');
+
+      const errProd = await agent.get('/api/v1/products?search=iron');
+      expect(errProd.status).toBe(503);
+      expect(errProd.body.code).toBe('READ_MODEL_UNAVAILABLE');
+
+      const errKhata = await agent.get('/api/v1/khata/summary');
+      expect(errKhata.status).toBe(503);
+      expect(errKhata.body.code).toBe('READ_MODEL_UNAVAILABLE');
+
+      expect(pgAppQuerySpy).not.toHaveBeenCalled();
+      expect(pgAppConnectSpy).not.toHaveBeenCalled();
+      expect(pgRawPoolQuerySpy).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      await readModelOutboxWorker.stop().catch(() => {});
+      await disconnectMongo().catch(() => {});
+      env.MONGODB_ENABLED = prevMongoEnabled;
+      env.MONGODB_URI = prevMongoUri;
+      env.MONGODB_DATABASE = prevMongoDb;
+      env.OWNER_PHONE = prevPhone;
+      env.OWNER_PASSWORD_HASH = prevHash;
+      env.SESSION_COOKIE_SECURE = prevCookieSecure;
+    }
   });
 });

@@ -6,6 +6,7 @@ import type session from 'express-session';
 import { env } from './config/env.js';
 import { createSessionMiddleware } from './config/session.js';
 import { checkDatabaseReadiness } from './config/database.js';
+import { checkMongoReadiness } from './config/mongodb.js';
 import { csrfProtection, isAllowedOrigin } from './middleware/csrf.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
@@ -18,6 +19,7 @@ import normalBillsRoutes from './modules/normalBills/normalBills.routes.js';
 import quotationsRoutes from './modules/quotations/quotations.routes.js';
 import { suppliersRoutes } from './modules/suppliers/suppliers.routes.js';
 import { dashboardRoutes } from './modules/dashboard/dashboard.routes.js';
+import { appDataRouter } from './modules/appData/appData.routes.js';
 
 export function createApp(options?: { useMemoryStoreInTest?: boolean; customStore?: session.Store }) {
   const app = express();
@@ -81,17 +83,23 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean; customStor
 
   app.get('/api/v1/health/ready', async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-    const dbStatus = await checkDatabaseReadiness();
+    const [dbStatus, mongoStatus] = await Promise.all([
+      checkDatabaseReadiness(),
+      checkMongoReadiness(),
+    ]);
 
-    if (!dbStatus.isReady) {
-      console.warn('[DATABASE READINESS UNREADY]', {
-        latencyMs: dbStatus.latencyMs,
-        checks: dbStatus.checks,
-        error: dbStatus.error,
+    if (!dbStatus.isReady || (mongoStatus.enabled && !mongoStatus.isReady)) {
+      console.warn('[SERVICE READINESS UNREADY]', {
+        postgresReady: dbStatus.isReady,
+        postgresLatencyMs: dbStatus.latencyMs,
+        postgresChecks: dbStatus.checks,
+        mongodbEnabled: mongoStatus.enabled,
+        mongodbReady: mongoStatus.isReady,
+        mongodbLatencyMs: mongoStatus.latencyMs,
       });
       res.status(503).json({
         status: 'unready',
-        message: 'Database service is unready.',
+        message: 'Database or read-model service is unready.',
         timestamp: new Date().toISOString(),
       });
       return;
@@ -99,6 +107,10 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean; customStor
 
     res.status(200).json({
       status: 'ready',
+      services: {
+        postgres: 'ready',
+        mongodb: mongoStatus.enabled ? 'ready' : 'disabled',
+      },
       timestamp: new Date().toISOString(),
     });
   });
@@ -130,6 +142,7 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean; customStor
   app.use('/api/v1/quotations', quotationsRoutes);
   app.use('/api/v1/suppliers', suppliersRoutes);
   app.use('/api/v1/dashboard', dashboardRoutes);
+  app.use('/api/v1', appDataRouter);
 
   // 9. Centralized Error Handler
   app.use(errorHandler);

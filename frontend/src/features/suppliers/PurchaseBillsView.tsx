@@ -22,6 +22,51 @@ import { getBusinessDateISO } from '../../utils/businessDate.js';
 import { validateQuantityInput, validateSellingRateInput } from '../../utils/lineItemDraft.js';
 import { safeDecimal } from '../../lib/formatters.js';
 import { downloadBlobSafely } from '../../utils/blobDownload.js';
+import { compressImageFile } from '../../utils/imageCompressor.js';
+
+const MAX_SUPPLIER_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const ALLOWED_SUPPLIER_ATTACHMENT_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+]);
+
+export async function preparePurchaseBillAttachment(file: File): Promise<File> {
+  if (file.size <= 0) {
+    throw new Error('Selected attachment file is empty.');
+  }
+  const cleanType = (file.type || '').toLowerCase().trim();
+  const isPdf = cleanType === 'application/pdf' || (!cleanType && file.name.toLowerCase().endsWith('.pdf'));
+
+  if (!ALLOWED_SUPPLIER_ATTACHMENT_TYPES.has(cleanType) && !isPdf) {
+    throw new Error('Only JPEG, PNG, WebP images and PDF documents are allowed.');
+  }
+
+  if (isPdf) {
+    if (file.size > MAX_SUPPLIER_ATTACHMENT_BYTES) {
+      throw new Error('Purchase bill PDF attachment must not exceed 10 MB.');
+    }
+    return file;
+  }
+
+  if (file.size > 25 * 1024 * 1024) {
+    throw new Error('Selected image is too large (max 25 MB before compression).');
+  }
+
+  const compressed = await compressImageFile(file, {
+    maxWidth: 1600,
+    maxHeight: 1600,
+    quality: 0.82,
+    maxSizeBytes: 9.5 * 1024 * 1024,
+  });
+
+  if (compressed.size > MAX_SUPPLIER_ATTACHMENT_BYTES) {
+    throw new Error('Compressed bill image still exceeds the 10 MB upload limit.');
+  }
+  return compressed;
+}
+
 import {
   cancelPurchaseBillApi,
   computeDraftPurchaseBillTotals,
@@ -419,11 +464,34 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
     }
   };
 
+  const handleSelectFormAttachment = async (
+    file: File | null,
+    inputEl: HTMLInputElement | null
+  ) => {
+    if (!file) {
+      setAttachmentFile(null);
+      return;
+    }
+    setFormError(null);
+    setAttachmentBusy(true);
+    try {
+      const prepared = await preparePurchaseBillAttachment(file);
+      setAttachmentFile(prepared);
+    } catch (err: any) {
+      setAttachmentFile(null);
+      if (inputEl) inputEl.value = '';
+      setFormError(err?.message || 'Unable to prepare selected attachment.');
+    } finally {
+      setAttachmentBusy(false);
+    }
+  };
+
   const handleUploadAttachmentInDetail = async (file: File | undefined) => {
     if (!file || !detailBill) return;
     setAttachmentBusy(true);
     try {
-      const updated = await uploadPurchaseBillAttachmentApi(detailBill.id, file);
+      const prepared = await preparePurchaseBillAttachment(file);
+      const updated = await uploadPurchaseBillAttachmentApi(detailBill.id, prepared);
       setDetailBill(updated);
       if (attachmentPreviewUrl) URL.revokeObjectURL(attachmentPreviewUrl);
       if (updated.attachmentContentType?.startsWith('image/')) {
@@ -1085,7 +1153,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                     <input
                       type="file"
                       accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf"
-                      onChange={(e) => setAttachmentFile(e.target.files?.[0] || null)}
+                      onChange={(e) => void handleSelectFormAttachment(e.target.files?.[0] || null, e.target)}
                       className="neu-input w-full text-xs py-1.5"
                     />
                   </div>
@@ -1415,7 +1483,11 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                           className="hidden"
                           accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf"
                           disabled={attachmentBusy}
-                          onChange={(e) => void handleUploadAttachmentInDetail(e.target.files?.[0])}
+                          onChange={(e) => {
+                            const picked = e.target.files?.[0];
+                            e.target.value = '';
+                            void handleUploadAttachmentInDetail(picked);
+                          }}
                         />
                       </label>
                       {detailBill.hasAttachment && (

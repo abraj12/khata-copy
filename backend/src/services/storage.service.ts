@@ -248,6 +248,7 @@ export class StorageService {
       Bucket: env.R2_BUCKET_NAME!,
       Key: objectKey,
       ContentType: cleanContentType,
+      ContentLength: Math.trunc(sizeBytes),
     });
 
     const expiresIn = 300; // 5 minutes
@@ -425,6 +426,19 @@ export class StorageService {
     contentType: string;
   }): Promise<void> {
     this.assertConfigured();
+    const prefix = options.objectKey.split('/')[0] as StorageFolder;
+    const folderLimit = MAX_BYTES_BY_FOLDER[prefix] ?? 25 * 1024 * 1024;
+    if (!options.buffer || options.buffer.length <= 0) {
+      throw new AppError('File size must be greater than zero bytes.', 400, 'INVALID_FILE_SIZE');
+    }
+    if (options.buffer.length > folderLimit) {
+      const maxMb = Math.round((folderLimit / (1024 * 1024)) * 10) / 10;
+      throw new AppError(
+        `Object exceeds maximum allowed upload limit of ${maxMb}MB.`,
+        400,
+        'FILE_TOO_LARGE'
+      );
+    }
     await this.s3Client!.send(
       new PutObjectCommand({
         Bucket: env.R2_BUCKET_NAME!,

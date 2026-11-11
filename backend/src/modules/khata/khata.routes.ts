@@ -2,6 +2,9 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { khataService } from './khata.service.js';
+import { isMongoEnabled } from '../../config/mongodb.js';
+import { readModelsQueryService, ReadModelUnavailableError } from '../readModels/readModelsQuery.service.js';
+import { appDataService } from '../appData/appData.service.js';
 
 const router = Router();
 
@@ -90,9 +93,29 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = customerSearchQuerySchema.safeParse(req.query);
     const options = parsed.success ? parsed.data : { limit: 50, offset: 0 };
+    if (isMongoEnabled()) {
+      const result = await readModelsQueryService.listCustomersFromMongo(options);
+      res.json({
+        success: true,
+        customers: result.customers,
+        pagination: {
+          total: result.total,
+          limit: result.limit,
+          offset: result.offset,
+          hasMore: result.hasMore,
+          nextOffset: result.nextOffset,
+        },
+        syncStatus: result.syncStatus,
+      });
+      return;
+    }
     const { customers, pagination } = await khataService.listCustomers(options);
     res.json({ success: true, customers, pagination });
   } catch (err) {
+    if (err instanceof ReadModelUnavailableError) {
+      res.status(503).json({ success: false, code: err.code, message: err.message });
+      return;
+    }
     next(err);
   }
 });
@@ -102,9 +125,18 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
  */
 router.get('/summary', async (_req: Request, res: Response, next: NextFunction) => {
   try {
+    if (isMongoEnabled()) {
+      const summary = await readModelsQueryService.getKhataSummaryFromMongo();
+      res.status(200).json({ success: true, summary, data: summary, syncStatus: summary.syncStatus });
+      return;
+    }
     const summary = await khataService.getSummary();
     res.json({ success: true, summary });
   } catch (err) {
+    if (err instanceof ReadModelUnavailableError) {
+      res.status(503).json({ success: false, code: err.code, message: err.message });
+      return;
+    }
     next(err);
   }
 });
@@ -124,9 +156,40 @@ router.get('/customers', async (req: Request, res: Response, next: NextFunction)
       return;
     }
 
+    if (isMongoEnabled()) {
+      const startedAt = Date.now();
+      const result = await readModelsQueryService.listCustomersFromMongo(parsed.data);
+      if (parsed.data.search && parsed.data.search.trim()) {
+        void appDataService.recordSearchAnalytics({
+          module: 'customers',
+          query: parsed.data.search,
+          resultCount: result.customers.length,
+          source: 'mongodb',
+          durationMs: Date.now() - startedAt,
+        });
+      }
+      res.json({
+        success: true,
+        customers: result.customers,
+        pagination: {
+          total: result.total,
+          limit: result.limit,
+          offset: result.offset,
+          hasMore: result.hasMore,
+          nextOffset: result.nextOffset,
+        },
+        syncStatus: result.syncStatus,
+      });
+      return;
+    }
+
     const { customers, pagination } = await khataService.listCustomers(parsed.data);
     res.json({ success: true, customers, pagination });
   } catch (err) {
+    if (err instanceof ReadModelUnavailableError) {
+      res.status(503).json({ success: false, code: err.code, message: err.message });
+      return;
+    }
     next(err);
   }
 });

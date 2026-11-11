@@ -1,5 +1,6 @@
 import { AppError } from '../../utils/errors.js';
 import { appPool } from '../../config/database.js';
+import { enqueueOutboxEvent, notifyOutboxCommitted } from '../readModels/outbox.service.js';
 import { validateMoneyInput, escapeLike } from '../../utils/validation.js';
 import { storageService } from '../../services/storage.service.js';
 
@@ -177,20 +178,33 @@ export class ProductsService {
     const cleanHsn = hsnCode && hsnCode.trim() ? hsnCode.trim() : null;
     const cleanBarcode = this.normalizeBarcode(barcode);
 
+    const client = await appPool.connect();
     try {
-      const result = await appPool.query(
+      await client.query('BEGIN');
+      const result = await client.query(
         `INSERT INTO products (name, buying_price, hsn_code, barcode, created_at, updated_at)
          VALUES ($1, $2, $3, $4, NOW(), NOW())
          RETURNING id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
                    image_object_key, image_content_type, image_size_bytes, image_updated_at`,
         [trimmed, formattedPrice, cleanHsn, cleanBarcode]
       );
-      return { ...result.rows[0], image_url: null };
+      const created = result.rows[0];
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'product',
+        aggregateId: created.id,
+        eventType: 'product.created',
+      });
+      await client.query('COMMIT');
+      notifyOutboxCommitted();
+      return { ...created, image_url: null };
     } catch (err: any) {
+      await client.query('ROLLBACK').catch(() => {});
       if (err.code === '23505' && (err.constraint === 'idx_products_barcode_active' || String(err.message).includes('barcode'))) {
         throw new AppError(`A product with barcode "${cleanBarcode}" already exists.`, 409, 'DUPLICATE_BARCODE');
       }
       throw err;
+    } finally {
+      client.release();
     }
   }
 
@@ -239,8 +253,10 @@ export class ProductsService {
       );
     }
 
+    const client = await appPool.connect();
     try {
-      const result = await appPool.query(
+      await client.query('BEGIN');
+      const result = await client.query(
         `UPDATE products
          SET name = $1, buying_price = $2, hsn_code = $3, barcode = $4, updated_at = NOW()
          WHERE id = $5 AND archived_at IS NULL
@@ -248,14 +264,27 @@ export class ProductsService {
                    image_object_key, image_content_type, image_size_bytes, image_updated_at`,
         [newName, newPrice, newHsn, newBarcode, id]
       );
-      if (result.rows.length === 0) return null;
+      if (result.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'product',
+        aggregateId: id,
+        eventType: 'product.updated',
+      });
+      await client.query('COMMIT');
+      notifyOutboxCommitted();
       const [updatedWithUrl] = await this.attachPresignedUrls(result.rows);
       return updatedWithUrl || null;
     } catch (err: any) {
+      await client.query('ROLLBACK').catch(() => {});
       if (err.code === '23505' && (err.constraint === 'idx_products_barcode_active' || String(err.message).includes('barcode'))) {
         throw new AppError(`A product with barcode "${newBarcode}" already exists.`, 409, 'DUPLICATE_BARCODE');
       }
       throw err;
+    } finally {
+      client.release();
     }
   }
 
@@ -284,8 +313,10 @@ export class ProductsService {
       );
     }
 
+    const client = await appPool.connect();
     try {
-      const result = await appPool.query(
+      await client.query('BEGIN');
+      const result = await client.query(
         `UPDATE products
          SET barcode = $1, updated_at = NOW()
          WHERE id = $2 AND archived_at IS NULL
@@ -293,14 +324,27 @@ export class ProductsService {
                    image_object_key, image_content_type, image_size_bytes, image_updated_at`,
         [normalized, id]
       );
-      if (result.rows.length === 0) return null;
+      if (result.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'product',
+        aggregateId: id,
+        eventType: 'product.barcode_updated',
+      });
+      await client.query('COMMIT');
+      notifyOutboxCommitted();
       const [updatedWithUrl] = await this.attachPresignedUrls(result.rows);
       return updatedWithUrl || null;
     } catch (err: any) {
+      await client.query('ROLLBACK').catch(() => {});
       if (err.code === '23505' && (err.constraint === 'idx_products_barcode_active' || String(err.message).includes('barcode'))) {
         throw new AppError(`A product with barcode "${normalized}" already exists.`, 409, 'DUPLICATE_BARCODE');
       }
       throw err;
+    } finally {
+      client.release();
     }
   }
 
@@ -309,13 +353,34 @@ export class ProductsService {
    * Frees up the product's barcode for reuse.
    */
   public async archiveProduct(id: number): Promise<boolean> {
-    const result = await appPool.query(
-      `UPDATE products
-       SET archived_at = NOW(), updated_at = NOW()
-       WHERE id = $1 AND archived_at IS NULL`,
-      [id]
-    );
-    return (result.rowCount ?? 0) > 0;
+    const client = await appPool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await client.query(
+        `UPDATE products
+         SET archived_at = NOW(), updated_at = NOW()
+         WHERE id = $1 AND archived_at IS NULL`,
+        [id]
+      );
+      const archived = (result.rowCount ?? 0) > 0;
+      if (archived) {
+        await enqueueOutboxEvent(client, {
+          aggregateType: 'product',
+          aggregateId: id,
+          eventType: 'product.archived',
+        });
+      }
+      await client.query('COMMIT');
+      if (archived) {
+        notifyOutboxCommitted();
+      }
+      return archived;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -332,28 +397,50 @@ export class ProductsService {
 
     const oldKey = existing.image_object_key;
 
-    // Update product record
-    const result = await appPool.query(
-      `UPDATE products
-       SET image_object_key = $1,
-           image_content_type = $2,
-           image_size_bytes = $3,
-           image_updated_at = NOW(),
-           updated_at = NOW()
-       WHERE id = $4 AND archived_at IS NULL
-       RETURNING id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
-                 image_object_key, image_content_type, image_size_bytes, image_updated_at`,
-      [imageObjectKey, verified.contentType, verified.contentLength, productId]
-    );
+    const client = await appPool.connect();
+    let updatedRows: any[];
+    try {
+      await client.query('BEGIN');
+      const result = await client.query(
+        `UPDATE products
+         SET image_object_key = $1,
+             image_content_type = $2,
+             image_size_bytes = $3,
+             image_updated_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $4 AND archived_at IS NULL
+         RETURNING id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
+                   image_object_key, image_content_type, image_size_bytes, image_updated_at`,
+        [imageObjectKey, verified.contentType, verified.contentLength, productId]
+      );
 
-    if (result.rows.length === 0) {
-      throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
+      if (result.rows.length === 0) {
+        throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
+      }
+
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'product',
+        aggregateId: productId,
+        eventType: 'product.image_updated',
+      });
+      await client.query('COMMIT');
+      notifyOutboxCommitted();
+      updatedRows = result.rows;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      if (imageObjectKey !== oldKey) {
+        await storageService.deleteObject(imageObjectKey).catch(() => {});
+      }
+      throw err;
+    } finally {
+      client.release();
     }
 
-    // Delete previous image if replaced
+    // Delete previous image only after database commit succeeds
     if (oldKey && oldKey !== imageObjectKey) {
-      await storageService.deleteObject(oldKey);
+      await storageService.deleteObject(oldKey).catch(() => {});
     }
+    const result = { rows: updatedRows };
 
     const [updatedWithUrl] = await this.attachPresignedUrls(result.rows);
     return updatedWithUrl;
@@ -370,27 +457,47 @@ export class ProductsService {
 
     const oldKey = existing.image_object_key;
 
-    const result = await appPool.query(
-      `UPDATE products
-       SET image_object_key = NULL,
-           image_content_type = NULL,
-           image_size_bytes = NULL,
-           image_updated_at = NULL,
-           updated_at = NOW()
-       WHERE id = $1 AND archived_at IS NULL
-       RETURNING id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
-                 image_object_key, image_content_type, image_size_bytes, image_updated_at`,
-      [productId]
-    );
+    const client = await appPool.connect();
+    let resultRows: any[];
+    try {
+      await client.query('BEGIN');
+      const result = await client.query(
+        `UPDATE products
+         SET image_object_key = NULL,
+             image_content_type = NULL,
+             image_size_bytes = NULL,
+             image_updated_at = NULL,
+             updated_at = NOW()
+         WHERE id = $1 AND archived_at IS NULL
+         RETURNING id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
+                   image_object_key, image_content_type, image_size_bytes, image_updated_at`,
+        [productId]
+      );
 
-    if (result.rows.length === 0) {
-      throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
+      if (result.rows.length === 0) {
+        throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
+      }
+
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'product',
+        aggregateId: productId,
+        eventType: 'product.image_removed',
+      });
+      await client.query('COMMIT');
+      notifyOutboxCommitted();
+      resultRows = result.rows;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
     }
 
-    // Delete previous R2 object
+    // Delete previous R2 object only after DB commit succeeds
     if (oldKey) {
-      await storageService.deleteObject(oldKey);
+      await storageService.deleteObject(oldKey).catch(() => {});
     }
+    const result = { rows: resultRows };
 
     return { ...result.rows[0], image_url: null };
   }

@@ -56,6 +56,11 @@ describe('Product Barcode Feature Test Suite', () => {
       return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] } as any;
     });
 
+    vi.spyOn(appPool, 'connect').mockImplementation(async () => ({
+      query: (sql: any, params?: any) => (appPool.query as any)(sql, params),
+      release: () => {},
+    }) as any);
+
     const loginRes = await request(app).post('/api/v1/auth/login').send({
       phone: TEST_PHONE,
       password: TEST_PASSWORD,

@@ -19,8 +19,7 @@ import {
   Image as ImageIcon,
   X,
 } from 'lucide-react';
-import MannatTaxInvoice, {
-  MannatInvoiceProps,
+import {
   numberWords,
 } from '../../components/MannatTaxInvoice/MannatTaxInvoice.js';
 import {
@@ -28,15 +27,14 @@ import {
   createGstInvoice,
   listGstInvoices,
   downloadInvoicePdf,
-  downloadDraftPdf,
   fetchInvoicePdfBlob,
   fetchDraftPdfBlob,
   retryGstInvoicePdf,
-  mapRecordToInvoiceProps,
   CreateGstInvoicePayload,
   GstInvoiceRecord,
 } from './gstInvoicesApi.js';
 import { PdfImageExportModal } from '../../components/PdfImageExportModal.js';
+import { PdfDocumentPreviewModal } from '../../components/PdfDocumentPreviewModal.js';
 import { fetchQuotationSettings } from '../quotations/quotationApi.js';
 import {
   INDIAN_STATES,
@@ -151,8 +149,15 @@ export const GstBillingView: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const idempotencyKeyRef = useRef<string>(typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
   const [successRecord, setSuccessRecord] = useState<GstInvoiceRecord | null>(null);
-  const [previewInvoice, setPreviewInvoice] = useState<MannatInvoiceProps | null>(null);
-  const [autoPrintAfterPreview, setAutoPrintAfterPreview] = useState(false);
+  const [pdfPreviewTarget, setPdfPreviewTarget] = useState<{
+    key: string;
+    title: string;
+    subtitle: string;
+    fileName: string;
+    imageExportBaseName: string;
+    fetchPdfBlob: (signal: AbortSignal) => Promise<Blob>;
+    autoPrintOnLoad?: boolean;
+  } | null>(null);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [retryingPdfId, setRetryingPdfId] = useState<number | null>(null);
   const [imageExportTarget, setImageExportTarget] = useState<{
@@ -161,26 +166,25 @@ export const GstBillingView: React.FC = () => {
     fetchPdfBlob: (signal: AbortSignal) => Promise<Blob>;
   } | null>(null);
 
+  const openRecordPdfPreview = (inv: GstInvoiceRecord, autoPrintOnLoad = false) => {
+    setPdfPreviewTarget({
+      key: `gst-${inv.id}-${autoPrintOnLoad ? 'print' : 'view'}-${Date.now()}`,
+      title: `Official Tax Invoice · ${inv.invoice_number}`,
+      subtitle: 'Canonical multipage A4 tax invoice PDF',
+      fileName: `Tax_Invoice_${inv.invoice_number}.pdf`,
+      imageExportBaseName: `Invoice_${inv.invoice_number}`,
+      fetchPdfBlob: (sig) => fetchInvoicePdfBlob(inv.id, sig),
+      autoPrintOnLoad,
+    });
+  };
+
   const handleDirectPrint = (inv: GstInvoiceRecord) => {
-    setPreviewInvoice(mapRecordToInvoiceProps(inv, companyProfile || undefined));
-    setAutoPrintAfterPreview(true);
+    openRecordPdfPreview(inv, true);
   };
 
   const handleClosePreview = () => {
-    setPreviewInvoice(null);
-    setAutoPrintAfterPreview(false);
+    setPdfPreviewTarget(null);
   };
-
-  // Trigger print dialog as soon as preview DOM is rendered
-  useEffect(() => {
-    if (previewInvoice && autoPrintAfterPreview) {
-      const timer = setTimeout(() => {
-        window.print();
-        setAutoPrintAfterPreview(false);
-      }, 200);
-      return () => clearTimeout(timer);
-    }
-  }, [previewInvoice, autoPrintAfterPreview]);
 
   // Server-side paginated product & customer search
   const {
@@ -383,63 +387,7 @@ export const GstBillingView: React.FC = () => {
     };
   }, [items, gstRate, isIntraState]);
 
-  // Current draft mapped to MannatInvoiceProps
-  const currentDraftInvoice: MannatInvoiceProps = useMemo(() => {
-    return {
-      invoiceNumber: invoiceNumber || 'DRAFT',
-      invoiceDate,
-      transportationMode,
-      vehicleNumber,
-      dateOfSupply,
-      placeOfSupply,
-      company: companyProfile || { state, stateCode },
-      customer: {
-        name: customerName || 'Receiver Name',
-        address: customerAddress || '',
-        gstin: customerGstin || '',
-        state: customerState,
-        stateCode: customerStateCode,
-      },
-      items: calculations.computedItems.map((itm) => ({
-        id: itm.id,
-        name: itm.description || 'Description of goods',
-        hsn: itm.hsnCode,
-        quantity: itm.quantity,
-        unit: itm.unit,
-        rate: itm.rate,
-        rateUnit: itm.rateUnit,
-        amount: itm.amount,
-      })),
-      totals: {
-        taxableAmount: calculations.taxableAmount,
-        cgstRate: calculations.cgstRate,
-        cgstAmount: calculations.cgstAmount,
-        sgstRate: calculations.sgstRate,
-        sgstAmount: calculations.sgstAmount,
-        igstRate: calculations.igstRate,
-        igstAmount: calculations.igstAmount,
-        taxAmount: calculations.taxAmount,
-        grandTotal: calculations.grandTotal,
-      },
-      amountInWords: calculations.amountInWords,
-    };
-  }, [
-    invoiceNumber,
-    invoiceDate,
-    transportationMode,
-    vehicleNumber,
-    dateOfSupply,
-    placeOfSupply,
-    customerName,
-    customerAddress,
-    customerGstin,
-    customerState,
-    customerStateCode,
-    companyProfile,
-    state,
-    stateCode,
-    calculations,
-  ]);
+  // Official draft preview uses canonical backend PDFKit renderer via openDraftPdfPreview
 
   // Add line item
   const handleAddItem = () => {
@@ -708,21 +656,24 @@ export const GstBillingView: React.FC = () => {
     }
   };
 
-  // Download draft vector PDF helper
-  const handleDownloadDraftPdf = async () => {
+  // Open canonical backend A4 draft PDF preview
+  const openDraftPdfPreview = () => {
     const validationErr = validateGstForm(false);
     if (validationErr) {
       setErrorMessage(validationErr);
       return;
     }
-    try {
-      setIsDownloadingPdf(true);
-      await downloadDraftPdf(buildDraftPdfPayload());
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Unable to download draft PDF.');
-    } finally {
-      setIsDownloadingPdf(false);
-    }
+    const draftPayload = buildDraftPdfPayload();
+    const label = draftPayload.invoiceNumber || 'Draft';
+    setPdfPreviewTarget({
+      key: `gst-draft-${Date.now()}`,
+      title: `Official Tax Invoice · ${draftPayload.invoiceNumber || 'Draft Preview'}`,
+      subtitle: 'Official A4 Tax Invoice Draft (vector PDF)',
+      fileName: `Tax_Invoice_${label}.pdf`,
+      imageExportBaseName: `Invoice_${label}`,
+      fetchPdfBlob: (sig) => fetchDraftPdfBlob(draftPayload, sig),
+      autoPrintOnLoad: false,
+    });
   };
 
   return (
@@ -1166,7 +1117,7 @@ export const GstBillingView: React.FC = () => {
 
                 <BillingBarcodeControls
                   enableGlobalScanner={
-                    activeSubTab === 'create' && !successRecord && !previewInvoice
+                    activeSubTab === 'create' && !successRecord && !pdfPreviewTarget
                   }
                   onProductResolved={handleBarcodeResolved}
                   onCatalogProductCreated={(created) => {
@@ -1491,7 +1442,7 @@ export const GstBillingView: React.FC = () => {
                 <div className="space-y-2.5 pt-2">
                   <button
                     type="button"
-                    onClick={() => setPreviewInvoice(currentDraftInvoice)}
+                    onClick={openDraftPdfPreview}
                     className="neu-btn-secondary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold"
                   >
                     <Eye className="w-4 h-4 text-[var(--khata-accent)]" />
@@ -1654,7 +1605,7 @@ export const GstBillingView: React.FC = () => {
                           <div className="flex items-center justify-end gap-1.5">
                             <button
                               type="button"
-                              onClick={() => setPreviewInvoice(mapRecordToInvoiceProps(inv, companyProfile || undefined))}
+                              onClick={() => openRecordPdfPreview(inv, false)}
                               className="p-1.5 rounded-lg border border-[var(--khata-border)] hover:bg-[var(--khata-surface)] text-[var(--khata-text)] cursor-pointer"
                               title="Preview A4 Invoice"
                             >
@@ -1753,7 +1704,7 @@ export const GstBillingView: React.FC = () => {
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <button
                           type="button"
-                          onClick={() => setPreviewInvoice(mapRecordToInvoiceProps(inv, companyProfile || undefined))}
+                          onClick={() => openRecordPdfPreview(inv, false)}
                           className="neu-btn-secondary px-2.5 py-1.5 flex items-center gap-1 text-xs font-bold"
                           title="Preview Invoice"
                         >
@@ -1887,9 +1838,7 @@ export const GstBillingView: React.FC = () => {
               )}
               <button
                 type="button"
-                onClick={() => {
-                  setPreviewInvoice(mapRecordToInvoiceProps(successRecord, companyProfile || undefined));
-                }}
+                onClick={() => openRecordPdfPreview(successRecord, false)}
                 className="neu-btn-primary w-full py-2.5 flex items-center justify-center gap-2 text-xs font-bold"
               >
                 <Printer className="w-4 h-4" />
@@ -1933,72 +1882,20 @@ export const GstBillingView: React.FC = () => {
       )}
       </div>
 
-      {/* Fullscreen A4 Invoice Preview Modal */}
-      {previewInvoice && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-sm flex flex-col p-1 sm:p-4 mhi-print-modal-container">
-          <div className="max-w-[220mm] mx-auto w-full flex items-center justify-between pb-2 sm:pb-3 text-white mhi-modal-header mhi-no-print">
-            <span className="font-bold text-xs sm:text-sm truncate">
-              Official Tax Invoice · {previewInvoice.invoiceNumber}
-            </span>
-            <button
-              type="button"
-              onClick={handleClosePreview}
-              className="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white transition flex items-center gap-1 text-xs font-bold cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-              <span>Close</span>
-            </button>
-          </div>
-
-          <div className="flex-1 overflow-y-auto">
-            <MannatTaxInvoice
-              invoice={previewInvoice}
-              showPrintButton={true}
-              onDownloadPdf={() => {
-                if (previewInvoice?.id) {
-                  handleDownloadPdf(previewInvoice.id, previewInvoice.invoiceNumber || 'Invoice');
-                } else if (successRecord?.id) {
-                  handleDownloadPdf(successRecord.id, successRecord.invoice_number);
-                } else {
-                  handleDownloadDraftPdf();
-                }
-              }}
-              onExportImages={() => {
-                if (previewInvoice?.id) {
-                  const invId = previewInvoice.id;
-                  const invNum = previewInvoice.invoiceNumber || 'Invoice';
-                  setImageExportTarget({
-                    title: `Invoice #${invNum} WebP Images`,
-                    baseFileName: `Invoice_${invNum}`,
-                    fetchPdfBlob: (sig) => fetchInvoicePdfBlob(invId, sig),
-                  });
-                } else if (successRecord?.id) {
-                  const recId = successRecord.id;
-                  const recNum = successRecord.invoice_number;
-                  setImageExportTarget({
-                    title: `Invoice #${recNum} WebP Images`,
-                    baseFileName: `Invoice_${recNum}`,
-                    fetchPdfBlob: (sig) => fetchInvoicePdfBlob(recId, sig),
-                  });
-                } else {
-                  const validationErr = validateGstForm(false);
-                  if (validationErr) {
-                    setErrorMessage(validationErr);
-                    return;
-                  }
-                  const draftPayload = buildDraftPdfPayload();
-                  const label = draftPayload.invoiceNumber || 'Draft';
-                  setImageExportTarget({
-                    title: `Invoice Draft (${label}) WebP Images`,
-                    baseFileName: `Invoice_${label}`,
-                    fetchPdfBlob: (sig) => fetchDraftPdfBlob(draftPayload, sig),
-                  });
-                }
-              }}
-              isDownloadingPdf={isDownloadingPdf}
-            />
-          </div>
-        </div>
+      {/* Official Canonical A4 Tax Invoice PDF Preview & Print Modal */}
+      {pdfPreviewTarget && (
+        <PdfDocumentPreviewModal
+          isOpen={true}
+          title={pdfPreviewTarget.title}
+          subtitle={pdfPreviewTarget.subtitle}
+          fileName={pdfPreviewTarget.fileName}
+          documentLabel="Tax Invoice"
+          imageExportBaseName={pdfPreviewTarget.imageExportBaseName}
+          fetchPdfBlob={pdfPreviewTarget.fetchPdfBlob}
+          fetchKey={pdfPreviewTarget.key}
+          autoPrintOnLoad={pdfPreviewTarget.autoPrintOnLoad}
+          onClose={handleClosePreview}
+        />
       )}
 
       {imageExportTarget && (

@@ -3,6 +3,9 @@ import multer from 'multer';
 import { z } from 'zod';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { productsService } from './products.service.js';
+import { isMongoEnabled } from '../../config/mongodb.js';
+import { readModelsQueryService, ReadModelUnavailableError } from '../readModels/readModelsQuery.service.js';
+import { appDataService } from '../appData/appData.service.js';
 import { validateMoneyInput } from '../../utils/validation.js';
 import { storageService } from '../../services/storage.service.js';
 
@@ -30,13 +33,24 @@ router.get('/:id/image', async (req: Request, res: Response, next: NextFunction)
       return;
     }
 
-    const product = await productsService.getProductById(id);
-    if (!product || !product.image_object_key || product.archived_at) {
-      res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product image not found or archived.' });
-      return;
+    let imageObjectKey: string | null = null;
+    if (isMongoEnabled()) {
+      const meta = await readModelsQueryService.getProductImageMetaFromMongo(id);
+      if (!meta || !meta.imageObjectKey || meta.isArchived) {
+        res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product image not found or archived.' });
+        return;
+      }
+      imageObjectKey = meta.imageObjectKey;
+    } else {
+      const product = await productsService.getProductById(id);
+      if (!product || !product.image_object_key || product.archived_at) {
+        res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product image not found or archived.' });
+        return;
+      }
+      imageObjectKey = product.image_object_key;
     }
 
-    const { stream, contentType, contentLength } = await storageService.getObjectStream(product.image_object_key);
+    const { stream, contentType, contentLength } = await storageService.getObjectStream(imageObjectKey);
 
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
@@ -57,6 +71,10 @@ router.get('/:id/image', async (req: Request, res: Response, next: NextFunction)
 
     (stream as any).pipe(res);
   } catch (err: any) {
+    if (err instanceof ReadModelUnavailableError) {
+      res.status(503).json({ success: false, code: err.code, message: err.message });
+      return;
+    }
     if (err?.name === 'NoSuchKey' || err?.code === 'NoSuchKey') {
       res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Image object not found in storage.' });
       return;
@@ -112,7 +130,9 @@ router.get('/barcode/:barcode', async (req: Request, res: Response, next: NextFu
       return;
     }
 
-    const product = await productsService.findByBarcode(rawBarcode);
+    const product = isMongoEnabled()
+      ? await readModelsQueryService.findProductByBarcodeFromMongo(rawBarcode)
+      : await productsService.findByBarcode(rawBarcode);
     if (!product) {
       res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product not found with this barcode.' });
       return;
@@ -120,6 +140,10 @@ router.get('/barcode/:barcode', async (req: Request, res: Response, next: NextFu
 
     res.json({ success: true, data: product });
   } catch (err) {
+    if (err instanceof ReadModelUnavailableError) {
+      res.status(503).json({ success: false, code: err.code, message: err.message });
+      return;
+    }
     next(err);
   }
 });
@@ -179,9 +203,40 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       return;
     }
 
+    if (isMongoEnabled()) {
+      const startedAt = Date.now();
+      const result = await readModelsQueryService.searchProductsFromMongo(parsed.data);
+      if (parsed.data.search && parsed.data.search.trim()) {
+        void appDataService.recordSearchAnalytics({
+          module: 'products',
+          query: parsed.data.search,
+          resultCount: result.products.length,
+          source: 'mongodb',
+          durationMs: Date.now() - startedAt,
+        });
+      }
+      res.json({
+        success: true,
+        data: result.products,
+        pagination: {
+          total: result.total,
+          limit: result.limit,
+          offset: result.offset,
+          hasMore: result.hasMore,
+          nextOffset: result.nextOffset,
+        },
+        syncStatus: result.syncStatus,
+      });
+      return;
+    }
+
     const { products, pagination } = await productsService.listActiveProducts(parsed.data);
     res.json({ success: true, data: products, pagination });
   } catch (err) {
+    if (err instanceof ReadModelUnavailableError) {
+      res.status(503).json({ success: false, code: err.code, message: err.message });
+      return;
+    }
     next(err);
   }
 });
@@ -426,6 +481,21 @@ router.get('/:id/image-url', async (req: Request, res: Response, next: NextFunct
       return;
     }
 
+    if (isMongoEnabled()) {
+      const meta = await readModelsQueryService.getProductImageMetaFromMongo(id);
+      if (!meta || meta.isArchived) {
+        res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product not found or archived.' });
+        return;
+      }
+      const imageUrl = meta.imageObjectKey && storageService.isConfigured()
+        ? `/api/v1/products/${id}/image`
+        : null;
+      res.json({
+        success: true,
+        data: { imageUrl, expiresIn: imageUrl ? 86400 : 0 },
+      });
+      return;
+    }
     const data = await productsService.getProductImageUrl(id);
     res.json({ success: true, data });
   } catch (err) {

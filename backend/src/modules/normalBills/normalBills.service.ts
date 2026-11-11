@@ -1,6 +1,7 @@
 import Decimal from 'decimal.js';
 import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
+import { enqueueOutboxEvent, notifyOutboxCommitted } from '../readModels/outbox.service.js';
 import { env } from '../../config/env.js';
 import { getBusinessDateISO } from '../../utils/businessDate.js';
 import { resolveValidatedState } from '../../utils/indianTax.js';
@@ -456,6 +457,18 @@ export class NormalBillsService {
         : [];
 
     billRecord.items = insertedItems;
+    await enqueueOutboxEvent(client, {
+      aggregateType: 'normal_bill',
+      aggregateId: billRecord.id,
+      eventType: 'normal_bill.created',
+      businessDate: billDate,
+      payload: {
+        customerId: input.customerId ?? null,
+        productIds: computedItems
+          .map((item) => item.productId)
+          .filter((pid): pid is number => typeof pid === 'number' && pid > 0),
+      },
+    });
     return billRecord;
   }
 
@@ -509,6 +522,7 @@ export class NormalBillsService {
       }
 
       await client.query('COMMIT');
+      notifyOutboxCommitted();
     } catch (err) {
       try {
         await client.query('ROLLBACK');

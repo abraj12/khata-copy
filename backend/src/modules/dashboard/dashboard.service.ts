@@ -1,6 +1,7 @@
 import Decimal from 'decimal.js';
 import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
+import { enqueueOutboxEvent, notifyOutboxCommitted } from '../readModels/outbox.service.js';
 import { env } from '../../config/env.js';
 import { getBusinessDateISO } from '../../utils/businessDate.js';
 import { buildBusinessTimestampRangeFilter } from '../../utils/sqlDateRange.js';
@@ -1688,7 +1689,15 @@ export class DashboardService {
         [created.id, 'Expense recorded by owner', JSON.stringify(created)]
       );
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'expense',
+        aggregateId: created.id,
+        eventType: 'expense.created',
+        businessDate: created.expenseDate,
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return created;
     } catch (err) {
       await client.query('ROLLBACK').catch(() => undefined);
@@ -1788,7 +1797,16 @@ export class DashboardService {
         ]
       );
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'expense',
+        aggregateId: updated.id,
+        eventType: 'expense.updated',
+        businessDate: updated.expenseDate,
+        payload: { previousBusinessDate: previous.expenseDate },
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return updated;
     } catch (err) {
       await client.query('ROLLBACK').catch(() => undefined);
@@ -1867,7 +1885,18 @@ export class DashboardService {
         [voided.id, trimmedReason, JSON.stringify(previous), JSON.stringify(voided)]
       );
 
+      await enqueueOutboxEvent(client, {
+        aggregateType: 'expense',
+        aggregateId: voided.id,
+        eventType: 'expense.voided',
+        businessDate: voided.expenseDate,
+        payload: {
+          previousBusinessDate: getBusinessDateISO(env.BUSINESS_TIME_ZONE),
+        },
+      });
+
       await client.query('COMMIT');
+      notifyOutboxCommitted();
       return voided;
     } catch (err) {
       await client.query('ROLLBACK').catch(() => undefined);

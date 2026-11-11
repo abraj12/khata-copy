@@ -164,6 +164,22 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
                   <span>Updated {lastUpdatedLabel}</span>
                 </span>
               )}
+              {data?.syncStatus?.isStale && (
+                <span
+                  data-testid="sync-stale-badge"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30"
+                >
+                  Sync catching up
+                </span>
+              )}
+              {data?.syncStatus && !data.syncStatus.isStale && data.syncStatus.source === 'mongodb' && (
+                <span
+                  data-testid="sync-fresh-badge"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20"
+                >
+                  Read model synced
+                </span>
+              )}
             </div>
           </div>
 

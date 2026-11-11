@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../features/auth/AuthProvider.js';
+import { NotificationCenterButton } from './NotificationCenterButton.js';
 import {
   Store,
   Home,
@@ -265,8 +266,10 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
             </div>
           </nav>
 
-          {/* Controls: Appearance, Owner Phone, Logout */}
+          {/* Controls: Notifications, Appearance, Owner Phone, Logout */}
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 order-2 sm:order-3">
+            <NotificationCenterButton />
+
             {/* Persistent Appearance & Accessibility Button */}
             <button
               onClick={onOpenAppearance}

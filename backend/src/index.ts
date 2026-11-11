@@ -1,6 +1,9 @@
 import { createApp } from './app.js';
+import { closeDatabasePools } from './config/database.js';
 import { env } from './config/env.js';
+import { connectMongo, disconnectMongo, isMongoEnabled, isMongoReady } from './config/mongodb.js';
 import { runPendingMigrationsWithRetry } from './config/migrator.js';
+import { readModelOutboxWorker } from './modules/readModels/readModelOutbox.worker.js';
 
 async function bootstrap() {
   try {
@@ -10,6 +13,22 @@ async function bootstrap() {
     process.exit(1);
   }
 
+  try {
+    await connectMongo();
+  } catch (err) {
+    console.error('[KHATA SERVER] Fatal MongoDB connection error on startup:', {
+      message: (err as Error)?.message,
+    });
+    if (env.NODE_ENV === 'production' || isMongoEnabled()) {
+      await closeDatabasePools().catch(() => {});
+      process.exit(1);
+    }
+  }
+
+  if (isMongoEnabled() && isMongoReady()) {
+    readModelOutboxWorker.start();
+  }
+
   const app = createApp();
 
   const server = app.listen(env.PORT, () => {
@@ -17,15 +36,31 @@ async function bootstrap() {
     console.log(`[KHATA SERVER] Bound frontend origin: ${env.FRONTEND_URL}`);
   });
 
-  process.on('SIGTERM', () => {
-    console.log('[KHATA SERVER] SIGTERM signal received: closing HTTP server');
-    server.close(() => {
-      console.log('[KHATA SERVER] HTTP server closed');
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[KHATA SERVER] ${signal} signal received: shutting down gracefully`);
+
+    await readModelOutboxWorker.stop().catch(() => {});
+
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        console.log('[KHATA SERVER] HTTP server closed');
+        resolve();
+      });
     });
+
+    await disconnectMongo().catch(() => {});
+    await closeDatabasePools().catch(() => {});
+  };
+
+  process.on('SIGTERM', () => {
+    void shutdown('SIGTERM');
+  });
+  process.on('SIGINT', () => {
+    void shutdown('SIGINT');
   });
 }
 
-bootstrap().catch((err) => {
-  console.error('[KHATA SERVER] Bootstrap error:', err);
-  process.exit(1);
-});
+bootstrap();

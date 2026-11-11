@@ -1,6 +1,7 @@
 import Decimal from 'decimal.js';
 import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
+import { enqueueOutboxEvent, notifyOutboxCommitted } from '../readModels/outbox.service.js';
 import { env } from '../../config/env.js';
 import { getBusinessDateISO } from '../../utils/businessDate.js';
 import {
@@ -440,6 +441,18 @@ export class GstInvoicesService {
         : [];
 
     createdInvoice.items = insertedItems;
+    await enqueueOutboxEvent(client, {
+      aggregateType: 'gst_invoice',
+      aggregateId: createdInvoice.id,
+      eventType: 'gst_invoice.created',
+      businessDate: invoiceDate,
+      payload: {
+        customerId: input.customerId ?? null,
+        productIds: computedItems
+          .map((item) => item.productId)
+          .filter((pid): pid is number => typeof pid === 'number' && pid > 0),
+      },
+    });
     return createdInvoice;
   }
 
@@ -493,6 +506,7 @@ export class GstInvoicesService {
       }
 
       await client.query('COMMIT');
+      notifyOutboxCommitted();
     } catch (err) {
       try {
         await client.query('ROLLBACK');
