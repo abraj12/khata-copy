@@ -30,17 +30,20 @@ import {
   fetchPurchaseBillAttachmentBlob,
   formatAbsRupees,
   getPurchaseBillApi,
+  listAllSuppliersApi,
   listPurchaseBillsApi,
-  listSuppliersApi,
   updatePurchaseBillApi,
   uploadPurchaseBillAttachmentApi,
 } from './suppliersApi.js';
+import { SupplierPaginationBar } from './SupplierPaginationBar.js';
 import type {
   CatalogProductOption,
   PurchaseBillDetail,
   PurchaseBillSummary,
   SupplierRecord,
 } from './suppliers.types.js';
+
+const BILLS_PAGE_LIMIT = 50;
 
 export interface PurchaseBillsViewProps {
   initialSupplierFilter?: string;
@@ -76,6 +79,9 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
   onDataChanged,
 }) => {
   const [bills, setBills] = useState<PurchaseBillSummary[]>([]);
+  const [totalBills, setTotalBills] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [allSuppliers, setAllSuppliers] = useState<SupplierRecord[]>([]);
   const [catalogProducts, setCatalogProducts] = useState<CatalogProductOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -115,22 +121,23 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
 
   useEffect(() => {
     setSupplierFilter(initialSupplierFilter);
+    setOffset(0);
   }, [initialSupplierFilter]);
 
   const loadReferenceData = async () => {
     try {
-      const [supRes, prods] = await Promise.all([
-        listSuppliersApi({ status: 'all', limit: 200 }),
+      const [supList, prods] = await Promise.all([
+        listAllSuppliersApi({ status: 'all' }),
         fetchCatalogProductsForSupplierBills(),
       ]);
-      setAllSuppliers(supRes.suppliers);
+      setAllSuppliers(supList);
       setCatalogProducts(prods);
     } catch {
       // Handled when loading main list
     }
   };
 
-  const loadBills = async () => {
+  const loadBills = async (targetOffset = offset) => {
     setLoading(true);
     try {
       const res = await listPurchaseBillsApi({
@@ -139,9 +146,14 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
         search: search || undefined,
         fromDate: fromDate || undefined,
         toDate: toDate || undefined,
-        limit: 200,
+        limit: BILLS_PAGE_LIMIT,
+        offset: targetOffset,
       });
       setBills(res.purchaseBills);
+      setTotalBills(res.total);
+      setHasMore(
+        res.pagination?.hasMore ?? targetOffset + res.purchaseBills.length < res.total
+      );
     } catch (err: any) {
       setNotice({ type: 'error', text: err?.message || 'Failed to load purchase bills.' });
     } finally {
@@ -155,10 +167,10 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      void loadBills();
+      void loadBills(offset);
     }, 180);
     return () => clearTimeout(timer);
-  }, [supplierFilter, statusFilter, search, fromDate, toDate]);
+  }, [supplierFilter, statusFilter, search, fromDate, toDate, offset]);
 
   useEffect(() => {
     if (openCreateSignal > 0) {
@@ -521,7 +533,10 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
             <select
               value={supplierFilter}
-              onChange={(e) => setSupplierFilter(e.target.value)}
+              onChange={(e) => {
+                setSupplierFilter(e.target.value);
+                setOffset(0);
+              }}
               className="neu-input text-xs font-semibold"
             >
               <option value="">All Suppliers</option>
@@ -535,7 +550,10 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
 
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
+              onChange={(e) => {
+                setStatusFilter(e.target.value as any);
+                setOffset(0);
+              }}
               className="neu-input text-xs font-semibold"
             >
               <option value="all">All Statuses</option>
@@ -548,7 +566,10 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
               <input
                 type="text"
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setOffset(0);
+                }}
                 placeholder="Search invoice # or supplier..."
                 className="neu-input w-full pl-8 pr-2 py-1.5 text-xs"
               />
@@ -557,14 +578,20 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
             <input
               type="date"
               value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
+              onChange={(e) => {
+                setFromDate(e.target.value);
+                setOffset(0);
+              }}
               className="neu-input text-xs font-mono"
               aria-label="Filter from date"
             />
             <input
               type="date"
               value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
+              onChange={(e) => {
+                setToDate(e.target.value);
+                setOffset(0);
+              }}
               className="neu-input text-xs font-mono"
               aria-label="Filter to date"
             />
@@ -722,6 +749,16 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                 </div>
               ))}
             </div>
+            <SupplierPaginationBar
+              offset={offset}
+              limit={BILLS_PAGE_LIMIT}
+              total={totalBills}
+              currentCount={bills.length}
+              hasMore={hasMore}
+              loading={loading}
+              itemLabel="purchase bills"
+              onPageChange={(nextOffset) => setOffset(nextOffset)}
+            />
           </div>
         )}
       </div>
@@ -1190,6 +1227,11 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                       {detailBill.supplierAddress && (
                         <div className="text-slate-600 max-w-xs">{detailBill.supplierAddress}</div>
                       )}
+                      <div className="text-[10px] text-slate-500 print:hidden">
+                        {detailBill.supplierSnapshotSource === 'snapshot'
+                          ? 'Supplier snapshot locked at bill creation'
+                          : 'Legacy bill (live supplier details fallback)'}
+                      </div>
                       {detailBill.status === 'cancelled' && (
                         <div className="inline-block mt-1 px-2 py-0.5 rounded bg-rose-100 text-rose-700 font-bold uppercase text-[10px]">
                           CANCELLED: {detailBill.cancellationReason}
@@ -1248,12 +1290,32 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                           <div className="font-bold text-slate-800 mb-1">
                             Payment Allocations:
                           </div>
-                          {detailBill.allocations.map((a) => (
-                            <div key={a.allocationId} className="font-mono text-[11px]">
-                              {a.receiptNumber} ({a.paymentDate}, {a.paymentMethod}):{' '}
-                              {formatAbsRupees(a.allocatedAmount)}
-                            </div>
-                          ))}
+                          {detailBill.allocations.map((a) => {
+                            const hasReversal = safeDecimal(a.reversedAllocationAmount).greaterThan(0);
+                            return (
+                              <div key={a.allocationId} className="font-mono text-[11px]">
+                                {a.receiptNumber} ({a.paymentDate}, {a.paymentMethod}):{' '}
+                                <span
+                                  className={
+                                    a.paymentStatus === 'reversed' ? 'line-through text-slate-400' : 'font-bold'
+                                  }
+                                >
+                                  {formatAbsRupees(a.allocatedAmount)}
+                                </span>
+                                {a.paymentStatus === 'reversed' && (
+                                  <span className="ml-1 text-rose-600 font-sans font-bold">
+                                    [Payment Reversed]
+                                  </span>
+                                )}
+                                {a.paymentStatus !== 'reversed' && hasReversal && (
+                                  <span className="ml-1 text-slate-500 font-sans">
+                                    (Orig: {formatAbsRupees(a.originalAllocatedAmount)}, Rev:{' '}
+                                    {formatAbsRupees(a.reversedAllocationAmount)})
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -1394,7 +1456,7 @@ export const PurchaseBillsView: React.FC<PurchaseBillsViewProps> = ({
                     <div className="border-t border-[var(--khata-border)] pt-3">
                       {safeDecimal(detailBill.allocatedAmount).greaterThan(0) ? (
                         <p className="text-[11px] text-[var(--khata-text-muted)]">
-                          This bill has allocated payments ({formatAbsRupees(detailBill.allocatedAmount)}) and cannot be cancelled.
+                          This bill has active allocated payments ({formatAbsRupees(detailBill.allocatedAmount)}). Reverse the payment or allocation in Supplier Payments before cancelling this bill.
                         </p>
                       ) : !showCancelBox ? (
                         <button

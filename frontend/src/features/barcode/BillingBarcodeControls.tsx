@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Decimal from 'decimal.js';
 import {
   AlertCircle,
@@ -12,6 +12,7 @@ import {
 import { apiClient } from '../../lib/apiClient.js';
 import { BarcodeScannerModal } from './BarcodeScannerModal.js';
 import { fetchProductByBarcode, ProductBarcodeRecord } from './barcodeApi.js';
+import { createFifoBarcodeQueue, FifoBarcodeQueue } from './barcodeLookupQueue.js';
 import { useHardwareBarcodeScanner } from './useHardwareBarcodeScanner.js';
 import { ProductCatalogReference } from '../../utils/lineItemDraft.js';
 
@@ -48,6 +49,7 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
 
   const [barcodeInput, setBarcodeInput] = useState('');
   const [isLookingUp, setIsLookingUp] = useState(false);
+  const [queuedCount, setQueuedCount] = useState(0);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
 
   const [statusMessage, setStatusMessage] = useState<{
@@ -55,6 +57,8 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
     text: string;
   } | null>(null);
   const [unknownBarcode, setUnknownBarcode] = useState<string | null>(null);
+  const batchHadUnknownRef = useRef(false);
+  const fifoQueueRef = useRef<FifoBarcodeQueue | null>(null);
 
   // Explicit confirmation-gated quick product creation modal state
   const [quickCreateOpen, setQuickCreateOpen] = useState(false);
@@ -66,8 +70,10 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
   const [isCreatingProduct, setIsCreatingProduct] = useState(false);
 
   const applyResolvedProduct = useCallback(
-    (product: ProductBarcodeRecord) => {
-      setUnknownBarcode(null);
+    (product: ProductBarcodeRecord, options?: { preserveBurstUnknown?: boolean }) => {
+      if (!options?.preserveBurstUnknown || !batchHadUnknownRef.current) {
+        setUnknownBarcode(null);
+      }
       const outcome = onProductResolved(product);
       if (outcome.error) {
         setStatusMessage({ type: 'error', text: outcome.error });
@@ -83,34 +89,62 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
     [onProductResolved]
   );
 
+  const applyResolvedProductRef = useRef(applyResolvedProduct);
+  applyResolvedProductRef.current = applyResolvedProduct;
+
+  const getBarcodeQueue = useCallback((): FifoBarcodeQueue => {
+    if (!fifoQueueRef.current) {
+      fifoQueueRef.current = createFifoBarcodeQueue<ProductBarcodeRecord>({
+        lookup: fetchProductByBarcode,
+        onResolved: (_barcode, product) => {
+          applyResolvedProductRef.current(product, { preserveBurstUnknown: true });
+        },
+        onUnknown: (code) => {
+          batchHadUnknownRef.current = true;
+          setUnknownBarcode(code);
+        },
+        onError: (_barcode, err: any) => {
+          setStatusMessage({
+            type: 'error',
+            text: err?.message || 'Error looking up product barcode.',
+          });
+        },
+        onBusyChange: (busy, remainingInQueue) => {
+          setIsLookingUp(busy);
+          setQueuedCount(remainingInQueue);
+          if (!busy && remainingInQueue === 0) {
+            batchHadUnknownRef.current = false;
+          }
+        },
+      });
+    }
+    return fifoQueueRef.current;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      fifoQueueRef.current?.dispose();
+      fifoQueueRef.current = null;
+    };
+  }, []);
+
   const lookupAndApplyBarcode = useCallback(
-    async (rawCode: string) => {
+    (rawCode: string): Promise<void> => {
       const code = rawCode.trim();
-      if (!code) return;
+      if (!code) return Promise.resolve();
 
       // Clear input immediately so rapid hardware scanner bursts never concatenate
       setBarcodeInput('');
-      setIsLookingUp(true);
-      setStatusMessage(null);
-      setUnknownBarcode(null);
-
-      try {
-        const product = await fetchProductByBarcode(code);
-        if (product) {
-          applyResolvedProduct(product);
-        } else {
-          setUnknownBarcode(code);
-        }
-      } catch (err: any) {
-        setStatusMessage({
-          type: 'error',
-          text: err?.message || 'Error looking up product barcode.',
-        });
-      } finally {
-        setIsLookingUp(false);
+      const queue = getBarcodeQueue();
+      if (!queue.isBusy()) {
+        batchHadUnknownRef.current = false;
+        setStatusMessage(null);
+        setUnknownBarcode(null);
       }
+
+      return queue.enqueue(code);
     },
-    [applyResolvedProduct]
+    [getBarcodeQueue]
   );
 
   useHardwareBarcodeScanner({
@@ -120,7 +154,7 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
       if (typeof document !== 'undefined' && document.activeElement === inputRef.current) {
         return;
       }
-      lookupAndApplyBarcode(scannedCode);
+      void lookupAndApplyBarcode(scannedCode);
     },
   });
 
@@ -128,7 +162,7 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
     if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (barcodeInput.trim() && !isLookingUp) {
+      if (barcodeInput.trim()) {
         void lookupAndApplyBarcode(barcodeInput);
       }
     }
@@ -207,7 +241,7 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
 
         <button
           type="button"
-          disabled={isLookingUp || !barcodeInput.trim()}
+          disabled={!barcodeInput.trim()}
           onClick={() => lookupAndApplyBarcode(barcodeInput)}
           className="neu-btn-secondary text-xs px-3 py-1.5 font-bold inline-flex items-center gap-1.5 disabled:opacity-50 w-full sm:w-auto justify-center"
         >
@@ -216,7 +250,7 @@ export const BillingBarcodeControls: React.FC<BillingBarcodeControlsProps> = ({
           ) : (
             <Barcode className="w-3.5 h-3.5 text-[var(--khata-accent)]" />
           )}
-          <span>Lookup Barcode</span>
+          <span>{queuedCount > 0 ? `Lookup (${queuedCount} queued)` : 'Lookup Barcode'}</span>
         </button>
 
         <button

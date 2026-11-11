@@ -18,6 +18,10 @@ import {
   normalizeSupplierInvoiceNumber,
   normalizeSupplierName,
   normalizeSupplierPhone,
+  extractAndValidateIdempotencyKey,
+  normalizeTransactionReference,
+  reversePaymentAllocationSchema,
+  reversePaymentSchema,
   supplierStatementQuerySchema,
 } from '../src/modules/suppliers/suppliers.validation.js';
 import { suppliersService, SupplierStatementResponse } from '../src/modules/suppliers/suppliers.service.js';
@@ -265,6 +269,7 @@ describe('Suppliers Accounting, Validation, Security & API Test Suite', () => {
       openingBalance: '0.00',
       periodPurchases: '500.00',
       periodPayments: '0.00',
+      periodReversals: '0.00',
       closingBalance: '500.00',
       entries: [
         {
@@ -354,5 +359,237 @@ describe('Suppliers Accounting, Validation, Security & API Test Suite', () => {
 
     expect(deleteRes.status).toBe(409);
     expect(deleteRes.body.code).toBe('SUPPLIER_HAS_FINANCIAL_HISTORY');
+  });
+
+  it('9. Builds statement ledger with payment reversals & priorReversals and formats CSV reversal rows cleanly', () => {
+    const ledger = buildSupplierStatementLedger(
+      '1500.00',
+      '1000.00',
+      [
+        {
+          entryType: 'purchase_bill',
+          entryDate: '2026-04-02',
+          sortOrder: 0,
+          id: 1,
+          referenceNumber: 'BILL-01',
+          description: 'Purchase Bill BILL-01',
+          amount: '500.00',
+          billStatus: 'unpaid',
+        },
+        {
+          entryType: 'payment',
+          entryDate: '2026-04-05',
+          sortOrder: 1,
+          id: 2,
+          referenceNumber: 'SUP-PAY-0002',
+          description: 'UPI Payment',
+          amount: '300.00',
+          paymentMethod: 'upi',
+          paymentStatus: 'reversed',
+        },
+        {
+          entryType: 'payment_reversal',
+          entryDate: '2026-04-05',
+          sortOrder: 2,
+          id: 2,
+          referenceNumber: 'REV-SUP-PAY-0002',
+          description: 'Payment Reversal of SUP-PAY-0002',
+          amount: '300.00',
+          paymentMethod: 'upi',
+          paymentStatus: 'reversed',
+          reversalReason: 'UPI bounced',
+          originalPaymentReceipt: 'SUP-PAY-0002',
+        },
+      ],
+      '400.00'
+    );
+
+    // Opening = 1500 - 1000 + 400 = 900.00
+    expect(ledger.openingBalance).toBe('900.00');
+    expect(ledger.periodPurchases).toBe('500.00');
+    expect(ledger.periodPayments).toBe('300.00');
+    expect(ledger.periodReversals).toBe('300.00');
+    expect(ledger.closingBalance).toBe('1400.00');
+    expect(ledger.entries.map((e) => e.entryType)).toEqual([
+      'purchase_bill',
+      'payment',
+      'payment_reversal',
+    ]);
+    expect(ledger.entries[2].debitAmount).toBe('300.00');
+    expect(ledger.entries[2].creditAmount).toBe('0.00');
+    expect(ledger.entries[2].runningBalance).toBe('1400.00');
+
+    const csv = suppliersService.formatStatementCsv({
+      supplier: {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'Shree Traders',
+        contactPerson: null,
+        phone: null,
+        email: null,
+        address: null,
+        state: null,
+        stateCode: null,
+        gstin: null,
+        notes: null,
+        archivedAt: null,
+        createdAt: '2026-04-01T00:00:00.000Z',
+        updatedAt: '2026-04-01T00:00:00.000Z',
+        billCount: 1,
+        paymentCount: 0,
+        totalPurchases: '2000.00',
+        totalPayments: '600.00',
+        allocatedPayments: '0.00',
+        unallocatedPayments: '600.00',
+        outstandingPayable: '1400.00',
+        advanceBalance: '0.00',
+        netBalance: '1400.00',
+      },
+      filters: { fromDate: '2026-04-01', toDate: '2026-04-30' },
+      ...ledger,
+    });
+    expect(csv).toContain('"Payment Reversal"');
+    expect(csv).toContain('"REV-SUP-PAY-0002"');
+  });
+
+  it('10. Validates reversal schemas, transaction reference normalizer, and Idempotency-Key extraction', () => {
+    expect(reversePaymentSchema.safeParse({ reason: '   ' }).success).toBe(false);
+    expect(reversePaymentSchema.safeParse({ reason: 'Bounced cheque' }).success).toBe(true);
+    expect(reversePaymentAllocationSchema.safeParse({ amount: '0', reason: 'Fix' }).success).toBe(false);
+    expect(reversePaymentAllocationSchema.safeParse({ amount: '250.50', reason: 'Split' }).success).toBe(true);
+
+    expect(normalizeTransactionReference('  UTR-12345  ')).toBe('UTR-12345');
+    expect(normalizeTransactionReference('   ')).toBeNull();
+    expect(normalizeTransactionReference(null)).toBeNull();
+
+    expect(() => extractAndValidateIdempotencyKey(undefined, true)).toThrowError(
+      expect.objectContaining({ code: 'IDEMPOTENCY_KEY_REQUIRED', status: 400 })
+    );
+    expect(() => extractAndValidateIdempotencyKey('bad key!', true)).toThrowError(
+      expect.objectContaining({ code: 'INVALID_IDEMPOTENCY_KEY', status: 400 })
+    );
+    expect(() => extractAndValidateIdempotencyKey(['k1', 'k2'], true)).toThrowError(
+      expect.objectContaining({ code: 'INVALID_IDEMPOTENCY_KEY', status: 400 })
+    );
+    expect(extractAndValidateIdempotencyKey('  sup_pay:2026-04-10.1  ', true)).toBe('sup_pay:2026-04-10.1');
+  });
+
+  it('11. Enforces auth (401), Idempotency-Key (400), and validation rules across payment & reversal endpoints', async () => {
+    const unauthRoutes = [
+      '/api/v1/suppliers/payments/1/allocate',
+      '/api/v1/suppliers/payments/1/reverse',
+      '/api/v1/suppliers/payments/1/allocations/2/reverse',
+    ];
+    for (const url of unauthRoutes) {
+      const res = await request(app).post(url).send({});
+      expect(res.status).toBe(401);
+    }
+
+    const missingKeyPay = await request(app)
+      .post('/api/v1/suppliers/payments')
+      .set('Cookie', authCookie)
+      .set('x-csrf-token', csrfToken)
+      .send({
+        supplierId: '11111111-1111-4111-8111-111111111111',
+        amount: '100.00',
+        paymentMethod: 'cash',
+      });
+    expect(missingKeyPay.status).toBe(400);
+    expect(missingKeyPay.body.code).toBe('IDEMPOTENCY_KEY_REQUIRED');
+
+    const badKeyAlloc = await request(app)
+      .post('/api/v1/suppliers/payments/1/allocate')
+      .set('Cookie', authCookie)
+      .set('x-csrf-token', csrfToken)
+      .set('Idempotency-Key', 'short')
+      .send({ allocations: [{ purchaseBillId: 1, amount: '50.00' }] });
+    expect(badKeyAlloc.status).toBe(400);
+    expect(badKeyAlloc.body.code).toBe('INVALID_IDEMPOTENCY_KEY');
+
+    const missingKeyReverse = await request(app)
+      .post('/api/v1/suppliers/payments/1/reverse')
+      .set('Cookie', authCookie)
+      .set('x-csrf-token', csrfToken)
+      .send({ reason: 'Wrong amount' });
+    expect(missingKeyReverse.status).toBe(400);
+    expect(missingKeyReverse.body.code).toBe('IDEMPOTENCY_KEY_REQUIRED');
+
+    const badBodyReverse = await request(app)
+      .post('/api/v1/suppliers/payments/1/reverse')
+      .set('Cookie', authCookie)
+      .set('x-csrf-token', csrfToken)
+      .set('Idempotency-Key', 'valid-key-rev-0001')
+      .send({ reason: '   ' });
+    expect(badBodyReverse.status).toBe(400);
+    expect(badBodyReverse.body.code).toBe('VALIDATION_ERROR');
+
+    const badBodyAllocRev = await request(app)
+      .post('/api/v1/suppliers/payments/1/allocations/2/reverse')
+      .set('Cookie', authCookie)
+      .set('x-csrf-token', csrfToken)
+      .set('Idempotency-Key', 'valid-key-arev-0001')
+      .send({ amount: '0', reason: 'Fix' });
+    expect(badBodyAllocRev.status).toBe(400);
+    expect(badBodyAllocRev.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('12. Returns 409 SUPPLIER_PAYMENT_REFERENCE_DUPLICATE and PAYMENT_ALREADY_REVERSED on conflicted requests', async () => {
+    const dupRefClient = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM suppliers WHERE id = $1')) {
+          return { rows: [{ id: '11111111-1111-4111-8111-111111111111', archived_at: null }], rowCount: 1 };
+        }
+        if (sql.includes('FROM supplier_payments') && sql.includes('LOWER(BTRIM(transaction_reference))')) {
+          return { rows: [{ id: 55, receipt_number: 'SUP-PAY-0005' }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    vi.spyOn(appPool, 'connect').mockResolvedValueOnce(dupRefClient as any);
+
+    const dupRes = await request(app)
+      .post('/api/v1/suppliers/payments')
+      .set('Cookie', authCookie)
+      .set('x-csrf-token', csrfToken)
+      .set('Idempotency-Key', 'dup-ref-check-0001')
+      .send({
+        supplierId: '11111111-1111-4111-8111-111111111111',
+        amount: '500.00',
+        paymentMethod: 'upi',
+        transactionReference: 'UTR-999111',
+      });
+    expect(dupRes.status).toBe(409);
+    expect(dupRes.body.code).toBe('SUPPLIER_PAYMENT_REFERENCE_DUPLICATE');
+
+    const alreadyReversedClient = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM supplier_payments') && sql.includes('FOR UPDATE')) {
+          return {
+            rows: [
+              {
+                id: 55,
+                receipt_number: 'SUP-PAY-0005',
+                supplier_id: '11111111-1111-4111-8111-111111111111',
+                amount: '500.00',
+                status: 'reversed',
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn(),
+    };
+    vi.spyOn(appPool, 'connect').mockResolvedValueOnce(alreadyReversedClient as any);
+
+    const revRes = await request(app)
+      .post('/api/v1/suppliers/payments/55/reverse')
+      .set('Cookie', authCookie)
+      .set('x-csrf-token', csrfToken)
+      .set('Idempotency-Key', 'rev-twice-check-0001')
+      .send({ reason: 'Duplicate check' });
+    expect(revRes.status).toBe(409);
+    expect(revRes.body.code).toBe('PAYMENT_ALREADY_REVERSED');
   });
 });

@@ -49,11 +49,16 @@ router.post(
 router.get('/purchase-bills/:billId/attachment', suppliersController.streamPurchaseBillAttachment);
 router.delete('/purchase-bills/:billId/attachment', suppliersController.deletePurchaseBillAttachment);
 
-// Supplier payments & advance allocations
+// Supplier payments, advance allocations & reversals
 router.get('/payments', suppliersController.listPayments);
 router.post('/payments', suppliersController.createPayment);
 router.get('/payments/:paymentId', suppliersController.getPayment);
 router.post('/payments/:paymentId/allocate', suppliersController.allocateAdvance);
+router.post('/payments/:paymentId/reverse', suppliersController.reversePayment);
+router.post(
+  '/payments/:paymentId/allocations/:allocationId/reverse',
+  suppliersController.reversePaymentAllocation
+);
 
 // Supplier master CRUD, archive/restore, and statements
 router.get('/', suppliersController.listSuppliers);

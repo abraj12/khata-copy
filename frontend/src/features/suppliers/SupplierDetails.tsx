@@ -283,29 +283,52 @@ export const SupplierDetails: React.FC<SupplierDetailsProps> = ({
             </p>
           ) : (
             <div className="space-y-2">
-              {payments.slice(0, 8).map((p) => (
-                <div
-                  key={p.id}
-                  className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/30 border border-[var(--khata-border)]/60 flex items-center justify-between gap-2 text-xs"
-                >
-                  <div>
-                    <div className="font-bold font-mono text-[var(--khata-text)]">
-                      {p.receiptNumber}
+              {payments.slice(0, 8).map((p) => {
+                const isReversed = p.status === 'reversed';
+                return (
+                  <div
+                    key={p.id}
+                    className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/30 border border-[var(--khata-border)]/60 flex items-center justify-between gap-2 text-xs"
+                  >
+                    <div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-bold font-mono text-[var(--khata-text)]">
+                          {p.receiptNumber}
+                        </span>
+                        {isReversed && (
+                          <span className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600 dark:text-rose-400 text-[9px] font-bold uppercase">
+                            Reversed
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-[var(--khata-text-muted)]">
+                        {p.paymentDate} · {p.paymentMethod.replace('_', ' ').toUpperCase()}
+                      </div>
                     </div>
-                    <div className="text-[11px] text-[var(--khata-text-muted)]">
-                      {p.paymentDate} · {p.paymentMethod.replace('_', ' ').toUpperCase()}
+                    <div className="text-right">
+                      {isReversed ? (
+                        <>
+                          <div className="font-mono font-bold line-through text-[var(--khata-text-muted)]">
+                            {formatAbsRupees(p.amount)}
+                          </div>
+                          <div className="text-[10px] font-bold text-rose-600 dark:text-rose-400">
+                            {p.reversalNumber || 'Reversed'}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                            {formatAbsRupees(p.amount)}
+                          </div>
+                          <div className="text-[10px] text-[var(--khata-text-muted)]">
+                            Unallocated: {formatAbsRupees(p.unallocatedAmount)}
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
-                  <div className="text-right">
-                    <div className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                      {formatAbsRupees(p.amount)}
-                    </div>
-                    <div className="text-[10px] text-[var(--khata-text-muted)]">
-                      Unallocated: {formatAbsRupees(p.unallocatedAmount)}
-                    </div>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

@@ -13,6 +13,7 @@ import type {
   CreatePurchaseBillPayload,
   CreateSupplierPaymentPayload,
   CreateSupplierPayload,
+  PaginationMeta,
   PurchaseBillDetail,
   PurchaseBillSummary,
   SupplierDashboardData,
@@ -24,6 +25,45 @@ import type {
 } from './suppliers.types.js';
 
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
+
+const IDEMPOTENCY_KEY_REGEX = /^[A-Za-z0-9._:-]{8,128}$/;
+
+export function createSupplierIdempotencyKey(prefix = 'sup'): string {
+  const safePrefix = prefix.replace(/[^A-Za-z0-9._:-]/g, '').slice(0, 16) || 'sup';
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${safePrefix}_${crypto.randomUUID()}`;
+  }
+  return `${safePrefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function isValidIdempotencyKeyFormat(key: string): boolean {
+  return IDEMPOTENCY_KEY_REGEX.test(key.trim());
+}
+
+/**
+ * Collects all paginated records across backend 200-row pages without truncation.
+ */
+export async function fetchAllPages<T>(
+  loadPage: (
+    offset: number,
+    limit: number
+  ) => Promise<{ items: T[]; hasMore: boolean; nextOffset: number | null }>,
+  limit = 200
+): Promise<T[]> {
+  const collected: T[] = [];
+  let offset = 0;
+  let pagesFetched = 0;
+  while (pagesFetched < 200) {
+    pagesFetched += 1;
+    const page = await loadPage(offset, limit);
+    collected.push(...page.items);
+    if (!page.hasMore || page.nextOffset === null || page.items.length === 0) {
+      break;
+    }
+    offset = page.nextOffset;
+  }
+  return collected;
+}
 
 export function formatAbsRupees(value: unknown): string {
   return formatCurrency(safeDecimal(value).abs().toFixed(2));
@@ -119,17 +159,33 @@ export async function listSuppliersApi(params?: {
   search?: string;
   status?: 'active' | 'archived' | 'all';
   limit?: number;
-}): Promise<{ suppliers: SupplierRecord[]; total: number }> {
+  offset?: number;
+}): Promise<{ suppliers: SupplierRecord[]; total: number; pagination?: PaginationMeta }> {
   const qs = new URLSearchParams();
   if (params?.search?.trim()) qs.set('search', params.search.trim());
   if (params?.status) qs.set('status', params.status);
   if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.offset !== undefined && params.offset > 0) qs.set('offset', String(params.offset));
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   const res = await apiClient<{
     success: boolean;
-    data: { suppliers: SupplierRecord[]; total: number };
+    data: { suppliers: SupplierRecord[]; total: number; pagination?: PaginationMeta };
   }>(`/api/v1/suppliers${suffix}`);
   return res.data.data;
+}
+
+export async function listAllSuppliersApi(params?: {
+  search?: string;
+  status?: 'active' | 'archived' | 'all';
+}): Promise<SupplierRecord[]> {
+  return fetchAllPages(async (offset, limit) => {
+    const res = await listSuppliersApi({ ...params, limit, offset });
+    const total = res.total ?? res.suppliers.length;
+    const hasMore = res.pagination?.hasMore ?? offset + res.suppliers.length < total;
+    const nextOffset =
+      res.pagination?.nextOffset ?? (hasMore ? offset + res.suppliers.length : null);
+    return { items: res.suppliers, hasMore, nextOffset };
+  });
 }
 
 export async function getSupplierApi(id: string): Promise<SupplierRecord> {
@@ -191,7 +247,8 @@ export async function listPurchaseBillsApi(params?: {
   toDate?: string;
   openOnly?: boolean;
   limit?: number;
-}): Promise<{ purchaseBills: PurchaseBillSummary[]; total: number }> {
+  offset?: number;
+}): Promise<{ purchaseBills: PurchaseBillSummary[]; total: number; pagination?: PaginationMeta }> {
   const qs = new URLSearchParams();
   if (params?.supplierId) qs.set('supplierId', params.supplierId);
   if (params?.status) qs.set('status', params.status);
@@ -200,12 +257,31 @@ export async function listPurchaseBillsApi(params?: {
   if (params?.toDate) qs.set('toDate', params.toDate);
   if (params?.openOnly) qs.set('openOnly', 'true');
   if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.offset !== undefined && params.offset > 0) qs.set('offset', String(params.offset));
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   const res = await apiClient<{
     success: boolean;
-    data: { purchaseBills: PurchaseBillSummary[]; total: number };
+    data: { purchaseBills: PurchaseBillSummary[]; total: number; pagination?: PaginationMeta };
   }>(`/api/v1/suppliers/purchase-bills${suffix}`);
   return res.data.data;
+}
+
+export async function listAllOpenPurchaseBillsForSupplierApi(
+  supplierId: string
+): Promise<PurchaseBillSummary[]> {
+  return fetchAllPages(async (offset, limit) => {
+    const res = await listPurchaseBillsApi({
+      supplierId,
+      openOnly: true,
+      limit,
+      offset,
+    });
+    const total = res.total ?? res.purchaseBills.length;
+    const hasMore = res.pagination?.hasMore ?? offset + res.purchaseBills.length < total;
+    const nextOffset =
+      res.pagination?.nextOffset ?? (hasMore ? offset + res.purchaseBills.length : null);
+    return { items: res.purchaseBills, hasMore, nextOffset };
+  });
 }
 
 export async function getPurchaseBillApi(billId: number): Promise<PurchaseBillDetail> {
@@ -317,20 +393,24 @@ export async function deletePurchaseBillAttachmentApi(
 export async function listSupplierPaymentsApi(params?: {
   supplierId?: string;
   paymentMethod?: SupplierPaymentMethod;
+  status?: 'active' | 'reversed' | 'all';
   fromDate?: string;
   toDate?: string;
   limit?: number;
-}): Promise<{ payments: SupplierPaymentRecord[]; total: number }> {
+  offset?: number;
+}): Promise<{ payments: SupplierPaymentRecord[]; total: number; pagination?: PaginationMeta }> {
   const qs = new URLSearchParams();
   if (params?.supplierId) qs.set('supplierId', params.supplierId);
   if (params?.paymentMethod) qs.set('paymentMethod', params.paymentMethod);
+  if (params?.status) qs.set('status', params.status);
   if (params?.fromDate) qs.set('fromDate', params.fromDate);
   if (params?.toDate) qs.set('toDate', params.toDate);
   if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.offset !== undefined && params.offset > 0) qs.set('offset', String(params.offset));
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   const res = await apiClient<{
     success: boolean;
-    data: { payments: SupplierPaymentRecord[]; total: number };
+    data: { payments: SupplierPaymentRecord[]; total: number; pagination?: PaginationMeta };
   }>(`/api/v1/suppliers/payments${suffix}`);
   return res.data.data;
 }
@@ -343,12 +423,17 @@ export async function getSupplierPaymentApi(paymentId: number): Promise<Supplier
 }
 
 export async function createSupplierPaymentApi(
-  payload: CreateSupplierPaymentPayload
+  payload: CreateSupplierPaymentPayload,
+  idempotencyKey?: string
 ): Promise<SupplierPaymentRecord> {
+  const key = idempotencyKey || createSupplierIdempotencyKey('spay');
   const res = await apiClient<{ success: boolean; data: SupplierPaymentRecord }>(
     '/api/v1/suppliers/payments',
     {
       method: 'POST',
+      headers: {
+        'Idempotency-Key': key,
+      },
       body: JSON.stringify(payload),
     }
   );
@@ -357,13 +442,57 @@ export async function createSupplierPaymentApi(
 
 export async function allocateSupplierAdvanceApi(
   paymentId: number,
-  allocations: Array<{ purchaseBillId: number; amount: string | number }>
+  allocations: Array<{ purchaseBillId: number; amount: string | number }>,
+  idempotencyKey?: string
 ): Promise<SupplierPaymentRecord> {
+  const key = idempotencyKey || createSupplierIdempotencyKey('salloc');
   const res = await apiClient<{ success: boolean; data: SupplierPaymentRecord }>(
     `/api/v1/suppliers/payments/${paymentId}/allocate`,
     {
       method: 'POST',
+      headers: {
+        'Idempotency-Key': key,
+      },
       body: JSON.stringify({ allocations }),
+    }
+  );
+  return res.data.data;
+}
+
+export async function reverseSupplierPaymentApi(
+  paymentId: number,
+  reason: string,
+  idempotencyKey?: string
+): Promise<SupplierPaymentRecord> {
+  const key = idempotencyKey || createSupplierIdempotencyKey('srev');
+  const res = await apiClient<{ success: boolean; data: SupplierPaymentRecord }>(
+    `/api/v1/suppliers/payments/${paymentId}/reverse`,
+    {
+      method: 'POST',
+      headers: {
+        'Idempotency-Key': key,
+      },
+      body: JSON.stringify({ reason }),
+    }
+  );
+  return res.data.data;
+}
+
+export async function reverseSupplierAllocationApi(
+  paymentId: number,
+  allocationId: number,
+  payload: { amount: string | number; reason: string },
+  idempotencyKey?: string
+): Promise<SupplierPaymentRecord> {
+  const key = idempotencyKey || createSupplierIdempotencyKey('sarev');
+  const res = await apiClient<{ success: boolean; data: SupplierPaymentRecord }>(
+    `/api/v1/suppliers/payments/${paymentId}/allocations/${allocationId}/reverse`,
+    {
+      method: 'POST',
+      headers: {
+        'Idempotency-Key': key,
+      },
+      body: JSON.stringify(payload),
     }
   );
   return res.data.data;

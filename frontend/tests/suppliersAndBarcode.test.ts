@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   applyCatalogProductToDraftLine,
   DraftLineBase,
@@ -9,7 +9,10 @@ import {
 import {
   computeAutoFifoBillAllocations,
   computeDraftPurchaseBillTotals,
+  createSupplierIdempotencyKey,
+  fetchAllPages,
   formatAbsRupees,
+  isValidIdempotencyKeyFormat,
 } from '../src/features/suppliers/suppliersApi.js';
 
 interface TestBillingLine extends DraftLineBase {
@@ -151,5 +154,42 @@ describe('Supplier Management & Billing Barcode Frontend Unit Tests', () => {
     expect(formatAbsRupees('-1250')).toBe('₹1,250.00');
     expect(formatAbsRupees('0')).toBe('₹0.00');
     expect(formatAbsRupees('254321.5')).toBe('₹2,54,321.50');
+  });
+
+  it('7. Generates compliant Idempotency-Key tokens and rejects malformed keys', () => {
+    const k1 = createSupplierIdempotencyKey('sup-pay');
+    const k2 = createSupplierIdempotencyKey('sup-pay');
+    expect(k1).not.toBe(k2);
+    expect(k1.startsWith('sup-pay_')).toBe(true);
+    expect(isValidIdempotencyKeyFormat(k1)).toBe(true);
+
+    expect(isValidIdempotencyKeyFormat('abc')).toBe(false);
+    expect(isValidIdempotencyKeyFormat('bad key with spaces')).toBe(false);
+    expect(isValidIdempotencyKeyFormat('a'.repeat(129))).toBe(false);
+    expect(isValidIdempotencyKeyFormat('sup_rev:2026-04-10.1')).toBe(true);
+  });
+
+  it('8. Fetches all pages via fetchAllPages across >200 records without truncation', async () => {
+    const totalRecords = Array.from({ length: 450 }, (_, idx) => ({ id: idx + 1 }));
+    const loadPage = vi.fn(async (offset: number, limit: number) => {
+      const items = totalRecords.slice(offset, offset + limit);
+      const nextOffset = offset + items.length;
+      const hasMore = nextOffset < totalRecords.length;
+      return {
+        items,
+        hasMore,
+        nextOffset: hasMore ? nextOffset : null,
+      };
+    });
+
+    const collected = await fetchAllPages(loadPage, 200);
+
+    expect(loadPage).toHaveBeenCalledTimes(3);
+    expect(loadPage).toHaveBeenNthCalledWith(1, 0, 200);
+    expect(loadPage).toHaveBeenNthCalledWith(2, 200, 200);
+    expect(loadPage).toHaveBeenNthCalledWith(3, 400, 200);
+    expect(collected).toHaveLength(450);
+    expect(collected[0]).toEqual({ id: 1 });
+    expect(collected[449]).toEqual({ id: 450 });
   });
 });

@@ -4,6 +4,15 @@ import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useHardwareBarcodeScanner } from '../src/features/barcode/useHardwareBarcodeScanner.js';
+import { createFifoBarcodeQueue } from '../src/features/barcode/barcodeLookupQueue.js';
+import { BillingBarcodeControls } from '../src/features/barcode/BillingBarcodeControls.js';
+import { upsertScannedProductLine, DraftLineBase, ProductCatalogReference } from '../src/utils/lineItemDraft.js';
+import * as barcodeApi from '../src/features/barcode/barcodeApi.js';
+
+vi.mock('../src/features/barcode/barcodeApi.js', () => ({
+  fetchProductByBarcode: vi.fn(),
+  updateProductBarcode: vi.fn(),
+}));
 
 describe('useHardwareBarcodeScanner Hook & Integration Test Suite', () => {
   let container: HTMLDivElement | null = null;
@@ -160,5 +169,265 @@ describe('useHardwareBarcodeScanner Hook & Integration Test Suite', () => {
 
     expect(onScan).not.toHaveBeenCalled();
     vi.restoreAllMocks();
+  });
+});
+
+interface MockLine extends DraftLineBase {
+  localId: string;
+}
+
+const makeBlankMockLine = (): MockLine => ({
+  localId: 'blank-' + Math.random().toString(36).slice(2, 7),
+  productId: null,
+  description: '',
+  hsnCode: '',
+  barcode: '',
+  quantity: '1',
+  rate: '',
+  buyingPriceReference: null,
+});
+
+function createDeferred<T>() {
+  let resolve!: (val: T) => void;
+  let reject!: (err: any) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe('FIFO Barcode Queue, Synchronous State Commit & BillingBarcodeControls Burst Tests', () => {
+  let container: HTMLDivElement | null = null;
+  let root: any = null;
+
+  beforeEach(() => {
+    vi.mocked(barcodeApi.fetchProductByBarcode).mockReset();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    if (root) {
+      act(() => {
+        root.unmount();
+      });
+    }
+    if (container && container.parentNode) {
+      container.parentNode.removeChild(container);
+    }
+    container = null;
+    root = null;
+    vi.restoreAllMocks();
+  });
+
+  it('6. Strictly serializes rapid scans in FIFO order even when slower first lookup resolves after faster second lookup', async () => {
+    const deferredA = createDeferred<any>();
+    const deferredB = createDeferred<any>();
+    const resolvedOrder: string[] = [];
+    const busyStates: Array<{ busy: boolean; remaining: number }> = [];
+
+    const queue = createFifoBarcodeQueue({
+      lookup: async (code) => {
+        if (code === 'CODE-A') return deferredA.promise;
+        if (code === 'CODE-B') return deferredB.promise;
+        return null;
+      },
+      onResolved: (code) => {
+        resolvedOrder.push(code);
+      },
+      onUnknown: vi.fn(),
+      onError: vi.fn(),
+      onBusyChange: (busy, remaining) => {
+        busyStates.push({ busy, remaining });
+      },
+    });
+
+    const pA = queue.enqueue('CODE-A');
+    const pB = queue.enqueue('CODE-B');
+    // CODE-A immediately starts in-flight while CODE-B waits in queue
+    expect(queue.getPendingCount()).toBe(1);
+    expect(queue.isBusy()).toBe(true);
+
+    // Resolve CODE-B first even though CODE-A was scanned first
+    deferredB.resolve({ id: 2, name: 'Second Product', buying_price: '20.00' });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Must still wait for CODE-A to complete before applying CODE-B
+    expect(resolvedOrder).toEqual([]);
+
+    deferredA.resolve({ id: 1, name: 'First Product', buying_price: '10.00' });
+    await Promise.all([pA, pB]);
+
+    expect(resolvedOrder).toEqual(['CODE-A', 'CODE-B']);
+    expect(queue.isBusy()).toBe(false);
+    expect(queue.getPendingCount()).toBe(0);
+    expect(busyStates[busyStates.length - 1]).toEqual({ busy: false, remaining: 0 });
+  });
+
+  it('7. Routes unknown and known scans in the same rapid burst without dropping unknown callback', async () => {
+    const unknownCodes: string[] = [];
+    const resolvedNames: string[] = [];
+
+    const queue = createFifoBarcodeQueue({
+      lookup: async (code) => {
+        if (code === 'UNKNOWN-1') return null;
+        return { id: 9, name: 'Copper Wire 1.5mm', buying_price: '88.00' };
+      },
+      onResolved: (_code, prod: any) => resolvedNames.push(prod.name),
+      onUnknown: (code) => unknownCodes.push(code),
+      onError: vi.fn(),
+    });
+
+    await Promise.all([queue.enqueue('UNKNOWN-1'), queue.enqueue('KNOWN-2')]);
+
+    expect(unknownCodes).toEqual(['UNKNOWN-1']);
+    expect(resolvedNames).toEqual(['Copper Wire 1.5mm']);
+  });
+
+  it('8. Synchronous itemsRef + commitItems updater prevents stale closure data loss across 3 rapid consecutive scans', () => {
+    const itemsRef = { current: [makeBlankMockLine()] };
+    let renderedItems = itemsRef.current;
+
+    const commitItems = (updater: (prev: MockLine[]) => MockLine[]) => {
+      const next = updater(itemsRef.current);
+      itemsRef.current = next;
+      renderedItems = next;
+      return next;
+    };
+
+    const prod1: ProductCatalogReference = {
+      id: 101,
+      name: 'LED Bulb 9W',
+      buying_price: '45.00',
+      hsn_code: '8539',
+      barcode: '890000101',
+    };
+    const prod2: ProductCatalogReference = {
+      id: 102,
+      name: 'MCB Switch 16A',
+      buying_price: '110.00',
+      hsn_code: '8536',
+      barcode: '890000102',
+    };
+
+    // Three scans finish in the same JS turn before any React re-render occurs
+    commitItems((prev) => upsertScannedProductLine(prev, prod1, makeBlankMockLine).nextLines);
+    commitItems((prev) => upsertScannedProductLine(prev, prod2, makeBlankMockLine).nextLines);
+    commitItems((prev) => upsertScannedProductLine(prev, prod1, makeBlankMockLine).nextLines);
+
+    expect(renderedItems).toHaveLength(2);
+    expect(renderedItems[0]).toMatchObject({
+      productId: 101,
+      quantity: '2',
+      rate: '',
+      buyingPriceReference: '45.00',
+    });
+    expect(renderedItems[1]).toMatchObject({
+      productId: 102,
+      quantity: '1',
+      rate: '',
+      buyingPriceReference: '110.00',
+    });
+  });
+
+  it('9. BillingBarcodeControls preserves Unknown Barcode banner during [unknown, known] burst and stops cleanly on unmount', async () => {
+    const d1 = createDeferred<any>();
+    const d2 = createDeferred<any>();
+    vi.mocked(barcodeApi.fetchProductByBarcode)
+      .mockImplementationOnce(() => d1.promise)
+      .mockImplementationOnce(() => d2.promise);
+
+    const resolvedProducts: ProductCatalogReference[] = [];
+    const linesRef = { current: [makeBlankMockLine()] };
+
+    const handleResolved = (product: ProductCatalogReference) => {
+      resolvedProducts.push(product);
+      const outcome = upsertScannedProductLine(linesRef.current, product, makeBlankMockLine);
+      linesRef.current = outcome.nextLines;
+      return { action: outcome.action, error: outcome.error };
+    };
+
+    act(() => {
+      root.render(
+        React.createElement(BillingBarcodeControls, {
+          onProductResolved: handleResolved,
+          enableGlobalScanner: true,
+        })
+      );
+    });
+
+    // Simulate two rapid hardware scanner scans: UNK-999 then OK-200
+    const sendScan = (code: string) => {
+      let now = 2000000;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      for (const ch of code) {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
+        now += 10;
+      }
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      nowSpy.mockRestore();
+    };
+
+    act(() => {
+      sendScan('UNK-999');
+      sendScan('OK-200');
+    });
+
+    // Queue indicator should reflect queued count without locking controls
+    expect(barcodeApi.fetchProductByBarcode).toHaveBeenCalledTimes(1);
+    expect(barcodeApi.fetchProductByBarcode).toHaveBeenCalledWith('UNK-999');
+
+    // First scan finishes as unknown (null), second scan resolves to a known product
+    await act(async () => {
+      d1.resolve(null);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(barcodeApi.fetchProductByBarcode).toHaveBeenCalledTimes(2);
+    expect(barcodeApi.fetchProductByBarcode).toHaveBeenNthCalledWith(2, 'OK-200');
+
+    await act(async () => {
+      d2.resolve({
+        id: 77,
+        name: 'PVC Tape Roll',
+        buying_price: '12.50',
+        hsn_code: '3919',
+        barcode: 'OK-200',
+        created_at: '2026-04-01T00:00:00.000Z',
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Both outcomes must be preserved: OK-200 added AND UNK-999 banner visible
+    expect(resolvedProducts).toHaveLength(1);
+    expect(resolvedProducts[0].name).toBe('PVC Tape Roll');
+    expect(container?.textContent).toContain('Unknown Barcode');
+    expect(container?.textContent).toContain('UNK-999');
+
+    // Also test dispose on unmount with an in-flight lookup
+    const d3 = createDeferred<any>();
+    vi.mocked(barcodeApi.fetchProductByBarcode).mockImplementationOnce(() => d3.promise);
+    act(() => {
+      sendScan('LATE-300');
+    });
+    act(() => {
+      root.unmount();
+    });
+    root = null;
+    await act(async () => {
+      d3.resolve({
+        id: 78,
+        name: 'Late Product',
+        buying_price: '5.00',
+        created_at: '2026-04-01T00:00:00.000Z',
+      });
+      await Promise.resolve();
+    });
+    expect(resolvedProducts).toHaveLength(1);
   });
 });

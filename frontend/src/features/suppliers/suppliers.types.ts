@@ -110,6 +110,25 @@ export interface PurchaseBillHistoryRecord {
   createdAt: string;
 }
 
+export interface PaginationMeta {
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  nextOffset: number | null;
+}
+
+export interface SupplierSnapshot {
+  id: string;
+  name: string;
+  contactPerson: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  state: string | null;
+  stateCode: string | null;
+  gstin: string | null;
+}
+
 export interface PurchaseBillSummary {
   id: number;
   supplierId: string;
@@ -139,6 +158,8 @@ export interface PurchaseBillSummary {
   cancelledAt: string | null;
   cancellationReason: string | null;
   itemCount: number;
+  supplierSnapshot: SupplierSnapshot | null;
+  supplierSnapshotSource: 'snapshot' | 'legacy_live_fallback';
   createdAt: string;
   updatedAt: string;
 }
@@ -154,7 +175,10 @@ export interface PurchaseBillDetail extends PurchaseBillSummary {
     receiptNumber: string;
     paymentDate: string;
     paymentMethod: string;
+    paymentStatus: 'active' | 'reversed';
     transactionReference: string | null;
+    originalAllocatedAmount: string;
+    reversedAllocationAmount: string;
     allocatedAmount: string;
   }>;
   history: PurchaseBillHistoryRecord[];
@@ -169,6 +193,18 @@ export interface SupplierPaymentAllocationRecord {
   invoiceDate: string;
   billGrandTotal: string;
   amount: string;
+  originalAmount: string;
+  reversedAmount: string;
+}
+
+export interface SupplierAllocationReversalRecord {
+  id: number;
+  allocationId: number;
+  purchaseBillId: number;
+  invoiceNumber: string;
+  reversedAmount: string;
+  reason: string;
+  createdAt: string;
 }
 
 export interface SupplierPaymentRecord {
@@ -182,14 +218,20 @@ export interface SupplierPaymentRecord {
   supplierArchivedAt: string | null;
   paymentDate: string;
   amount: string;
+  effectiveAmount: string;
   allocatedAmount: string;
   unallocatedAmount: string;
+  status: 'active' | 'reversed';
+  reversedAt: string | null;
+  reversalReason: string | null;
+  reversalNumber: string | null;
   paymentMethod: SupplierPaymentMethod;
   transactionReference: string | null;
   notes: string | null;
   createdAt: string;
   updatedAt: string;
   allocations: SupplierPaymentAllocationRecord[];
+  allocationReversals?: SupplierAllocationReversalRecord[];
   supplierSummary?: SupplierBalanceSummary;
 }
 
@@ -207,7 +249,7 @@ export interface CreateSupplierPaymentPayload {
 }
 
 export interface SupplierStatementEntry {
-  entryType: 'purchase_bill' | 'payment';
+  entryType: 'purchase_bill' | 'payment' | 'payment_reversal';
   entryDate: string;
   sortOrder: number;
   id: number;
@@ -216,6 +258,9 @@ export interface SupplierStatementEntry {
   amount: string;
   paymentMethod?: string | null;
   transactionReference?: string | null;
+  paymentStatus?: 'active' | 'reversed' | null;
+  reversalReason?: string | null;
+  originalPaymentReceipt?: string | null;
   billStatus?: string | null;
   billPaidAmount?: string | null;
   billRemainingAmount?: string | null;
@@ -235,6 +280,7 @@ export interface SupplierStatementData {
   openingBalance: string;
   periodPurchases: string;
   periodPayments: string;
+  periodReversals: string;
   closingBalance: string;
   entries: SupplierStatementEntry[];
 }

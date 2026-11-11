@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Decimal from 'decimal.js';
 import {
   FileText,
@@ -78,6 +78,18 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
       amount: '0.00',
     },
   ]);
+  const itemsRef = useRef<QuotationItem[]>(items);
+
+  const commitItems = useCallback(
+    (updater: QuotationItem[] | ((prev: QuotationItem[]) => QuotationItem[])) => {
+      const next =
+        typeof updater === 'function' ? updater(itemsRef.current) : updater;
+      itemsRef.current = next;
+      setItems(next);
+      return next;
+    },
+    []
+  );
 
   // Product Autocomplete for active item row
   const [productSearchResults, setProductSearchResults] = useState<{ [rowIdx: number]: any[] }>({});
@@ -187,7 +199,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
 
   // Add line item
   const handleAddItem = () => {
-    setItems((prev) => [
+    commitItems((prev) => [
       ...prev,
       {
         description: '',
@@ -204,13 +216,13 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
 
   // Remove line item
   const handleRemoveItem = (index: number) => {
-    if (items.length <= 1) return;
-    setItems((prev) => prev.filter((_, i) => i !== index));
+    if (itemsRef.current.length <= 1) return;
+    commitItems((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
   };
 
   // Update item field
   const handleUpdateItem = (index: number, field: keyof QuotationItem, value: any) => {
-    setItems((prev) => {
+    commitItems((prev) => {
       const next = [...prev];
       const target = { ...next[index], [field]: value };
 
@@ -256,7 +268,7 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
   };
 
   const handleSelectRowProduct = (rowIdx: number, p: any) => {
-    setItems((prev) => {
+    commitItems((prev) => {
       const next = [...prev];
       const qty = new Decimal(String(next[rowIdx].quantity || 1));
       const nextLine = applyCatalogProductToDraftLine(next[rowIdx], p);
@@ -276,46 +288,49 @@ export const QuotationEditor: React.FC<QuotationEditorProps> = ({ onCancel, onSa
   };
 
   // Shared Barcode Resolution Handler (USB/BT Scanner, Manual Entry & Camera Scanner)
-  const handleBarcodeResolved = (product: ProductCatalogReference) => {
-    const normalizedLines = items.map((it) => ({
-      ...it,
-      quantity: String(it.quantity ?? ''),
-      rate: String(it.rate ?? ''),
-    }));
-    const res = upsertScannedProductLine(normalizedLines, product, () => ({
-      productId: null,
-      description: '',
-      hsnCode: '',
-      barcode: '',
-      quantity: '1',
-      unit: 'pcs',
-      rate: '',
-      rateUnit: 'pcs',
-      amount: '0.00',
-    }));
-    if (!res.error) {
-      setItems(
-        res.nextLines.map((line) => {
-          let amt = '0.00';
-          try {
-            const q = new Decimal(String(line.quantity || 0));
-            const r = new Decimal(String(line.rate || 0));
-            amt = q.times(r).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
-          } catch {
-            amt = '0.00';
-          }
-          return {
-            ...line,
-            unit: line.unit || 'pcs',
-            rateUnit: line.rateUnit || 'pcs',
-            amount: amt,
-          };
-        })
-      );
-      setError(null);
-    }
-    return { action: res.action, error: res.error };
-  };
+  const handleBarcodeResolved = useCallback(
+    (product: ProductCatalogReference) => {
+      const normalizedLines = itemsRef.current.map((it) => ({
+        ...it,
+        quantity: String(it.quantity ?? ''),
+        rate: String(it.rate ?? ''),
+      }));
+      const res = upsertScannedProductLine(normalizedLines, product, () => ({
+        productId: null,
+        description: '',
+        hsnCode: '',
+        barcode: '',
+        quantity: '1',
+        unit: 'pcs',
+        rate: '',
+        rateUnit: 'pcs',
+        amount: '0.00',
+      }));
+      if (!res.error) {
+        commitItems(
+          res.nextLines.map((line) => {
+            let amt = '0.00';
+            try {
+              const q = new Decimal(String(line.quantity || 0));
+              const r = new Decimal(String(line.rate || 0));
+              amt = q.times(r).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+            } catch {
+              amt = '0.00';
+            }
+            return {
+              ...line,
+              unit: line.unit || 'pcs',
+              rateUnit: line.rateUnit || 'pcs',
+              amount: amt,
+            };
+          })
+        );
+        setError(null);
+      }
+      return { action: res.action, error: res.error };
+    },
+    [commitItems]
+  );
 
   // Calculate live financial summary with pure Decimal.js
   let subtotalDec = new Decimal(0);

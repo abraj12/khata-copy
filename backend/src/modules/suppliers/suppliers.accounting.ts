@@ -40,15 +40,18 @@ export interface SupplierBalanceSummary {
 }
 
 export interface StatementEntryInput {
-  entryType: 'purchase_bill' | 'payment';
+  entryType: 'purchase_bill' | 'payment' | 'payment_reversal';
   entryDate: string; // YYYY-MM-DD
-  sortOrder: number; // purchase bills (0) before payments (1) on identical date, then id
+  sortOrder: number; // purchase bills (0), payments (1), payment reversals (2) on identical date, then id
   id: number;
   referenceNumber: string;
   description: string;
   amount: number | string;
   paymentMethod?: string | null;
   transactionReference?: string | null;
+  paymentStatus?: 'active' | 'reversed' | null;
+  reversalReason?: string | null;
+  originalPaymentReceipt?: string | null;
   billStatus?: string | null;
   billPaidAmount?: number | string | null;
   billRemainingAmount?: number | string | null;
@@ -57,7 +60,7 @@ export interface StatementEntryInput {
 }
 
 export interface ComputedStatementEntry extends StatementEntryInput {
-  debitAmount: string; // Purchase billed (+ payable)
+  debitAmount: string; // Purchase billed or payment reversed (+ payable)
   creditAmount: string; // Payment made (- payable)
   runningBalance: string; // Net balance after entry (+ payable, - advance)
 }
@@ -66,6 +69,7 @@ export interface SupplierStatementComputation {
   openingBalance: string;
   periodPurchases: string;
   periodPayments: string;
+  periodReversals: string;
   closingBalance: string;
   entries: ComputedStatementEntry[];
 }
@@ -148,10 +152,12 @@ export function computeSupplierAccountSummary(
 export function buildSupplierStatementLedger(
   priorPurchases: number | string,
   priorPayments: number | string,
-  rawEntries: StatementEntryInput[]
+  rawEntries: StatementEntryInput[],
+  priorReversals: number | string = 0
 ): SupplierStatementComputation {
   const opening = new Decimal(priorPurchases || 0)
     .minus(new Decimal(priorPayments || 0))
+    .plus(new Decimal(priorReversals || 0))
     .toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 
   const sorted = [...rawEntries].sort((a, b) => {
@@ -167,11 +173,23 @@ export function buildSupplierStatementLedger(
   let running = opening;
   let periodPurchases = new Decimal(0);
   let periodPayments = new Decimal(0);
+  let periodReversals = new Decimal(0);
 
   const entries: ComputedStatementEntry[] = sorted.map((entry) => {
     const amt = new Decimal(entry.amount || 0).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
     if (entry.entryType === 'purchase_bill') {
       periodPurchases = periodPurchases.plus(amt);
+      running = running.plus(amt).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+      return {
+        ...entry,
+        debitAmount: amt.toFixed(2),
+        creditAmount: '0.00',
+        runningBalance: running.toFixed(2),
+      };
+    }
+
+    if (entry.entryType === 'payment_reversal') {
+      periodReversals = periodReversals.plus(amt);
       running = running.plus(amt).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
       return {
         ...entry,
@@ -195,6 +213,7 @@ export function buildSupplierStatementLedger(
     openingBalance: opening.toFixed(2),
     periodPurchases: periodPurchases.toFixed(2),
     periodPayments: periodPayments.toFixed(2),
+    periodReversals: periodReversals.toFixed(2),
     closingBalance: running.toFixed(2),
     entries,
   };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   FileText,
   History,
@@ -129,6 +129,18 @@ export const NormalBillingView: React.FC = () => {
       rateUnit: '',
     },
   ]);
+  const itemsRef = useRef<FormLineItem[]>(items);
+
+  const commitItems = useCallback(
+    (updater: FormLineItem[] | ((prev: FormLineItem[]) => FormLineItem[])) => {
+      const next =
+        typeof updater === 'function' ? updater(itemsRef.current) : updater;
+      itemsRef.current = next;
+      setItems(next);
+      return next;
+    },
+    []
+  );
 
   const [notes, setNotes] = useState('');
 
@@ -365,7 +377,7 @@ export const NormalBillingView: React.FC = () => {
 
   // Line Items Operations
   const handleAddItem = () => {
-    setItems((prev) => [
+    commitItems((prev) => [
       ...prev,
       {
         id: `item-${Date.now()}`,
@@ -381,14 +393,14 @@ export const NormalBillingView: React.FC = () => {
   };
 
   const handleRemoveItem = (id: string) => {
-    if (items.length === 1) {
+    if (itemsRef.current.length <= 1) {
       return;
     }
-    setItems((prev) => prev.filter((item) => item.id !== id));
+    commitItems((prev) => (prev.length <= 1 ? prev : prev.filter((item) => item.id !== id)));
   };
 
   const handleItemChange = (id: string, field: keyof FormLineItem, value: any) => {
-    setItems((prev) =>
+    commitItems((prev) =>
       prev.map((item) => {
         if (item.id === id) {
           return { ...item, [field]: value };
@@ -399,7 +411,7 @@ export const NormalBillingView: React.FC = () => {
   };
 
   const handleSelectProduct = (itemId: string, product: ProductItem) => {
-    setItems((prev) =>
+    commitItems((prev) =>
       prev.map((item) => {
         if (item.id === itemId) {
           const updated = applyCatalogProductToDraftLine(item, product);
@@ -418,24 +430,27 @@ export const NormalBillingView: React.FC = () => {
     );
   };
 
-  const handleBarcodeResolved = (product: ProductCatalogReference) => {
-    const res = upsertScannedProductLine(items, product, () => ({
-      id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      productId: null,
-      description: '',
-      hsnCode: '',
-      barcode: '',
-      buyingPriceReference: null,
-      quantity: '1',
-      unit: 'pcs',
-      rate: '',
-      rateUnit: '',
-    }));
-    if (!res.error) {
-      setItems(res.nextLines);
-    }
-    return { action: res.action, error: res.error };
-  };
+  const handleBarcodeResolved = useCallback(
+    (product: ProductCatalogReference) => {
+      const res = upsertScannedProductLine(itemsRef.current, product, () => ({
+        id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        productId: null,
+        description: '',
+        hsnCode: '',
+        barcode: '',
+        buyingPriceReference: null,
+        quantity: '1',
+        unit: 'pcs',
+        rate: '',
+        rateUnit: '',
+      }));
+      if (!res.error) {
+        commitItems(res.nextLines);
+      }
+      return { action: res.action, error: res.error };
+    },
+    [commitItems]
+  );
 
   // Pure Decimal Math Calculations (No GST, strictly synchronized with backend Decimal.ROUND_HALF_UP)
   const calculationSummary = useMemo(() => {
@@ -677,7 +692,7 @@ export const NormalBillingView: React.FC = () => {
     const today = getTodayLocalDate();
     setBillDate(today);
     setDateOfSupply(today);
-    setItems([
+    commitItems([
       {
         id: `item-${Date.now()}`,
         productId: null,
@@ -1211,7 +1226,7 @@ export const NormalBillingView: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setItems((prev) =>
+                                  commitItems((prev) =>
                                     prev.map((i) => (i.id === item.id ? { ...i, productId: null } : i))
                                   );
                                 }}

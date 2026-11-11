@@ -12,7 +12,7 @@ import {
   downloadSupplierStatementCsvApi,
   fetchSupplierStatementApi,
   formatAbsRupees,
-  listSuppliersApi,
+  listAllSuppliersApi,
 } from './suppliersApi.js';
 import type { SupplierRecord, SupplierStatementData } from './suppliers.types.js';
 
@@ -45,12 +45,12 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
     (async () => {
       setLoadingSuppliers(true);
       try {
-        // Include archived suppliers so historical statements remain accessible
-        const res = await listSuppliersApi({ status: 'all', limit: 200 });
+        // Include archived suppliers so historical statements remain accessible across all pages
+        const list = await listAllSuppliersApi({ status: 'all' });
         if (!active) return;
-        setSuppliers(res.suppliers);
-        if (!selectedSupplierId && res.suppliers.length > 0) {
-          setSelectedSupplierId(res.suppliers[0].id);
+        setSuppliers(list);
+        if (!selectedSupplierId && list.length > 0) {
+          setSelectedSupplierId(list[0].id);
         }
       } catch (err: any) {
         if (active) setError(err?.message || 'Failed to load suppliers list.');
@@ -290,7 +290,7 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
           </div>
 
           {/* Unified Summary Strip */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             <div className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/40 print:border print:border-slate-200">
               <span className="text-[10px] uppercase font-bold text-[var(--khata-text-muted)] block">
                 Opening Balance
@@ -313,6 +313,14 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
               </span>
               <span className="font-mono font-bold text-sm text-emerald-600 dark:text-emerald-400">
                 {formatAbsRupees(statement.periodPayments)}
+              </span>
+            </div>
+            <div className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/40 print:border print:border-slate-200">
+              <span className="text-[10px] uppercase font-bold text-[var(--khata-text-muted)] block">
+                Reversals (+)
+              </span>
+              <span className="font-mono font-bold text-sm text-amber-700 dark:text-amber-300">
+                {formatAbsRupees(statement.periodReversals || '0.00')}
               </span>
             </div>
             <div className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/40 print:border print:border-slate-200">
@@ -348,7 +356,7 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
                       <th className="py-2.5 px-3">Type</th>
                       <th className="py-2.5 px-3">Reference</th>
                       <th className="py-2.5 px-3">Details</th>
-                      <th className="py-2.5 px-3 text-right">Purchases (+)</th>
+                      <th className="py-2.5 px-3 text-right">Debit (+)</th>
                       <th className="py-2.5 px-3 text-right">Payments (-)</th>
                       <th className="py-2.5 px-3 text-right">Running Balance</th>
                     </tr>
@@ -369,14 +377,25 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
                     )}
 
                     {statement.entries.map((entry) => (
-                      <tr key={`${entry.entryType}-${entry.id}`}>
+                      <tr
+                        key={`${entry.entryType}-${entry.id}`}
+                        className={
+                          entry.entryType === 'payment_reversal'
+                            ? 'bg-amber-500/5'
+                            : undefined
+                        }
+                      >
                         <td className="py-2.5 px-3 font-mono">{entry.entryDate}</td>
                         <td className="py-2.5 px-3">
                           {entry.entryType === 'purchase_bill' ? (
                             <span className="font-bold text-[var(--khata-text)]">Purchase Bill</span>
+                          ) : entry.entryType === 'payment_reversal' ? (
+                            <span className="font-bold text-rose-600 dark:text-rose-400">
+                              Payment Reversal
+                            </span>
                           ) : (
                             <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                              Payment
+                              Payment{entry.paymentStatus === 'reversed' ? ' [Reversed]' : ''}
                             </span>
                           )}
                         </td>
@@ -387,7 +406,13 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
                           {entry.description}
                           {entry.transactionReference ? ` · Ref: ${entry.transactionReference}` : ''}
                         </td>
-                        <td className="py-2.5 px-3 text-right font-mono">
+                        <td
+                          className={`py-2.5 px-3 text-right font-mono ${
+                            entry.entryType === 'payment_reversal'
+                              ? 'text-rose-600 dark:text-rose-400 font-semibold'
+                              : ''
+                          }`}
+                        >
                           {safeDecimal(entry.debitAmount).greaterThan(0)
                             ? formatAbsRupees(entry.debitAmount)
                             : '—'}
@@ -408,39 +433,56 @@ export const SupplierStatement: React.FC<SupplierStatementProps> = ({
 
               {/* Mobile Statement Cards */}
               <div className="md:hidden space-y-2.5">
-                {statement.entries.map((entry) => (
-                  <div
-                    key={`${entry.entryType}-${entry.id}`}
-                    className="p-3 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/25 space-y-1.5 text-xs"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <span className="font-mono font-bold">{entry.referenceNumber}</span>
-                        <div className="text-[11px] text-[var(--khata-text-muted)]">
-                          {entry.entryDate} ·{' '}
-                          {entry.entryType === 'purchase_bill' ? 'Purchase Bill' : 'Payment'}
+                {statement.entries.map((entry) => {
+                  const isDebit =
+                    entry.entryType === 'purchase_bill' || entry.entryType === 'payment_reversal';
+                  const typeLabel =
+                    entry.entryType === 'purchase_bill'
+                      ? 'Purchase Bill'
+                      : entry.entryType === 'payment_reversal'
+                        ? 'Payment Reversal'
+                        : entry.paymentStatus === 'reversed'
+                          ? 'Payment [Reversed]'
+                          : 'Payment';
+                  return (
+                    <div
+                      key={`${entry.entryType}-${entry.id}`}
+                      className={`p-3 rounded-xl border border-[var(--khata-border)] space-y-1.5 text-xs ${
+                        entry.entryType === 'payment_reversal'
+                          ? 'bg-amber-500/5'
+                          : 'bg-[var(--khata-surface-inset)]/25'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <span className="font-mono font-bold">{entry.referenceNumber}</span>
+                          <div className="text-[11px] text-[var(--khata-text-muted)]">
+                            {entry.entryDate} · {typeLabel}
+                          </div>
                         </div>
+                        <span
+                          className={`font-mono font-extrabold ${
+                            entry.entryType === 'payment'
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : entry.entryType === 'payment_reversal'
+                                ? 'text-rose-600 dark:text-rose-400'
+                                : ''
+                          }`}
+                        >
+                          {isDebit
+                            ? `+${formatAbsRupees(entry.debitAmount)}`
+                            : `-${formatAbsRupees(entry.creditAmount)}`}
+                        </span>
                       </div>
-                      <span
-                        className={`font-mono font-extrabold ${
-                          entry.entryType === 'payment'
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : ''
-                        }`}
-                      >
-                        {entry.entryType === 'purchase_bill'
-                          ? `+${formatAbsRupees(entry.debitAmount)}`
-                          : `-${formatAbsRupees(entry.creditAmount)}`}
-                      </span>
+                      <div className="text-[11px] text-[var(--khata-text-muted)]">
+                        {entry.description}
+                      </div>
+                      <div className="text-[11px] font-mono font-bold text-right pt-1 border-t border-[var(--khata-border)]/50">
+                        Balance: {formatBalanceWithSide(entry.runningBalance)}
+                      </div>
                     </div>
-                    <div className="text-[11px] text-[var(--khata-text-muted)]">
-                      {entry.description}
-                    </div>
-                    <div className="text-[11px] font-mono font-bold text-right pt-1 border-t border-[var(--khata-border)]/50">
-                      Balance: {formatBalanceWithSide(entry.runningBalance)}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           )}

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Decimal from 'decimal.js';
 import {
   AlertCircle,
@@ -7,6 +7,8 @@ import {
   Loader2,
   Plus,
   Printer,
+  RotateCcw,
+  Search,
   Wand2,
   X,
 } from 'lucide-react';
@@ -16,19 +18,31 @@ import { safeDecimal } from '../../lib/formatters.js';
 import {
   allocateSupplierAdvanceApi,
   computeAutoFifoBillAllocations,
+  createSupplierIdempotencyKey,
   createSupplierPaymentApi,
   formatAbsRupees,
   getSupplierPaymentApi,
-  listPurchaseBillsApi,
+  listAllOpenPurchaseBillsForSupplierApi,
+  listAllSuppliersApi,
   listSupplierPaymentsApi,
-  listSuppliersApi,
+  reverseSupplierAllocationApi,
+  reverseSupplierPaymentApi,
 } from './suppliersApi.js';
+import { SupplierPaginationBar } from './SupplierPaginationBar.js';
 import type {
   PurchaseBillSummary,
+  SupplierPaymentAllocationRecord,
   SupplierPaymentMethod,
   SupplierPaymentRecord,
   SupplierRecord,
 } from './suppliers.types.js';
+
+const PAYMENTS_PAGE_LIMIT = 50;
+
+interface PendingKeyRecord {
+  signature: string;
+  key: string;
+}
 
 export interface SupplierPaymentsViewProps {
   initialSupplierFilter?: string;
@@ -52,11 +66,15 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
   onDataChanged,
 }) => {
   const [payments, setPayments] = useState<SupplierPaymentRecord[]>([]);
+  const [totalPayments, setTotalPayments] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [allSuppliers, setAllSuppliers] = useState<SupplierRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [supplierFilter, setSupplierFilter] = useState(initialSupplierFilter);
   const [methodFilter, setMethodFilter] = useState<SupplierPaymentMethod | ''>('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'reversed'>('all');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -70,6 +88,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
   const [transactionReference, setTransactionReference] = useState('');
   const [notes, setNotes] = useState('');
   const [openBills, setOpenBills] = useState<PurchaseBillSummary[]>([]);
+  const [billSearchQuery, setBillSearchQuery] = useState('');
   const [loadingOpenBills, setLoadingOpenBills] = useState(false);
   const [allocMap, setAllocMap] = useState<Record<number, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -78,38 +97,84 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
   // Allocate Later Modal (for Unallocated Advance Payments)
   const [advancePayment, setAdvancePayment] = useState<SupplierPaymentRecord | null>(null);
   const [advanceOpenBills, setAdvanceOpenBills] = useState<PurchaseBillSummary[]>([]);
+  const [advanceBillSearchQuery, setAdvanceBillSearchQuery] = useState('');
   const [advanceAllocMap, setAdvanceAllocMap] = useState<Record<number, string>>({});
   const [advanceError, setAdvanceError] = useState<string | null>(null);
   const [submittingAdvance, setSubmittingAdvance] = useState(false);
+
+  // Reverse Full Payment Modal
+  const [reverseTargetPayment, setReverseTargetPayment] = useState<SupplierPaymentRecord | null>(
+    null
+  );
+  const [reversePaymentReason, setReversePaymentReason] = useState('');
+  const [reversePaymentError, setReversePaymentError] = useState<string | null>(null);
+  const [reversingPayment, setReversingPayment] = useState(false);
+
+  // Reverse Individual Allocation Modal
+  const [reverseAllocTarget, setReverseAllocTarget] = useState<{
+    payment: SupplierPaymentRecord;
+    allocation: SupplierPaymentAllocationRecord;
+  } | null>(null);
+  const [reverseAllocAmount, setReverseAllocAmount] = useState('');
+  const [reverseAllocReason, setReverseAllocReason] = useState('');
+  const [reverseAllocError, setReverseAllocError] = useState<string | null>(null);
+  const [reversingAlloc, setReversingAlloc] = useState(false);
 
   // Printable Receipt Modal
   const [receiptPayment, setReceiptPayment] = useState<SupplierPaymentRecord | null>(null);
   const [loadingReceipt, setLoadingReceipt] = useState(false);
 
+  // In-flight Idempotency-Key stability refs (same payload retry reuses exact key)
+  const createKeyRef = useRef<PendingKeyRecord | null>(null);
+  const allocateKeyRef = useRef<PendingKeyRecord | null>(null);
+  const reversePayKeyRef = useRef<PendingKeyRecord | null>(null);
+  const reverseAllocKeyRef = useRef<PendingKeyRecord | null>(null);
+
+  const getStableIdempotencyKey = (
+    ref: React.MutableRefObject<PendingKeyRecord | null>,
+    prefix: string,
+    payload: unknown
+  ): string => {
+    const signature = JSON.stringify(payload);
+    if (ref.current && ref.current.signature === signature) {
+      return ref.current.key;
+    }
+    const key = createSupplierIdempotencyKey(prefix);
+    ref.current = { signature, key };
+    return key;
+  };
+
   useEffect(() => {
     setSupplierFilter(initialSupplierFilter);
+    setOffset(0);
   }, [initialSupplierFilter]);
 
   const loadSuppliers = async () => {
     try {
-      const res = await listSuppliersApi({ status: 'all', limit: 200 });
-      setAllSuppliers(res.suppliers);
+      const list = await listAllSuppliersApi({ status: 'all' });
+      setAllSuppliers(list);
     } catch {
       // Handled cleanly
     }
   };
 
-  const loadPayments = async () => {
+  const loadPayments = async (targetOffset = offset) => {
     setLoading(true);
     try {
       const res = await listSupplierPaymentsApi({
         supplierId: supplierFilter || undefined,
         paymentMethod: methodFilter || undefined,
+        status: statusFilter,
         fromDate: fromDate || undefined,
         toDate: toDate || undefined,
-        limit: 200,
+        limit: PAYMENTS_PAGE_LIMIT,
+        offset: targetOffset,
       });
       setPayments(res.payments);
+      setTotalPayments(res.total);
+      setHasMore(
+        res.pagination?.hasMore ?? targetOffset + res.payments.length < res.total
+      );
     } catch (err: any) {
       setNotice({ type: 'error', text: err?.message || 'Failed to load supplier payments.' });
     } finally {
@@ -122,8 +187,8 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
   }, []);
 
   useEffect(() => {
-    void loadPayments();
-  }, [supplierFilter, methodFilter, fromDate, toDate]);
+    void loadPayments(offset);
+  }, [supplierFilter, methodFilter, statusFilter, fromDate, toDate, offset]);
 
   useEffect(() => {
     if (openCreateSignal > 0) {
@@ -140,8 +205,8 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
     }
     setLoadingOpenBills(true);
     try {
-      const res = await listPurchaseBillsApi({ supplierId: supId, openOnly: true, limit: 200 });
-      setOpenBills(res.purchaseBills);
+      const allOpen = await listAllOpenPurchaseBillsForSupplierApi(supId);
+      setOpenBills(allOpen);
     } catch {
       setOpenBills([]);
     } finally {
@@ -151,12 +216,14 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
 
   const openCreateModal = async (defaultSupId = '') => {
     const initialSup = defaultSupId || activeSuppliers[0]?.id || '';
+    createKeyRef.current = null;
     setFormSupplierId(initialSup);
     setPaymentDate(getBusinessDateISO());
     setAmount('');
     setPaymentMethod('bank_transfer');
     setTransactionReference('');
     setNotes('');
+    setBillSearchQuery('');
     setAllocMap({});
     setFormError(null);
     setCreateOpen(true);
@@ -166,7 +233,9 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
   };
 
   const handleCreateSupplierChange = async (supId: string) => {
+    createKeyRef.current = null;
     setFormSupplierId(supId);
+    setBillSearchQuery('');
     setAllocMap({});
     await loadOpenBillsForSupplier(supId);
   };
@@ -222,18 +291,22 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
       return;
     }
 
+    const requestPayload = {
+      supplierId: formSupplierId,
+      paymentDate,
+      amount: parsedPayAmount.toFixed(2),
+      paymentMethod,
+      transactionReference: transactionReference.trim() || null,
+      notes: notes.trim() || null,
+      allocations: allocationsPayload,
+    };
+    const idempotencyKey = getStableIdempotencyKey(createKeyRef, 'spay', requestPayload);
+
     setFormError(null);
     setSubmitting(true);
     try {
-      const created = await createSupplierPaymentApi({
-        supplierId: formSupplierId,
-        paymentDate,
-        amount: parsedPayAmount.toFixed(2),
-        paymentMethod,
-        transactionReference: transactionReference.trim() || null,
-        notes: notes.trim() || null,
-        allocations: allocationsPayload,
-      });
+      const created = await createSupplierPaymentApi(requestPayload, idempotencyKey);
+      createKeyRef.current = null;
       setCreateOpen(false);
       setReceiptPayment(created);
       setNotice({
@@ -241,7 +314,7 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
         text: `Payment ${created.receiptNumber} (${formatAbsRupees(created.amount)}) recorded.`,
       });
       onDataChanged();
-      await loadPayments();
+      await loadPayments(offset);
     } catch (err: any) {
       setFormError(err?.message || 'Failed to record supplier payment.');
     } finally {
@@ -250,16 +323,14 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
   };
 
   const openAllocateAdvanceModal = async (payment: SupplierPaymentRecord) => {
+    allocateKeyRef.current = null;
     setAdvancePayment(payment);
+    setAdvanceBillSearchQuery('');
     setAdvanceAllocMap({});
     setAdvanceError(null);
     try {
-      const res = await listPurchaseBillsApi({
-        supplierId: payment.supplierId,
-        openOnly: true,
-        limit: 200,
-      });
-      setAdvanceOpenBills(res.purchaseBills);
+      const allOpen = await listAllOpenPurchaseBillsForSupplierApi(payment.supplierId);
+      setAdvanceOpenBills(allOpen);
     } catch {
       setAdvanceOpenBills([]);
     }
@@ -301,21 +372,144 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
       return;
     }
 
+    const idempotencyKey = getStableIdempotencyKey(allocateKeyRef, 'salloc', {
+      paymentId: advancePayment.id,
+      allocations: payload,
+    });
+
     setAdvanceError(null);
     setSubmittingAdvance(true);
     try {
-      await allocateSupplierAdvanceApi(advancePayment.id, payload);
+      const updated = await allocateSupplierAdvanceApi(advancePayment.id, payload, idempotencyKey);
+      allocateKeyRef.current = null;
       setAdvancePayment(null);
+      if (receiptPayment?.id === updated.id) {
+        setReceiptPayment(updated);
+      }
       setNotice({
         type: 'success',
         text: `Allocated ${formatAbsRupees(totalReq)} from ${advancePayment.receiptNumber}.`,
       });
       onDataChanged();
-      await loadPayments();
+      await loadPayments(offset);
     } catch (err: any) {
       setAdvanceError(err?.message || 'Failed to allocate advance.');
     } finally {
       setSubmittingAdvance(false);
+    }
+  };
+
+  const openReversePaymentModal = (payment: SupplierPaymentRecord) => {
+    reversePayKeyRef.current = null;
+    setReverseTargetPayment(payment);
+    setReversePaymentReason('');
+    setReversePaymentError(null);
+  };
+
+  const handleConfirmReversePayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reverseTargetPayment) return;
+    const trimmedReason = reversePaymentReason.trim();
+    if (trimmedReason.length < 3) {
+      setReversePaymentError('Please provide a clear reversal reason (at least 3 characters).');
+      return;
+    }
+    const idempotencyKey = getStableIdempotencyKey(reversePayKeyRef, 'srev', {
+      paymentId: reverseTargetPayment.id,
+      reason: trimmedReason,
+    });
+
+    setReversePaymentError(null);
+    setReversingPayment(true);
+    try {
+      const updated = await reverseSupplierPaymentApi(
+        reverseTargetPayment.id,
+        trimmedReason,
+        idempotencyKey
+      );
+      reversePayKeyRef.current = null;
+      setReverseTargetPayment(null);
+      if (receiptPayment?.id === updated.id) {
+        setReceiptPayment(updated);
+      }
+      setNotice({
+        type: 'success',
+        text: `Payment ${updated.receiptNumber} reversed (${updated.reversalNumber || 'Reversal recorded'}).`,
+      });
+      onDataChanged();
+      await loadPayments(offset);
+    } catch (err: any) {
+      setReversePaymentError(err?.message || 'Failed to reverse payment.');
+    } finally {
+      setReversingPayment(false);
+    }
+  };
+
+  const openReverseAllocModal = (
+    payment: SupplierPaymentRecord,
+    allocation: SupplierPaymentAllocationRecord
+  ) => {
+    reverseAllocKeyRef.current = null;
+    setReverseAllocTarget({ payment, allocation });
+    setReverseAllocAmount(allocation.amount);
+    setReverseAllocReason('');
+    setReverseAllocError(null);
+  };
+
+  const handleConfirmReverseAllocation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reverseAllocTarget) return;
+    const { payment, allocation } = reverseAllocTarget;
+
+    const amtErr = validateSellingRateInput(reverseAllocAmount, 'Reversal amount');
+    if (amtErr || safeDecimal(reverseAllocAmount).lessThanOrEqualTo(0)) {
+      setReverseAllocError('Reversal amount must be greater than 0 (max 2 decimal places).');
+      return;
+    }
+    const dec = safeDecimal(reverseAllocAmount);
+    if (dec.greaterThan(safeDecimal(allocation.amount))) {
+      setReverseAllocError(
+        `Cannot reverse more than remaining allocated amount (${formatAbsRupees(allocation.amount)}).`
+      );
+      return;
+    }
+    const trimmedReason = reverseAllocReason.trim();
+    if (trimmedReason.length < 3) {
+      setReverseAllocError('Please provide an allocation reversal reason (at least 3 characters).');
+      return;
+    }
+
+    const payload = { amount: dec.toFixed(2), reason: trimmedReason };
+    const idempotencyKey = getStableIdempotencyKey(reverseAllocKeyRef, 'sarev', {
+      paymentId: payment.id,
+      allocationId: allocation.allocationId,
+      ...payload,
+    });
+
+    setReverseAllocError(null);
+    setReversingAlloc(true);
+    try {
+      const updated = await reverseSupplierAllocationApi(
+        payment.id,
+        allocation.allocationId,
+        payload,
+        idempotencyKey
+      );
+      reverseAllocKeyRef.current = null;
+      setReverseAllocTarget(null);
+      if (receiptPayment?.id === updated.id) {
+        setReceiptPayment(updated);
+      }
+      setNotice({
+        type: 'success',
+        text: `Reversed ${formatAbsRupees(dec)} allocation on bill ${allocation.invoiceNumber}. Payment unallocated advance updated.`,
+      });
+      onDataChanged();
+      await loadPayments(offset);
+    } catch (err: any) {
+      setReverseAllocError(err?.message || 'Failed to reverse allocation.');
+    } finally {
+      setReversingAlloc(false);
     }
   };
 
@@ -377,10 +571,13 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
             </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
             <select
               value={supplierFilter}
-              onChange={(e) => setSupplierFilter(e.target.value)}
+              onChange={(e) => {
+                setSupplierFilter(e.target.value);
+                setOffset(0);
+              }}
               className="neu-input text-xs font-semibold"
             >
               <option value="">All Suppliers</option>
@@ -394,7 +591,10 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
 
             <select
               value={methodFilter}
-              onChange={(e) => setMethodFilter(e.target.value as SupplierPaymentMethod | '')}
+              onChange={(e) => {
+                setMethodFilter(e.target.value as SupplierPaymentMethod | '');
+                setOffset(0);
+              }}
               className="neu-input text-xs font-semibold"
             >
               <option value="">All Payment Methods</option>
@@ -405,16 +605,36 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
               ))}
             </select>
 
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setStatusFilter(e.target.value as 'all' | 'active' | 'reversed');
+                setOffset(0);
+              }}
+              className="neu-input text-xs font-semibold"
+              aria-label="Filter payment status"
+            >
+              <option value="all">All Statuses</option>
+              <option value="active">Active Payments</option>
+              <option value="reversed">Reversed Payments</option>
+            </select>
+
             <input
               type="date"
               value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
+              onChange={(e) => {
+                setFromDate(e.target.value);
+                setOffset(0);
+              }}
               className="neu-input text-xs font-mono"
             />
             <input
               type="date"
               value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
+              onChange={(e) => {
+                setToDate(e.target.value);
+                setOffset(0);
+              }}
               className="neu-input text-xs font-mono"
             />
           </div>
@@ -447,114 +667,204 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--khata-border)]/60">
-                  {payments.map((p) => (
-                    <tr key={p.id} className="hover:bg-[var(--khata-surface-inset)]/35">
-                      <td className="py-3 px-3 font-mono font-bold text-[var(--khata-text)]">
-                        {p.receiptNumber}
-                      </td>
-                      <td className="py-3 px-3 font-mono text-[var(--khata-text-muted)]">
-                        {p.paymentDate}
-                      </td>
-                      <td className="py-3 px-3 font-semibold text-[var(--khata-text)]">
-                        {p.supplierName}
-                      </td>
-                      <td className="py-3 px-3">
-                        <span className="uppercase font-bold text-[11px]">
-                          {p.paymentMethod.replace('_', ' ')}
-                        </span>
-                        {p.transactionReference && (
-                          <div className="text-[10px] font-mono text-[var(--khata-text-muted)]">
-                            Ref: {p.transactionReference}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                        {formatAbsRupees(p.amount)}
-                      </td>
-                      <td className="py-3 px-3 text-right font-mono">
-                        {formatAbsRupees(p.allocatedAmount)}
-                        {p.allocations.length > 0 && (
-                          <div className="text-[10px] text-[var(--khata-text-muted)]">
-                            {p.allocations.map((a) => a.invoiceNumber).join(', ')}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 text-right font-mono font-semibold text-amber-600 dark:text-amber-400">
-                        {formatAbsRupees(p.unallocatedAmount)}
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        <div className="inline-flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => void handleViewReceipt(p.id)}
-                            className="neu-btn-secondary text-[11px] px-2.5 py-1 min-h-0 inline-flex items-center gap-1"
-                          >
-                            <Printer className="w-3.5 h-3.5" />
-                            <span>Receipt</span>
-                          </button>
-                          {safeDecimal(p.unallocatedAmount).greaterThan(0) && !p.supplierArchivedAt && (
+                  {payments.map((p) => {
+                    const isReversed = p.status === 'reversed';
+                    const hasPartialAllocRev = p.allocations.some((a) =>
+                      safeDecimal(a.reversedAmount).greaterThan(0)
+                    );
+                    return (
+                      <tr
+                        key={p.id}
+                        className={`hover:bg-[var(--khata-surface-inset)]/35 ${
+                          isReversed ? 'opacity-80 bg-rose-500/5' : ''
+                        }`}
+                      >
+                        <td className="py-3 px-3 font-mono font-bold text-[var(--khata-text)]">
+                          <div>{p.receiptNumber}</div>
+                          {isReversed && (
+                            <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600 dark:text-rose-400 text-[9px] font-sans font-bold uppercase">
+                              Reversed{p.reversalNumber ? ` · ${p.reversalNumber}` : ''}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 font-mono text-[var(--khata-text-muted)]">
+                          {p.paymentDate}
+                        </td>
+                        <td className="py-3 px-3 font-semibold text-[var(--khata-text)]">
+                          {p.supplierName}
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className="uppercase font-bold text-[11px]">
+                            {p.paymentMethod.replace('_', ' ')}
+                          </span>
+                          {p.transactionReference && (
+                            <div className="text-[10px] font-mono text-[var(--khata-text-muted)]">
+                              Ref: {p.transactionReference}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono font-bold">
+                          {isReversed ? (
+                            <div>
+                              <span className="line-through text-[var(--khata-text-muted)]">
+                                {formatAbsRupees(p.amount)}
+                              </span>
+                              <div className="text-[10px] text-rose-600 dark:text-rose-400">
+                                ₹0.00 (Reversed)
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-emerald-600 dark:text-emerald-400">
+                              {formatAbsRupees(p.amount)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono">
+                          {formatAbsRupees(p.allocatedAmount)}
+                          {p.allocations.length > 0 && (
+                            <div className="text-[10px] text-[var(--khata-text-muted)]">
+                              {p.allocations.map((a) => a.invoiceNumber).join(', ')}
+                            </div>
+                          )}
+                          {hasPartialAllocRev && !isReversed && (
+                            <div className="text-[10px] text-amber-600 dark:text-amber-400 font-sans">
+                              Includes allocation reversals
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono font-semibold text-amber-600 dark:text-amber-400">
+                          {formatAbsRupees(p.unallocatedAmount)}
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <div className="inline-flex flex-wrap justify-end items-center gap-1.5">
                             <button
                               type="button"
-                              onClick={() => void openAllocateAdvanceModal(p)}
-                              className="neu-btn-primary text-[11px] px-2.5 py-1 min-h-0"
+                              onClick={() => void handleViewReceipt(p.id)}
+                              className="neu-btn-secondary text-[11px] px-2.5 py-1 min-h-0 inline-flex items-center gap-1"
                             >
-                              Allocate
+                              <Printer className="w-3.5 h-3.5" />
+                              <span>Receipt</span>
                             </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                            {!isReversed &&
+                              safeDecimal(p.unallocatedAmount).greaterThan(0) &&
+                              !p.supplierArchivedAt && (
+                                <button
+                                  type="button"
+                                  onClick={() => void openAllocateAdvanceModal(p)}
+                                  className="neu-btn-primary text-[11px] px-2.5 py-1 min-h-0"
+                                >
+                                  Allocate
+                                </button>
+                              )}
+                            {!isReversed && (
+                              <button
+                                type="button"
+                                onClick={() => openReversePaymentModal(p)}
+                                className="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-700 dark:text-rose-300 text-[11px] font-bold inline-flex items-center gap-1"
+                                title="Reverse Payment"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                <span>Reverse</span>
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
             {/* Mobile Cards */}
             <div className="md:hidden space-y-2.5">
-              {payments.map((p) => (
-                <div
-                  key={p.id}
-                  className="p-3.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/25 space-y-2 text-xs"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="font-mono font-bold text-sm text-[var(--khata-text)]">
-                        {p.receiptNumber}
+              {payments.map((p) => {
+                const isReversed = p.status === 'reversed';
+                return (
+                  <div
+                    key={p.id}
+                    className={`p-3.5 rounded-xl border border-[var(--khata-border)] space-y-2 text-xs ${
+                      isReversed ? 'bg-rose-500/5 opacity-85' : 'bg-[var(--khata-surface-inset)]/25'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-mono font-bold text-sm text-[var(--khata-text)]">
+                            {p.receiptNumber}
+                          </span>
+                          {isReversed && (
+                            <span className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600 dark:text-rose-400 text-[9px] font-bold uppercase">
+                              Reversed
+                            </span>
+                          )}
+                        </div>
+                        <div className="font-semibold text-[var(--khata-text)]">{p.supplierName}</div>
+                        <div className="text-[11px] text-[var(--khata-text-muted)]">
+                          {p.paymentDate} · {p.paymentMethod.replace('_', ' ').toUpperCase()}
+                        </div>
                       </div>
-                      <div className="font-semibold text-[var(--khata-text)]">{p.supplierName}</div>
-                      <div className="text-[11px] text-[var(--khata-text-muted)]">
-                        {p.paymentDate} · {p.paymentMethod.replace('_', ' ').toUpperCase()}
+                      <div className="text-right font-mono font-black text-sm">
+                        {isReversed ? (
+                          <span className="line-through text-[var(--khata-text-muted)]">
+                            {formatAbsRupees(p.amount)}
+                          </span>
+                        ) : (
+                          <span className="text-emerald-600 dark:text-emerald-400">
+                            {formatAbsRupees(p.amount)}
+                          </span>
+                        )}
                       </div>
                     </div>
-                    <div className="font-mono font-black text-sm text-emerald-600 dark:text-emerald-400">
-                      {formatAbsRupees(p.amount)}
+                    <div className="flex flex-wrap justify-between text-[11px] pt-2 border-t border-[var(--khata-border)]/60">
+                      <span>Allocated: {formatAbsRupees(p.allocatedAmount)}</span>
+                      <span>Advance: {formatAbsRupees(p.unallocatedAmount)}</span>
                     </div>
-                  </div>
-                  <div className="flex flex-wrap justify-between text-[11px] pt-2 border-t border-[var(--khata-border)]/60">
-                    <span>Allocated: {formatAbsRupees(p.allocatedAmount)}</span>
-                    <span>Advance: {formatAbsRupees(p.unallocatedAmount)}</span>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void handleViewReceipt(p.id)}
-                      className="neu-btn-secondary text-[11px] px-3 py-1.5 min-h-0"
-                    >
-                      View / Print Receipt
-                    </button>
-                    {safeDecimal(p.unallocatedAmount).greaterThan(0) && !p.supplierArchivedAt && (
+                    <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => void openAllocateAdvanceModal(p)}
-                        className="neu-btn-primary text-[11px] px-3 py-1.5 min-h-0"
+                        onClick={() => void handleViewReceipt(p.id)}
+                        className="neu-btn-secondary text-[11px] px-3 py-1.5 min-h-0"
                       >
-                        Allocate Advance
+                        View / Print Receipt
                       </button>
-                    )}
+                      {!isReversed &&
+                        safeDecimal(p.unallocatedAmount).greaterThan(0) &&
+                        !p.supplierArchivedAt && (
+                          <button
+                            type="button"
+                            onClick={() => void openAllocateAdvanceModal(p)}
+                            className="neu-btn-primary text-[11px] px-3 py-1.5 min-h-0"
+                          >
+                            Allocate Advance
+                          </button>
+                        )}
+                      {!isReversed && (
+                        <button
+                          type="button"
+                          onClick={() => openReversePaymentModal(p)}
+                          className="px-3 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-700 dark:text-rose-300 text-[11px] font-bold inline-flex items-center gap-1"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>Reverse Payment</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
+
+            <SupplierPaginationBar
+              offset={offset}
+              limit={PAYMENTS_PAGE_LIMIT}
+              total={totalPayments}
+              currentCount={payments.length}
+              hasMore={hasMore}
+              loading={loading}
+              itemLabel="payments"
+              onPageChange={(nextOffset) => setOffset(nextOffset)}
+            />
           </div>
         )}
       </div>
@@ -716,48 +1026,69 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                     No open purchase bills for this supplier. This payment will be recorded as an unallocated advance.
                   </div>
                 ) : (
-                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                    {openBills.map((b) => (
-                      <div
-                        key={b.id}
-                        className="p-2.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/25 flex flex-wrap items-center justify-between gap-2 text-xs"
-                      >
-                        <div>
-                          <div className="font-mono font-bold">{b.invoiceNumber}</div>
-                          <div className="text-[11px] text-[var(--khata-text-muted)]">
-                            {b.invoiceDate} · Bill: {formatAbsRupees(b.grandTotal)} · Remaining Due:{' '}
-                            <span className="font-mono font-bold text-rose-600 dark:text-rose-400">
-                              {formatAbsRupees(b.remainingAmount)}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={allocMap[b.id] || ''}
-                            onChange={(e) =>
-                              setAllocMap((prev) => ({ ...prev, [b.id]: e.target.value }))
-                            }
-                            placeholder="0.00"
-                            className="neu-input w-28 text-xs font-mono font-bold text-right py-1"
-                          />
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setAllocMap((prev) => ({
-                                ...prev,
-                                [b.id]: b.remainingAmount,
-                              }))
-                            }
-                            className="px-2 py-1 rounded-lg bg-[var(--khata-surface-inset)] text-[10px] font-bold hover:bg-[var(--khata-accent)]/15"
+                  <div className="space-y-2">
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 text-[var(--khata-text-muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={billSearchQuery}
+                        onChange={(e) => setBillSearchQuery(e.target.value)}
+                        placeholder={`Search ${openBills.length} open bills by invoice # or date...`}
+                        className="neu-input w-full pl-8 pr-3 py-1.5 text-xs"
+                      />
+                    </div>
+                    <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                      {openBills
+                        .filter((b) => {
+                          const q = billSearchQuery.trim().toLowerCase();
+                          if (!q) return true;
+                          return (
+                            b.invoiceNumber.toLowerCase().includes(q) ||
+                            b.invoiceDate.toLowerCase().includes(q)
+                          );
+                        })
+                        .map((b) => (
+                          <div
+                            key={b.id}
+                            className="p-2.5 rounded-xl border border-[var(--khata-border)] bg-[var(--khata-surface-inset)]/25 flex flex-wrap items-center justify-between gap-2 text-xs"
                           >
-                            Full
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                            <div>
+                              <div className="font-mono font-bold">{b.invoiceNumber}</div>
+                              <div className="text-[11px] text-[var(--khata-text-muted)]">
+                                {b.invoiceDate} · Bill: {formatAbsRupees(b.grandTotal)} · Remaining Due:{' '}
+                                <span className="font-mono font-bold text-rose-600 dark:text-rose-400">
+                                  {formatAbsRupees(b.remainingAmount)}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={allocMap[b.id] || ''}
+                                onChange={(e) =>
+                                  setAllocMap((prev) => ({ ...prev, [b.id]: e.target.value }))
+                                }
+                                placeholder="0.00"
+                                className="neu-input w-28 text-xs font-mono font-bold text-right py-1"
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAllocMap((prev) => ({
+                                    ...prev,
+                                    [b.id]: b.remainingAmount,
+                                  }))
+                                }
+                                className="px-2 py-1 rounded-lg bg-[var(--khata-surface-inset)] text-[10px] font-bold hover:bg-[var(--khata-accent)]/15"
+                              >
+                                Full
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -821,30 +1152,68 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                   This supplier currently has no open purchase bills to allocate against.
                 </p>
               ) : (
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {advanceOpenBills.map((b) => (
-                    <div
-                      key={b.id}
-                      className="p-3 rounded-xl border border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-2 text-xs"
-                    >
-                      <div>
-                        <div className="font-mono font-bold">{b.invoiceNumber}</div>
-                        <div className="text-[11px] text-[var(--khata-text-muted)]">
-                          {b.invoiceDate} · Due: {formatAbsRupees(b.remainingAmount)}
+                <div className="space-y-2">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-[var(--khata-text-muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={advanceBillSearchQuery}
+                      onChange={(e) => setAdvanceBillSearchQuery(e.target.value)}
+                      placeholder={`Search ${advanceOpenBills.length} open bills by invoice # or date...`}
+                      className="neu-input w-full pl-8 pr-3 py-1.5 text-xs"
+                    />
+                  </div>
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {advanceOpenBills
+                      .filter((b) => {
+                        const q = advanceBillSearchQuery.trim().toLowerCase();
+                        if (!q) return true;
+                        return (
+                          b.invoiceNumber.toLowerCase().includes(q) ||
+                          b.invoiceDate.toLowerCase().includes(q)
+                        );
+                      })
+                      .map((b) => (
+                        <div
+                          key={b.id}
+                          className="p-3 rounded-xl border border-[var(--khata-border)] flex flex-wrap items-center justify-between gap-2 text-xs"
+                        >
+                          <div>
+                            <div className="font-mono font-bold">{b.invoiceNumber}</div>
+                            <div className="text-[11px] text-[var(--khata-text-muted)]">
+                              {b.invoiceDate} · Due: {formatAbsRupees(b.remainingAmount)}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={advanceAllocMap[b.id] || ''}
+                              onChange={(e) =>
+                                setAdvanceAllocMap((prev) => ({
+                                  ...prev,
+                                  [b.id]: e.target.value,
+                                }))
+                              }
+                              placeholder="0.00"
+                              className="neu-input w-28 text-xs font-mono font-bold text-right"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAdvanceAllocMap((prev) => ({
+                                  ...prev,
+                                  [b.id]: b.remainingAmount,
+                                }))
+                              }
+                              className="px-2 py-1 rounded-lg bg-[var(--khata-surface-inset)] text-[10px] font-bold hover:bg-[var(--khata-accent)]/15"
+                            >
+                              Full
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={advanceAllocMap[b.id] || ''}
-                        onChange={(e) =>
-                          setAdvanceAllocMap((prev) => ({ ...prev, [b.id]: e.target.value }))
-                        }
-                        placeholder="0.00"
-                        className="neu-input w-28 text-xs font-mono font-bold text-right"
-                      />
-                    </div>
-                  ))}
+                      ))}
+                  </div>
                 </div>
               )}
 
@@ -876,11 +1245,21 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
       {(receiptPayment || loadingReceipt) && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-sm p-2 sm:p-4 mhi-print-modal-container">
           <div className="max-w-2xl mx-auto space-y-3">
-            <div className="flex items-center justify-between text-white mhi-no-print print:hidden">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-white mhi-no-print print:hidden">
               <span className="text-xs sm:text-sm font-bold">
                 Supplier Payment Receipt · {receiptPayment?.receiptNumber || 'Loading...'}
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {receiptPayment && receiptPayment.status === 'active' && (
+                  <button
+                    type="button"
+                    onClick={() => openReversePaymentModal(receiptPayment)}
+                    className="px-3 py-1.5 rounded-lg bg-amber-500/90 hover:bg-amber-600 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reverse Payment</span>
+                  </button>
+                )}
                 {receiptPayment && (
                   <button
                     type="button"
@@ -909,6 +1288,27 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
               </div>
             ) : (
               <div className="bg-white text-slate-900 rounded-2xl p-6 sm:p-8 shadow-xl border border-slate-200 space-y-5">
+                {receiptPayment.status === 'reversed' && (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-800 text-xs space-y-1">
+                    <div className="font-black uppercase tracking-wide flex flex-wrap items-center gap-2">
+                      <span>PAYMENT REVERSED</span>
+                      {receiptPayment.reversalNumber && (
+                        <span className="font-mono bg-rose-100 px-2 py-0.5 rounded">
+                          {receiptPayment.reversalNumber}
+                        </span>
+                      )}
+                    </div>
+                    {receiptPayment.reversalReason && (
+                      <div>Reason: {receiptPayment.reversalReason}</div>
+                    )}
+                    {receiptPayment.reversedAt && (
+                      <div className="text-[11px] font-mono text-rose-700">
+                        Reversed At: {new Date(receiptPayment.reversedAt).toLocaleString('en-IN')}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-300 pb-4">
                   <div>
                     <h2 className="text-lg font-black uppercase tracking-tight">
@@ -936,10 +1336,23 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs">
                   <div>
-                    <span className="text-[10px] uppercase text-slate-500 block">Amount Paid</span>
-                    <span className="text-base font-black font-mono text-emerald-700">
+                    <span className="text-[10px] uppercase text-slate-500 block">
+                      {receiptPayment.status === 'reversed' ? 'Original Amount (Reversed)' : 'Amount Paid'}
+                    </span>
+                    <span
+                      className={`text-base font-black font-mono ${
+                        receiptPayment.status === 'reversed'
+                          ? 'line-through text-slate-400'
+                          : 'text-emerald-700'
+                      }`}
+                    >
                       {formatAbsRupees(receiptPayment.amount)}
                     </span>
+                    {receiptPayment.status === 'reversed' && (
+                      <div className="text-xs font-mono font-bold text-rose-700">
+                        Effective: ₹0.00
+                      </div>
+                    )}
                   </div>
                   <div>
                     <span className="text-[10px] uppercase text-slate-500 block">Method</span>
@@ -965,21 +1378,51 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                           <th className="py-1.5">Bill Date</th>
                           <th className="py-1.5 text-right">Bill Total</th>
                           <th className="py-1.5 text-right">Allocated</th>
+                          {receiptPayment.status === 'active' && (
+                            <th className="py-1.5 text-right print:hidden">Action</th>
+                          )}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200">
-                        {receiptPayment.allocations.map((a) => (
-                          <tr key={a.allocationId}>
-                            <td className="py-2 font-mono font-bold">{a.invoiceNumber}</td>
-                            <td className="py-2 font-mono text-slate-600">{a.invoiceDate}</td>
-                            <td className="py-2 text-right font-mono">
-                              {formatAbsRupees(a.billGrandTotal)}
-                            </td>
-                            <td className="py-2 text-right font-mono font-bold">
-                              {formatAbsRupees(a.amount)}
-                            </td>
-                          </tr>
-                        ))}
+                        {receiptPayment.allocations.map((a) => {
+                          const hasRev = safeDecimal(a.reversedAmount).greaterThan(0);
+                          const canReverseAlloc =
+                            receiptPayment.status === 'active' &&
+                            safeDecimal(a.amount).greaterThan(0);
+                          return (
+                            <tr key={a.allocationId}>
+                              <td className="py-2 font-mono font-bold">{a.invoiceNumber}</td>
+                              <td className="py-2 font-mono text-slate-600">{a.invoiceDate}</td>
+                              <td className="py-2 text-right font-mono">
+                                {formatAbsRupees(a.billGrandTotal)}
+                              </td>
+                              <td className="py-2 text-right font-mono font-bold">
+                                <div>{formatAbsRupees(a.amount)}</div>
+                                {hasRev && (
+                                  <div className="text-[10px] font-normal text-amber-700">
+                                    Orig {formatAbsRupees(a.originalAmount)} · Rev{' '}
+                                    {formatAbsRupees(a.reversedAmount)}
+                                  </div>
+                                )}
+                              </td>
+                              {receiptPayment.status === 'active' && (
+                                <td className="py-2 text-right print:hidden">
+                                  {canReverseAlloc ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => openReverseAllocModal(receiptPayment, a)}
+                                      className="px-2 py-0.5 rounded bg-rose-100 hover:bg-rose-200 text-rose-700 text-[10px] font-bold"
+                                    >
+                                      Reverse
+                                    </button>
+                                  ) : (
+                                    <span className="text-[10px] text-slate-400">Reversed</span>
+                                  )}
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -988,6 +1431,31 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                     Recorded as unallocated advance credit ({formatAbsRupees(receiptPayment.unallocatedAmount)}).
                   </p>
                 )}
+
+                {receiptPayment.allocationReversals &&
+                  receiptPayment.allocationReversals.length > 0 && (
+                    <div className="space-y-1.5 text-xs pt-2 border-t border-slate-200">
+                      <h4 className="font-bold uppercase text-[11px] text-amber-800">
+                        Allocation Reversal History
+                      </h4>
+                      <div className="space-y-1">
+                        {receiptPayment.allocationReversals.map((rev) => (
+                          <div
+                            key={rev.id}
+                            className="p-2 rounded bg-amber-50 border border-amber-200 flex flex-wrap justify-between gap-2 text-[11px]"
+                          >
+                            <div>
+                              <span className="font-mono font-bold">{rev.invoiceNumber}</span> ·{' '}
+                              <span className="text-slate-700">{rev.reason}</span>
+                            </div>
+                            <span className="font-mono font-bold text-rose-700">
+                              -{formatAbsRupees(rev.reversedAmount)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                 {safeDecimal(receiptPayment.unallocatedAmount).greaterThan(0) &&
                   receiptPayment.allocations.length > 0 && (
@@ -1036,6 +1504,184 @@ export const SupplierPaymentsView: React.FC<SupplierPaymentsViewProps> = ({
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Reverse Full Supplier Payment Modal */}
+      {reverseTargetPayment && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto print:hidden">
+          <div className="neu-card w-full max-w-md rounded-2xl p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-3">
+              <div>
+                <h3 className="text-base font-extrabold text-[var(--khata-text)] flex items-center gap-1.5">
+                  <RotateCcw className="w-4 h-4 text-rose-600" />
+                  <span>Reverse Payment · {reverseTargetPayment.receiptNumber}</span>
+                </h3>
+                <p className="text-xs text-[var(--khata-text-muted)]">
+                  Supplier: {reverseTargetPayment.supplierName} · Amount:{' '}
+                  <span className="font-mono font-bold">
+                    {formatAbsRupees(reverseTargetPayment.amount)}
+                  </span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReverseTargetPayment(null)}
+                className="p-1.5 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 text-xs">
+              Reversing this payment preserves full audit history, marks the receipt as Reversed, and restores remaining payable balances on linked purchase bills.
+            </div>
+
+            {reversePaymentError && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 text-xs font-semibold">
+                {reversePaymentError}
+              </div>
+            )}
+
+            <form onSubmit={handleConfirmReversePayment} className="space-y-3">
+              <div>
+                <label className="block text-[11px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
+                  Reversal Reason <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={reversePaymentReason}
+                  onChange={(e) => setReversePaymentReason(e.target.value)}
+                  placeholder="e.g. Cheque bounced, duplicate entry, wrong supplier..."
+                  className="neu-input w-full text-xs"
+                />
+              </div>
+
+              <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-[var(--khata-border)]">
+                <button
+                  type="button"
+                  onClick={() => setReverseTargetPayment(null)}
+                  className="neu-btn-secondary px-4 py-2 text-xs font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={reversingPayment}
+                  className="neu-btn-danger px-4 py-2 text-xs font-bold inline-flex items-center gap-1.5"
+                >
+                  {reversingPayment && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Confirm Reverse Payment</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Reverse Individual Bill Allocation Modal */}
+      {reverseAllocTarget && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto print:hidden">
+          <div className="neu-card w-full max-w-md rounded-2xl p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-[var(--khata-border)] pb-3">
+              <div>
+                <h3 className="text-base font-extrabold text-[var(--khata-text)] flex items-center gap-1.5">
+                  <RotateCcw className="w-4 h-4 text-rose-600" />
+                  <span>Reverse Bill Allocation</span>
+                </h3>
+                <p className="text-xs text-[var(--khata-text-muted)]">
+                  {reverseAllocTarget.payment.receiptNumber} → Invoice{' '}
+                  <span className="font-mono font-bold">
+                    {reverseAllocTarget.allocation.invoiceNumber}
+                  </span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReverseAllocTarget(null)}
+                className="p-1.5 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-[var(--khata-surface-inset)]/40 text-xs space-y-1">
+              <div className="flex justify-between">
+                <span className="text-[var(--khata-text-muted)]">Currently Allocated:</span>
+                <span className="font-mono font-bold">
+                  {formatAbsRupees(reverseAllocTarget.allocation.amount)}
+                </span>
+              </div>
+              <p className="text-[11px] text-[var(--khata-text-muted)]">
+                Reversed allocation funds return to this payment&apos;s unallocated advance balance and increase the bill&apos;s remaining due.
+              </p>
+            </div>
+
+            {reverseAllocError && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 text-xs font-semibold">
+                {reverseAllocError}
+              </div>
+            )}
+
+            <form onSubmit={handleConfirmReverseAllocation} className="space-y-3">
+              <div>
+                <label className="block text-[11px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
+                  Amount to Reverse (₹) <span className="text-rose-500">*</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    required
+                    value={reverseAllocAmount}
+                    onChange={(e) => setReverseAllocAmount(e.target.value)}
+                    placeholder="0.00"
+                    className="neu-input flex-1 text-xs font-mono font-bold"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setReverseAllocAmount(reverseAllocTarget.allocation.amount)}
+                    className="px-2.5 py-1.5 rounded-lg bg-[var(--khata-surface-inset)] text-[11px] font-bold hover:bg-[var(--khata-accent)]/15"
+                  >
+                    Full
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold uppercase text-[var(--khata-text-muted)] mb-1">
+                  Reason <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={reverseAllocReason}
+                  onChange={(e) => setReverseAllocReason(e.target.value)}
+                  placeholder="e.g. Allocated to wrong invoice, bill under dispute..."
+                  className="neu-input w-full text-xs"
+                />
+              </div>
+
+              <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-[var(--khata-border)]">
+                <button
+                  type="button"
+                  onClick={() => setReverseAllocTarget(null)}
+                  className="neu-btn-secondary px-4 py-2 text-xs font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={reversingAlloc}
+                  className="neu-btn-danger px-4 py-2 text-xs font-bold inline-flex items-center gap-1.5"
+                >
+                  {reversingAlloc && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Confirm Reverse Allocation</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

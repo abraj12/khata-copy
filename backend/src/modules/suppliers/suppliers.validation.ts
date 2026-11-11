@@ -232,12 +232,58 @@ export const allocateAdvanceSchema = z.object({
   allocations: z.array(paymentAllocationInputSchema).min(1, 'At least one bill allocation is required'),
 });
 
+export const reversePaymentSchema = z.object({
+  reason: z.string().trim().min(1, 'Reversal reason is required').max(500),
+});
+
+export const reversePaymentAllocationSchema = z.object({
+  amount: positiveMoneyValidator('Reversal amount'),
+  reason: z.string().trim().min(1, 'Allocation reversal reason is required').max(500),
+});
+
+const IDEMPOTENCY_KEY_REGEX = /^[A-Za-z0-9._:-]{8,128}$/;
+
+export function normalizeTransactionReference(reference?: string | null): string | null {
+  if (reference === null || reference === undefined) return null;
+  const trimmed = reference.normalize('NFKC').trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+export function extractAndValidateIdempotencyKey(
+  rawHeader: unknown,
+  required = true
+): string | null {
+  if (Array.isArray(rawHeader)) {
+    throw new AppError('Duplicate Idempotency-Key headers are not allowed.', 400, 'INVALID_IDEMPOTENCY_KEY');
+  }
+  if (rawHeader === undefined || rawHeader === null || String(rawHeader).trim() === '') {
+    if (required) {
+      throw new AppError(
+        'Idempotency-Key header is required for supplier payment operations.',
+        400,
+        'IDEMPOTENCY_KEY_REQUIRED'
+      );
+    }
+    return null;
+  }
+  const key = String(rawHeader).trim();
+  if (!IDEMPOTENCY_KEY_REGEX.test(key)) {
+    throw new AppError(
+      'Idempotency-Key header must be 8-128 characters using letters, numbers, ., _, :, or -.',
+      400,
+      'INVALID_IDEMPOTENCY_KEY'
+    );
+  }
+  return key;
+}
+
 export const listSupplierPaymentsQuerySchema = z.object({
   supplierId: optionalQueryUuidSchema,
   paymentMethod: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.enum(['cash', 'upi', 'bank_transfer', 'cheque', 'other']).optional()
   ),
+  status: z.enum(['active', 'reversed', 'all']).optional().default('all'),
   fromDate: optionalQueryDateSchema,
   toDate: optionalQueryDateSchema,
   limit: z.coerce.number().int().min(1).max(200).optional().default(100),

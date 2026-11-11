@@ -11,6 +11,13 @@ import {
 } from '../billing/numbering.js';
 import { storageService } from '../../services/storage.service.js';
 import {
+  acquireIdempotencyLock,
+  checkIdempotencyRecord,
+  cleanupExpiredIdempotencyKeys,
+  hashIdempotencyPayload,
+  storeIdempotencyRecord,
+} from '../../services/idempotency.service.js';
+import {
   aggregateSupplierDashboardKPIs,
   buildSupplierStatementLedger,
   computePurchaseBillTotals,
@@ -24,6 +31,7 @@ import {
   normalizeSupplierInvoiceNumber,
   normalizeSupplierName,
   normalizeSupplierPhone,
+  normalizeTransactionReference,
 } from './suppliers.validation.js';
 
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
@@ -102,6 +110,18 @@ export interface PurchaseBillHistoryRecord {
   createdAt: string;
 }
 
+export interface SupplierSnapshot {
+  id: string;
+  name: string;
+  contactPerson: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  state: string | null;
+  stateCode: string | null;
+  gstin: string | null;
+}
+
 export interface PurchaseBillSummary {
   id: number;
   supplierId: string;
@@ -131,6 +151,8 @@ export interface PurchaseBillSummary {
   cancelledAt: string | null;
   cancellationReason: string | null;
   itemCount: number;
+  supplierSnapshot: SupplierSnapshot | null;
+  supplierSnapshotSource: 'snapshot' | 'legacy_live_fallback';
   createdAt: string;
   updatedAt: string;
 }
@@ -146,7 +168,10 @@ export interface PurchaseBillDetail extends PurchaseBillSummary {
     receiptNumber: string;
     paymentDate: string;
     paymentMethod: string;
+    paymentStatus: 'active' | 'reversed';
     transactionReference: string | null;
+    originalAllocatedAmount: string;
+    reversedAllocationAmount: string;
     allocatedAmount: string;
   }>;
   history: PurchaseBillHistoryRecord[];
@@ -165,6 +190,7 @@ export interface CreateSupplierPaymentInput {
   transactionReference?: string | null;
   notes?: string | null;
   allocations?: PaymentAllocationInput[];
+  idempotencyKey?: string | null;
 }
 
 export interface SupplierPaymentAllocationRecord {
@@ -174,6 +200,18 @@ export interface SupplierPaymentAllocationRecord {
   invoiceDate: string;
   billGrandTotal: string;
   amount: string;
+  originalAmount: string;
+  reversedAmount: string;
+}
+
+export interface SupplierAllocationReversalRecord {
+  id: number;
+  allocationId: number;
+  purchaseBillId: number;
+  invoiceNumber: string;
+  reversedAmount: string;
+  reason: string;
+  createdAt: string;
 }
 
 export interface SupplierPaymentRecord {
@@ -187,14 +225,20 @@ export interface SupplierPaymentRecord {
   supplierArchivedAt: string | null;
   paymentDate: string;
   amount: string;
+  effectiveAmount: string;
   allocatedAmount: string;
   unallocatedAmount: string;
+  status: 'active' | 'reversed';
+  reversedAt: string | null;
+  reversalReason: string | null;
+  reversalNumber: string | null;
   paymentMethod: 'cash' | 'upi' | 'bank_transfer' | 'cheque' | 'other';
   transactionReference: string | null;
   notes: string | null;
   createdAt: string;
   updatedAt: string;
   allocations: SupplierPaymentAllocationRecord[];
+  allocationReversals?: SupplierAllocationReversalRecord[];
   supplierSummary?: SupplierBalanceSummary;
 }
 
@@ -207,6 +251,7 @@ export interface SupplierStatementResponse {
   openingBalance: string;
   periodPurchases: string;
   periodPayments: string;
+  periodReversals: string;
   closingBalance: string;
   entries: ComputedStatementEntry[];
 }
@@ -221,6 +266,74 @@ function csvSafeCell(value: string | number | null | undefined): string {
     raw.length > 0 && /^[=+\-@\t\r]/.test(raw) && !/^-?\d+(?:\.\d+)?$/.test(raw);
   const safe = needsFormulaNeutralization ? `'${raw}` : raw;
   return `"${safe.replace(/"/g, '""')}"`;
+}
+
+const SERVICE_IDEMPOTENCY_KEY_REGEX = /^[A-Za-z0-9._:-]{8,128}$/;
+
+function assertOptionalServiceIdempotencyKey(rawKey?: string | null): string | null {
+  if (rawKey === undefined || rawKey === null) return null;
+  const trimmed = rawKey.trim();
+  if (!trimmed) return null;
+  if (!SERVICE_IDEMPOTENCY_KEY_REGEX.test(trimmed)) {
+    throw new AppError(
+      'Idempotency-Key must be 8-128 characters using letters, numbers, ., _, :, or -.',
+      400,
+      'INVALID_IDEMPOTENCY_KEY'
+    );
+  }
+  return trimmed;
+}
+
+function isDigitalPaymentMethod(method: string): boolean {
+  return method === 'upi' || method === 'bank_transfer' || method === 'cheque';
+}
+
+function buildSupplierSnapshotFromRow(row: Record<string, any>): SupplierSnapshot {
+  return {
+    id: String(row.id),
+    name: String(row.name || ''),
+    contactPerson: row.contact_person ?? null,
+    phone: row.phone ?? null,
+    email: row.email ?? null,
+    address: row.address ?? null,
+    state: row.state ?? null,
+    stateCode: row.state_code ?? null,
+    gstin: row.gstin ?? null,
+  };
+}
+
+function parseSupplierSnapshot(raw: unknown): SupplierSnapshot | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.name !== 'string' || !obj.name.trim()) return null;
+  return {
+    id: typeof obj.id === 'string' ? obj.id : '',
+    name: obj.name,
+    contactPerson: typeof obj.contactPerson === 'string' ? obj.contactPerson : null,
+    phone: typeof obj.phone === 'string' ? obj.phone : null,
+    email: typeof obj.email === 'string' ? obj.email : null,
+    address: typeof obj.address === 'string' ? obj.address : null,
+    state: typeof obj.state === 'string' ? obj.state : null,
+    stateCode: typeof obj.stateCode === 'string' ? obj.stateCode : null,
+    gstin: typeof obj.gstin === 'string' ? obj.gstin : null,
+  };
+}
+
+async function resolvePaginatedTotal(
+  db: PoolClient | typeof appPool,
+  rows: Array<Record<string, any>>,
+  offset: number,
+  countSql: string,
+  countParams: unknown[]
+): Promise<number> {
+  if (rows.length > 0) {
+    return parseInt(String(rows[0].full_count || 0), 10);
+  }
+  if (offset > 0) {
+    const countRes = await db.query(countSql, countParams);
+    return parseInt(String(countRes.rows[0]?.total || 0), 10);
+  }
+  return 0;
 }
 
 function rethrowConstraintError(err: unknown): never {
@@ -241,6 +354,13 @@ function rethrowConstraintError(err: unknown): never {
         'A finalized purchase bill with this invoice number already exists for this supplier.',
         409,
         'DUPLICATE_INVOICE_NUMBER'
+      );
+    }
+    if (constraint === 'uq_supplier_payments_active_reference') {
+      throw new AppError(
+        'An active payment with this digital transaction reference already exists for this supplier.',
+        409,
+        'SUPPLIER_PAYMENT_REFERENCE_DUPLICATE'
       );
     }
     throw new AppError('Duplicate supplier or invoice record detected.', 409, 'CONFLICT');
@@ -277,13 +397,36 @@ export class SuppliersService {
     };
   }
 
-  private async fetchSuppliersWithMetrics(
+  private async querySuppliersWithMetrics(
     clientOrPool: PoolClient | typeof appPool,
-    whereClause = 'TRUE',
-    params: unknown[] = []
-  ): Promise<SupplierRecord[]> {
+    options: {
+      whereClause?: string;
+      params?: unknown[];
+      orderBySql?: string;
+      limit?: number;
+      offset?: number;
+    }
+  ): Promise<{ suppliers: SupplierRecord[]; total: number }> {
+    const whereClause = options.whereClause || 'TRUE';
+    const params = options.params || [];
+    const orderBySql = options.orderBySql || 's.id ASC';
+    const hasPagination = options.limit !== undefined;
+    const offset = Math.max(0, options.offset || 0);
+    const limitClause = hasPagination
+      ? `ORDER BY ${orderBySql} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`
+      : '';
+    const queryParams = hasPagination ? [...params, options.limit, offset] : params;
+
     const query = `
-      WITH purchase_totals AS (
+      WITH paged_suppliers AS (
+        SELECT
+          s.*,
+          COUNT(*) OVER()::bigint AS full_count
+        FROM suppliers s
+        WHERE ${whereClause}
+        ${limitClause}
+      ),
+      purchase_totals AS (
         SELECT
           supplier_id,
           COALESCE(SUM(grand_total), 0)::numeric AS total_purchases,
@@ -291,6 +434,7 @@ export class SuppliersService {
           MAX(invoice_date) AS last_purchase_date
         FROM supplier_purchase_bills
         WHERE status = 'finalized'
+          AND supplier_id IN (SELECT id FROM paged_suppliers)
         GROUP BY supplier_id
       ),
       payment_totals AS (
@@ -300,15 +444,27 @@ export class SuppliersService {
           COUNT(*)::bigint AS payment_count,
           MAX(payment_date) AS last_payment_date
         FROM supplier_payments
+        WHERE status = 'active'
+          AND supplier_id IN (SELECT id FROM paged_suppliers)
         GROUP BY supplier_id
+      ),
+      alloc_rev AS (
+        SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+        FROM supplier_payment_allocation_reversals
+        WHERE supplier_id IN (SELECT id FROM paged_suppliers)
+        GROUP BY allocation_id
       ),
       allocation_totals AS (
         SELECT
           spa.supplier_id,
-          COALESCE(SUM(spa.amount), 0)::numeric AS allocated_payments
+          COALESCE(SUM(GREATEST(spa.amount - COALESCE(ar.reversed_amount, 0), 0)), 0)::numeric AS allocated_payments
         FROM supplier_payment_allocations spa
         INNER JOIN supplier_purchase_bills spb ON spb.id = spa.purchase_bill_id
+        INNER JOIN supplier_payments sp ON sp.id = spa.payment_id
+        LEFT JOIN alloc_rev ar ON ar.allocation_id = spa.id
         WHERE spb.status = 'finalized'
+          AND sp.status = 'active'
+          AND spa.supplier_id IN (SELECT id FROM paged_suppliers)
         GROUP BY spa.supplier_id
       )
       SELECT
@@ -325,6 +481,7 @@ export class SuppliersService {
         s.archived_at,
         s.created_at,
         s.updated_at,
+        s.full_count,
         COALESCE(pt.total_purchases, 0) AS total_purchases,
         COALESCE(pmt.total_payments, 0) AS total_payments,
         COALESCE(alt.allocated_payments, 0) AS allocated_payments,
@@ -337,15 +494,40 @@ export class SuppliersService {
           ), DATE '1900-01-01'),
           'YYYY-MM-DD'
         ) AS last_activity
-      FROM suppliers s
+      FROM paged_suppliers s
       LEFT JOIN purchase_totals pt ON pt.supplier_id = s.id
       LEFT JOIN payment_totals pmt ON pmt.supplier_id = s.id
       LEFT JOIN allocation_totals alt ON alt.supplier_id = s.id
-      WHERE ${whereClause}
+      ${hasPagination ? `ORDER BY ${orderBySql}` : ''}
     `;
 
-    const result = await clientOrPool.query(query, params);
-    return result.rows.map((row) => this.mapSupplierRow(row));
+    const result = await clientOrPool.query(query, queryParams);
+    const total = hasPagination
+      ? await resolvePaginatedTotal(
+          clientOrPool,
+          result.rows,
+          offset,
+          `SELECT COUNT(*)::bigint AS total FROM suppliers s WHERE ${whereClause}`,
+          params
+        )
+      : result.rows.length;
+
+    return {
+      suppliers: result.rows.map((row) => this.mapSupplierRow(row)),
+      total,
+    };
+  }
+
+  private async fetchSuppliersWithMetrics(
+    clientOrPool: PoolClient | typeof appPool,
+    whereClause = 'TRUE',
+    params: unknown[] = []
+  ): Promise<SupplierRecord[]> {
+    const { suppliers } = await this.querySuppliersWithMetrics(clientOrPool, {
+      whereClause,
+      params,
+    });
+    return suppliers;
   }
 
   public async getDashboard(): Promise<{
@@ -396,30 +578,32 @@ export class SuppliersService {
     }
 
     const whereClause = conditions.length > 0 ? conditions.join(' AND ') : 'TRUE';
-    const allMatching = await this.fetchSuppliersWithMetrics(appPool, whereClause, params);
-
-    allMatching.sort((a, b) => {
-      if (a.archivedAt !== b.archivedAt) return a.archivedAt ? 1 : -1;
-      return a.name.localeCompare(b.name);
+    const { suppliers, total } = await this.querySuppliersWithMetrics(appPool, {
+      whereClause,
+      params,
+      orderBySql: '(s.archived_at IS NOT NULL) ASC, LOWER(s.name) ASC, s.name ASC, s.id ASC',
+      limit,
+      offset,
     });
 
-    const sliced = allMatching.slice(offset, offset + limit);
-    const hasMore = offset + sliced.length < allMatching.length;
-
+    const hasMore = offset + suppliers.length < total;
     return {
-      suppliers: sliced,
-      total: allMatching.length,
+      suppliers,
+      total,
       pagination: {
         limit,
         offset,
         hasMore,
-        nextOffset: hasMore ? offset + sliced.length : null,
+        nextOffset: hasMore ? offset + suppliers.length : null,
       },
     };
   }
 
-  public async getSupplierById(id: string): Promise<SupplierRecord> {
-    const rows = await this.fetchSuppliersWithMetrics(appPool, 's.id = $1', [id]);
+  public async getSupplierById(
+    id: string,
+    db: PoolClient | typeof appPool = appPool
+  ): Promise<SupplierRecord> {
+    const rows = await this.fetchSuppliersWithMetrics(db, 's.id = $1', [id]);
     if (rows.length === 0) {
       throw new AppError('Supplier not found.', 404, 'SUPPLIER_NOT_FOUND');
     }
@@ -807,12 +991,16 @@ export class SuppliersService {
       paymentStatus = 'partial';
     }
 
+    const snapshot = parseSupplierSnapshot(row.supplier_snapshot);
+
     return {
       id: Number(row.id),
       supplierId: row.supplier_id,
-      supplierName: row.supplier_name,
-      supplierPhone: row.supplier_phone ?? null,
-      supplierGstin: row.supplier_gstin ?? null,
+      supplierName: snapshot?.name ?? row.supplier_name,
+      supplierPhone: snapshot ? snapshot.phone : (row.supplier_phone ?? null),
+      supplierGstin: snapshot ? snapshot.gstin : (row.supplier_gstin ?? null),
+      supplierSnapshot: snapshot,
+      supplierSnapshotSource: snapshot ? 'snapshot' : 'legacy_live_fallback',
       supplierArchivedAt: row.supplier_archived_at ? new Date(row.supplier_archived_at).toISOString() : null,
       invoiceNumber: row.invoice_number,
       invoiceDate: row.invoice_date,
@@ -882,7 +1070,7 @@ export class SuppliersService {
       params.push(`%${escapeLike(options.search.trim())}%`);
       const idx = params.length;
       conditions.push(
-        `(spb.invoice_number ILIKE $${idx} ESCAPE '\\' OR s.name ILIKE $${idx} ESCAPE '\\')`
+        `(spb.invoice_number ILIKE $${idx} ESCAPE '\\' OR COALESCE(spb.supplier_snapshot->>'name', s.name) ILIKE $${idx} ESCAPE '\\' OR s.name ILIKE $${idx} ESCAPE '\\')`
       );
     }
     if (options?.openOnly) {
@@ -893,10 +1081,20 @@ export class SuppliersService {
     const whereClause = conditions.length > 0 ? conditions.join(' AND ') : 'TRUE';
 
     const query = `
-      WITH alloc AS (
-        SELECT purchase_bill_id, COALESCE(SUM(amount), 0)::numeric AS allocated_amount
-        FROM supplier_payment_allocations
-        GROUP BY purchase_bill_id
+      WITH alloc_rev AS (
+        SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+        FROM supplier_payment_allocation_reversals
+        GROUP BY allocation_id
+      ),
+      alloc AS (
+        SELECT
+          spa.purchase_bill_id,
+          COALESCE(SUM(GREATEST(spa.amount - COALESCE(ar.reversed_amount, 0), 0)), 0)::numeric AS allocated_amount
+        FROM supplier_payment_allocations spa
+        INNER JOIN supplier_payments sp ON sp.id = spa.payment_id
+        LEFT JOIN alloc_rev ar ON ar.allocation_id = spa.id
+        WHERE sp.status = 'active'
+        GROUP BY spa.purchase_bill_id
       ),
       item_counts AS (
         SELECT purchase_bill_id, COUNT(*)::bigint AS item_count
@@ -930,6 +1128,7 @@ export class SuppliersService {
         spb.cancelled_at,
         spb.cancellation_reason,
         COALESCE(ic.item_count, 0) AS item_count,
+        spb.supplier_snapshot,
         spb.created_at,
         spb.updated_at,
         COUNT(*) OVER()::bigint AS full_count
@@ -943,7 +1142,32 @@ export class SuppliersService {
     `;
 
     const res = await appPool.query(query, [...params, limit, offset]);
-    const total = res.rows.length > 0 ? parseInt(res.rows[0].full_count, 10) : 0;
+    const total = await resolvePaginatedTotal(
+      appPool,
+      res.rows,
+      offset,
+      `WITH alloc_rev AS (
+        SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+        FROM supplier_payment_allocation_reversals
+        GROUP BY allocation_id
+      ),
+      alloc AS (
+        SELECT
+          spa.purchase_bill_id,
+          COALESCE(SUM(GREATEST(spa.amount - COALESCE(ar.reversed_amount, 0), 0)), 0)::numeric AS allocated_amount
+        FROM supplier_payment_allocations spa
+        INNER JOIN supplier_payments sp ON sp.id = spa.payment_id
+        LEFT JOIN alloc_rev ar ON ar.allocation_id = spa.id
+        WHERE sp.status = 'active'
+        GROUP BY spa.purchase_bill_id
+      )
+      SELECT COUNT(*)::bigint AS total
+      FROM supplier_purchase_bills spb
+      INNER JOIN suppliers s ON s.id = spb.supplier_id
+      LEFT JOIN alloc ON alloc.purchase_bill_id = spb.id
+      WHERE ${whereClause}`,
+      params
+    );
     const purchaseBills = res.rows.map((r) => this.mapPurchaseBillSummary(r));
     const hasMore = offset + purchaseBills.length < total;
 
@@ -961,11 +1185,21 @@ export class SuppliersService {
 
   public async getPurchaseBillById(billId: number): Promise<PurchaseBillDetail> {
     const billRes = await appPool.query(
-      `WITH alloc AS (
-        SELECT purchase_bill_id, COALESCE(SUM(amount), 0)::numeric AS allocated_amount
-        FROM supplier_payment_allocations
+      `WITH alloc_rev AS (
+        SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+        FROM supplier_payment_allocation_reversals
         WHERE purchase_bill_id = $1
-        GROUP BY purchase_bill_id
+        GROUP BY allocation_id
+      ),
+      alloc AS (
+        SELECT
+          spa.purchase_bill_id,
+          COALESCE(SUM(GREATEST(spa.amount - COALESCE(ar.reversed_amount, 0), 0)), 0)::numeric AS allocated_amount
+        FROM supplier_payment_allocations spa
+        INNER JOIN supplier_payments sp ON sp.id = spa.payment_id
+        LEFT JOIN alloc_rev ar ON ar.allocation_id = spa.id
+        WHERE spa.purchase_bill_id = $1 AND sp.status = 'active'
+        GROUP BY spa.purchase_bill_id
       ),
       item_counts AS (
         SELECT purchase_bill_id, COUNT(*)::bigint AS item_count
@@ -1019,16 +1253,29 @@ export class SuppliersService {
         [billId]
       ),
       appPool.query(
-        `SELECT
+        `WITH alloc_rev AS (
+          SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+          FROM supplier_payment_allocation_reversals
+          WHERE purchase_bill_id = $1
+          GROUP BY allocation_id
+        )
+        SELECT
           spa.id AS allocation_id,
           spa.payment_id,
-          spa.amount AS allocated_amount,
+          spa.amount AS original_allocated_amount,
+          COALESCE(ar.reversed_amount, 0)::numeric AS reversed_allocation_amount,
+          CASE
+            WHEN sp.status = 'active' THEN GREATEST(spa.amount - COALESCE(ar.reversed_amount, 0), 0)::numeric
+            ELSE 0::numeric
+          END AS allocated_amount,
+          sp.status AS payment_status,
           sp.receipt_number,
           TO_CHAR(sp.payment_date, 'YYYY-MM-DD') AS payment_date,
           sp.payment_method,
           sp.transaction_reference
         FROM supplier_payment_allocations spa
         INNER JOIN supplier_payments sp ON sp.id = spa.payment_id
+        LEFT JOIN alloc_rev ar ON ar.allocation_id = spa.id
         WHERE spa.purchase_bill_id = $1
         ORDER BY sp.payment_date DESC, spa.id DESC`,
         [billId]
@@ -1042,11 +1289,13 @@ export class SuppliersService {
       ),
     ]);
 
+    const snapshot = summary.supplierSnapshot;
+
     return {
       ...summary,
-      supplierAddress: billRow.supplier_address ?? null,
-      supplierState: billRow.supplier_state ?? null,
-      supplierStateCode: billRow.supplier_state_code ?? null,
+      supplierAddress: snapshot ? snapshot.address : (billRow.supplier_address ?? null),
+      supplierState: snapshot ? snapshot.state : (billRow.supplier_state ?? null),
+      supplierStateCode: snapshot ? snapshot.stateCode : (billRow.supplier_state_code ?? null),
       items: itemsRes.rows.map((r) => ({
         id: Number(r.id),
         purchaseBillId: Number(r.purchase_bill_id),
@@ -1068,7 +1317,10 @@ export class SuppliersService {
         receiptNumber: a.receipt_number,
         paymentDate: a.payment_date,
         paymentMethod: a.payment_method,
+        paymentStatus: a.payment_status === 'reversed' ? 'reversed' : 'active',
         transactionReference: a.transaction_reference ?? null,
+        originalAllocatedAmount: toFixedMoney(a.original_allocated_amount),
+        reversedAllocationAmount: toFixedMoney(a.reversed_allocation_amount),
         allocatedAmount: toFixedMoney(a.allocated_amount),
       })),
       history: historyRes.rows.map((h) => ({
@@ -1128,19 +1380,23 @@ export class SuppliersService {
       await client.query('BEGIN');
 
       const supplierRes = await client.query(
-        'SELECT id, name, archived_at FROM suppliers WHERE id = $1 FOR UPDATE',
+        `SELECT id, name, contact_person, phone, email, address, state, state_code, gstin, archived_at
+         FROM suppliers WHERE id = $1 FOR UPDATE`,
         [input.supplierId]
       );
       if (supplierRes.rows.length === 0) {
         throw new AppError('Supplier not found.', 404, 'SUPPLIER_NOT_FOUND');
       }
-      if (supplierRes.rows[0].archived_at) {
+      const supplierRow = supplierRes.rows[0];
+      if (supplierRow.archived_at) {
         throw new AppError(
           'Cannot create a purchase bill for an archived supplier. Restore the supplier first.',
           409,
           'SUPPLIER_ARCHIVED'
         );
       }
+
+      const supplierSnapshot = buildSupplierSnapshotFromRow(supplierRow);
 
       const dupInvoiceRes = await client.query(
         `SELECT id FROM supplier_purchase_bills
@@ -1159,13 +1415,14 @@ export class SuppliersService {
 
       const billInsertRes = await client.query(
         `INSERT INTO supplier_purchase_bills (
-          supplier_id, invoice_number, normalized_invoice_number, invoice_date, due_date,
+          supplier_id, supplier_snapshot, invoice_number, normalized_invoice_number, invoice_date, due_date,
           subtotal_amount, discount_amount, taxable_amount, gst_rate, gst_amount, grand_total,
           status, notes, version
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'finalized', $12, 1)
+        ) VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'finalized', $13, 1)
         RETURNING id`,
         [
           input.supplierId,
+          JSON.stringify(supplierSnapshot),
           cleanInvoiceNo,
           normalizedInvoiceNo,
           invoiceDate,
@@ -1232,6 +1489,7 @@ export class SuppliersService {
           billId,
           'Initial purchase bill recorded',
           JSON.stringify({
+            supplierSnapshot,
             invoiceNumber: cleanInvoiceNo,
             invoiceDate,
             dueDate,
@@ -1311,12 +1569,7 @@ export class SuppliersService {
         );
       }
 
-      const allocRes = await client.query(
-        `SELECT COALESCE(SUM(amount), 0)::numeric AS allocated_amount
-         FROM supplier_payment_allocations WHERE purchase_bill_id = $1`,
-        [billId]
-      );
-      const alreadyAllocated = new Decimal(allocRes.rows[0].allocated_amount || 0);
+      const alreadyAllocated = await this.getEffectiveBillAllocatedAmountInTx(client, billId);
       if (new Decimal(totals.grandTotal).lessThan(alreadyAllocated)) {
         throw new AppError(
           `Updated grand total (${totals.grandTotal}) cannot be less than payments already allocated to this bill (${alreadyAllocated.toFixed(2)}).`,
@@ -1480,12 +1733,8 @@ export class SuppliersService {
         throw new AppError('Purchase bill is already cancelled.', 409, 'BILL_ALREADY_CANCELLED');
       }
 
-      const allocRes = await client.query(
-        `SELECT COALESCE(SUM(amount), 0)::numeric AS allocated_amount
-         FROM supplier_payment_allocations WHERE purchase_bill_id = $1`,
-        [billId]
-      );
-      if (new Decimal(allocRes.rows[0].allocated_amount || 0).greaterThan(0)) {
+      const alreadyAllocated = await this.getEffectiveBillAllocatedAmountInTx(client, billId);
+      if (alreadyAllocated.greaterThan(0)) {
         throw new AppError(
           'Cannot cancel a purchase bill that already has payments allocated against it.',
           409,
@@ -1614,21 +1863,32 @@ export class SuppliersService {
     return this.getPurchaseBillById(billId);
   }
 
-  private async applyBillAllocationsInTx(
+  private async getEffectiveBillAllocatedAmountInTx(
     client: PoolClient,
-    options: {
-      paymentId: number;
-      supplierId: string;
-      availableAmount: Decimal;
-      allocations: PaymentAllocationInput[];
-      allowTopUp?: boolean;
-    }
-  ): Promise<void> {
-    const { paymentId, supplierId, availableAmount, allocations, allowTopUp = false } = options;
-    if (!allocations || allocations.length === 0) return;
+    purchaseBillId: number
+  ): Promise<Decimal> {
+    const existingAllocRes = await client.query(
+      `WITH alloc_rev AS (
+        SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+        FROM supplier_payment_allocation_reversals
+        WHERE purchase_bill_id = $1
+        GROUP BY allocation_id
+      )
+      SELECT COALESCE(SUM(GREATEST(spa.amount - COALESCE(ar.reversed_amount, 0), 0)), 0)::numeric AS allocated_amount
+      FROM supplier_payment_allocations spa
+      INNER JOIN supplier_payments sp ON sp.id = spa.payment_id
+      LEFT JOIN alloc_rev ar ON ar.allocation_id = spa.id
+      WHERE spa.purchase_bill_id = $1 AND sp.status = 'active'`,
+      [purchaseBillId]
+    );
+    return new Decimal(existingAllocRes.rows[0].allocated_amount || 0);
+  }
 
+  private normalizeAndValidateAllocations(
+    allocations: PaymentAllocationInput[]
+  ): Array<{ purchaseBillId: number; amount: Decimal }> {
     const seenBillIds = new Set<number>();
-    const normalizedAllocs = allocations.map((a) => {
+    return allocations.map((a) => {
       const billId = Number(a.purchaseBillId);
       if (seenBillIds.has(billId)) {
         throw new AppError(
@@ -1641,7 +1901,22 @@ export class SuppliersService {
       const amount = validateMoneyInput(a.amount, 'Allocation amount', { allowZero: false });
       return { purchaseBillId: billId, amount };
     });
+  }
 
+  private async applyBillAllocationsInTx(
+    client: PoolClient,
+    options: {
+      paymentId: number;
+      supplierId: string;
+      availableAmount: Decimal;
+      allocations: Array<{ purchaseBillId: number; amount: Decimal }>;
+      allowTopUp?: boolean;
+    }
+  ): Promise<void> {
+    const { paymentId, supplierId, availableAmount, allocations, allowTopUp = false } = options;
+    if (!allocations || allocations.length === 0) return;
+
+    const normalizedAllocs = [...allocations];
     const totalRequested = normalizedAllocs.reduce(
       (sum, item) => sum.plus(item.amount),
       new Decimal(0)
@@ -1688,13 +1963,7 @@ export class SuppliersService {
         );
       }
 
-      const existingAllocRes = await client.query(
-        `SELECT COALESCE(SUM(amount), 0)::numeric AS allocated_amount
-         FROM supplier_payment_allocations
-         WHERE purchase_bill_id = $1`,
-        [alloc.purchaseBillId]
-      );
-      const billAllocated = new Decimal(existingAllocRes.rows[0].allocated_amount || 0);
+      const billAllocated = await this.getEffectiveBillAllocatedAmountInTx(client, alloc.purchaseBillId);
       const billTotal = new Decimal(bill.grand_total || 0);
       const billRemaining = Decimal.max(billTotal.minus(billAllocated), new Decimal(0));
 
@@ -1727,10 +1996,46 @@ export class SuppliersService {
   public async createSupplierPayment(input: CreateSupplierPaymentInput): Promise<SupplierPaymentRecord> {
     const paymentDate = input.paymentDate || getBusinessDateISO();
     const amount = validateMoneyInput(input.amount, 'Payment amount', { allowZero: false });
+    const cleanKey = assertOptionalServiceIdempotencyKey(input.idempotencyKey);
+    const normalizedRef = normalizeTransactionReference(input.transactionReference);
+    const normalizedNotes = input.notes?.trim() || null;
+    const normalizedAllocs = this.normalizeAndValidateAllocations(input.allocations || []);
+
+    const requestHash = cleanKey
+      ? hashIdempotencyPayload({
+          supplierId: input.supplierId,
+          paymentDate,
+          amount: amount.toFixed(2),
+          paymentMethod: input.paymentMethod,
+          transactionReference: normalizedRef,
+          notes: normalizedNotes,
+          allocations: [...normalizedAllocs]
+            .sort((a, b) => a.purchaseBillId - b.purchaseBillId)
+            .map((a) => ({
+              purchaseBillId: a.purchaseBillId,
+              amount: a.amount.toFixed(2),
+            })),
+        })
+      : null;
 
     const client = await appPool.connect();
     try {
       await client.query('BEGIN');
+
+      if (cleanKey && requestHash) {
+        await acquireIdempotencyLock(client, cleanKey);
+        const existingIdemp = await checkIdempotencyRecord<SupplierPaymentRecord>(
+          client,
+          cleanKey,
+          'CREATE_SUPPLIER_PAYMENT',
+          requestHash
+        );
+        if (existingIdemp.found && !existingIdemp.expired) {
+          await client.query('COMMIT');
+          return existingIdemp.responseBody;
+        }
+        await cleanupExpiredIdempotencyKeys(client, 100);
+      }
 
       const supplierRes = await client.query(
         'SELECT id, archived_at FROM suppliers WHERE id = $1 FOR UPDATE',
@@ -1745,6 +2050,26 @@ export class SuppliersService {
           409,
           'SUPPLIER_ARCHIVED'
         );
+      }
+
+      if (isDigitalPaymentMethod(input.paymentMethod) && normalizedRef) {
+        const dupRefRes = await client.query(
+          `SELECT id, receipt_number
+           FROM supplier_payments
+           WHERE supplier_id = $1
+             AND payment_method = $2
+             AND LOWER(BTRIM(transaction_reference)) = LOWER($3)
+             AND status = 'active'
+           LIMIT 1`,
+          [input.supplierId, input.paymentMethod, normalizedRef]
+        );
+        if (dupRefRes.rows.length > 0) {
+          throw new AppError(
+            `An active ${input.paymentMethod.replace('_', ' ')} payment (${dupRefRes.rows[0].receipt_number}) already uses reference "${normalizedRef}" for this supplier.`,
+            409,
+            'SUPPLIER_PAYMENT_REFERENCE_DUPLICATE'
+          );
+        }
       }
 
       const receiptNumber = await allocateDocumentNumber(
@@ -1764,8 +2089,8 @@ export class SuppliersService {
           paymentDate,
           amount.toFixed(2),
           input.paymentMethod,
-          input.transactionReference?.trim() || null,
-          input.notes?.trim() || null,
+          normalizedRef,
+          normalizedNotes,
         ]
       );
 
@@ -1775,15 +2100,27 @@ export class SuppliersService {
         paymentId,
         supplierId: input.supplierId,
         availableAmount: amount,
-        allocations: input.allocations || [],
+        allocations: normalizedAllocs,
         allowTopUp: false,
       });
 
+      const createdPayment = await this.getSupplierPaymentById(paymentId, client);
+
+      if (cleanKey && requestHash) {
+        await storeIdempotencyRecord(client, {
+          key: cleanKey,
+          action: 'CREATE_SUPPLIER_PAYMENT',
+          requestHash,
+          responseStatus: 201,
+          responseBody: createdPayment,
+        });
+      }
+
       await client.query('COMMIT');
-      return this.getSupplierPaymentById(paymentId);
+      return createdPayment;
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
-      throw err;
+      rethrowConstraintError(err);
     } finally {
       client.release();
     }
@@ -1791,11 +2128,44 @@ export class SuppliersService {
 
   public async allocateAdvancePayment(
     paymentId: number,
-    allocations: PaymentAllocationInput[]
+    allocations: PaymentAllocationInput[],
+    idempotencyKey?: string | null
   ): Promise<SupplierPaymentRecord> {
+    if (!allocations || allocations.length === 0) {
+      throw new AppError('At least one bill allocation is required.', 400, 'VALIDATION_ERROR');
+    }
+    const cleanKey = assertOptionalServiceIdempotencyKey(idempotencyKey);
+    const normalizedAllocs = this.normalizeAndValidateAllocations(allocations);
+    const requestHash = cleanKey
+      ? hashIdempotencyPayload({
+          paymentId,
+          allocations: [...normalizedAllocs]
+            .sort((a, b) => a.purchaseBillId - b.purchaseBillId)
+            .map((a) => ({
+              purchaseBillId: a.purchaseBillId,
+              amount: a.amount.toFixed(2),
+            })),
+        })
+      : null;
+
     const client = await appPool.connect();
     try {
       await client.query('BEGIN');
+
+      if (cleanKey && requestHash) {
+        await acquireIdempotencyLock(client, cleanKey);
+        const existingIdemp = await checkIdempotencyRecord<SupplierPaymentRecord>(
+          client,
+          cleanKey,
+          'ALLOCATE_SUPPLIER_ADVANCE',
+          requestHash
+        );
+        if (existingIdemp.found && !existingIdemp.expired) {
+          await client.query('COMMIT');
+          return existingIdemp.responseBody;
+        }
+        await cleanupExpiredIdempotencyKeys(client, 100);
+      }
 
       const payRes = await client.query(
         `SELECT sp.*, s.archived_at AS supplier_archived_at
@@ -1809,6 +2179,13 @@ export class SuppliersService {
         throw new AppError('Supplier payment not found.', 404, 'PAYMENT_NOT_FOUND');
       }
       const payment = payRes.rows[0];
+      if (payment.status === 'reversed') {
+        throw new AppError(
+          `Payment "${payment.receipt_number}" has been reversed and cannot be allocated.`,
+          409,
+          'PAYMENT_REVERSED'
+        );
+      }
       if (payment.supplier_archived_at) {
         throw new AppError(
           'Cannot allocate payments for an archived supplier. Restore the supplier first.',
@@ -1818,9 +2195,16 @@ export class SuppliersService {
       }
 
       const existingAllocRes = await client.query(
-        `SELECT COALESCE(SUM(amount), 0)::numeric AS allocated_amount
-         FROM supplier_payment_allocations
-         WHERE payment_id = $1`,
+        `WITH alloc_rev AS (
+          SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+          FROM supplier_payment_allocation_reversals
+          WHERE payment_id = $1
+          GROUP BY allocation_id
+        )
+        SELECT COALESCE(SUM(GREATEST(spa.amount - COALESCE(ar.reversed_amount, 0), 0)), 0)::numeric AS allocated_amount
+        FROM supplier_payment_allocations spa
+        LEFT JOIN alloc_rev ar ON ar.allocation_id = spa.id
+        WHERE spa.payment_id = $1`,
         [paymentId]
       );
       const allocated = new Decimal(existingAllocRes.rows[0].allocated_amount || 0);
@@ -1839,12 +2223,297 @@ export class SuppliersService {
         paymentId,
         supplierId: payment.supplier_id,
         availableAmount: availableUnallocated,
-        allocations,
+        allocations: normalizedAllocs,
         allowTopUp: true,
       });
 
+      const updatedPayment = await this.getSupplierPaymentById(paymentId, client);
+
+      if (cleanKey && requestHash) {
+        await storeIdempotencyRecord(client, {
+          key: cleanKey,
+          action: 'ALLOCATE_SUPPLIER_ADVANCE',
+          requestHash,
+          responseStatus: 200,
+          responseBody: updatedPayment,
+        });
+      }
+
       await client.query('COMMIT');
-      return this.getSupplierPaymentById(paymentId);
+      return updatedPayment;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  public async reverseSupplierPayment(
+    paymentId: number,
+    reason: string,
+    idempotencyKey?: string | null
+  ): Promise<SupplierPaymentRecord> {
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      throw new AppError('Reversal reason is required.', 400, 'VALIDATION_ERROR');
+    }
+    const cleanKey = assertOptionalServiceIdempotencyKey(idempotencyKey);
+    const requestHash = cleanKey
+      ? hashIdempotencyPayload({ paymentId, reason: trimmedReason })
+      : null;
+
+    const client = await appPool.connect();
+    try {
+      await client.query('BEGIN');
+
+      if (cleanKey && requestHash) {
+        await acquireIdempotencyLock(client, cleanKey);
+        const existingIdemp = await checkIdempotencyRecord<SupplierPaymentRecord>(
+          client,
+          cleanKey,
+          'REVERSE_SUPPLIER_PAYMENT',
+          requestHash
+        );
+        if (existingIdemp.found && !existingIdemp.expired) {
+          await client.query('COMMIT');
+          return existingIdemp.responseBody;
+        }
+        await cleanupExpiredIdempotencyKeys(client, 100);
+      }
+
+      const payRes = await client.query(
+        `SELECT id, receipt_number, supplier_id, amount, status
+         FROM supplier_payments
+         WHERE id = $1
+         FOR UPDATE`,
+        [paymentId]
+      );
+      if (payRes.rows.length === 0) {
+        throw new AppError('Supplier payment not found.', 404, 'PAYMENT_NOT_FOUND');
+      }
+      const sp = payRes.rows[0];
+      if (sp.status === 'reversed') {
+        throw new AppError(
+          `Payment "${sp.receipt_number}" has already been reversed.`,
+          409,
+          'PAYMENT_ALREADY_REVERSED'
+        );
+      }
+
+      // Lock affected purchase bills in ascending ID order to avoid deadlocks with concurrent bill ops
+      const billIdsRes = await client.query(
+        `SELECT DISTINCT purchase_bill_id
+         FROM supplier_payment_allocations
+         WHERE payment_id = $1
+         ORDER BY purchase_bill_id ASC`,
+        [paymentId]
+      );
+      const billIds = billIdsRes.rows.map((r) => Number(r.purchase_bill_id));
+      if (billIds.length > 0) {
+        await client.query(
+          `SELECT id
+           FROM supplier_purchase_bills
+           WHERE id = ANY($1::bigint[])
+           ORDER BY id ASC
+           FOR UPDATE`,
+          [billIds]
+        );
+      }
+
+      const preReversalSnapshot = await this.getSupplierPaymentById(paymentId, client);
+
+      const updateRes = await client.query(
+        `UPDATE supplier_payments
+         SET
+           status = 'reversed',
+           reversed_at = NOW(),
+           reversal_reason = $1,
+           updated_at = NOW()
+         WHERE id = $2
+         RETURNING reversed_at`,
+        [trimmedReason, paymentId]
+      );
+      const reversedAt = updateRes.rows[0].reversed_at;
+      const reversalNumber = `REV-${sp.receipt_number}`;
+
+      await client.query(
+        `INSERT INTO supplier_payment_reversals (
+          reversal_number, payment_id, supplier_id, original_amount,
+          reason, payment_snapshot, reversed_at
+        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+        [
+          reversalNumber,
+          paymentId,
+          sp.supplier_id,
+          toFixedMoney(sp.amount),
+          trimmedReason,
+          JSON.stringify(preReversalSnapshot),
+          reversedAt,
+        ]
+      );
+
+      const reversedPayment = await this.getSupplierPaymentById(paymentId, client);
+
+      if (cleanKey && requestHash) {
+        await storeIdempotencyRecord(client, {
+          key: cleanKey,
+          action: 'REVERSE_SUPPLIER_PAYMENT',
+          requestHash,
+          responseStatus: 200,
+          responseBody: reversedPayment,
+        });
+      }
+
+      await client.query('COMMIT');
+      return reversedPayment;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  public async reversePaymentAllocation(
+    paymentId: number,
+    allocationId: number,
+    input: { amount: number | string; reason: string },
+    idempotencyKey?: string | null
+  ): Promise<SupplierPaymentRecord> {
+    const reversalAmt = validateMoneyInput(input.amount, 'Reversal amount', { allowZero: false });
+    const trimmedReason = input.reason.trim();
+    if (!trimmedReason) {
+      throw new AppError('Allocation reversal reason is required.', 400, 'VALIDATION_ERROR');
+    }
+    const cleanKey = assertOptionalServiceIdempotencyKey(idempotencyKey);
+    const requestHash = cleanKey
+      ? hashIdempotencyPayload({
+          paymentId,
+          allocationId,
+          amount: reversalAmt.toFixed(2),
+          reason: trimmedReason,
+        })
+      : null;
+
+    const client = await appPool.connect();
+    try {
+      await client.query('BEGIN');
+
+      if (cleanKey && requestHash) {
+        await acquireIdempotencyLock(client, cleanKey);
+        const existingIdemp = await checkIdempotencyRecord<SupplierPaymentRecord>(
+          client,
+          cleanKey,
+          'REVERSE_SUPPLIER_ALLOCATION',
+          requestHash
+        );
+        if (existingIdemp.found && !existingIdemp.expired) {
+          await client.query('COMMIT');
+          return existingIdemp.responseBody;
+        }
+        await cleanupExpiredIdempotencyKeys(client, 100);
+      }
+
+      const payRes = await client.query(
+        `SELECT id, receipt_number, supplier_id, status
+         FROM supplier_payments
+         WHERE id = $1
+         FOR UPDATE`,
+        [paymentId]
+      );
+      if (payRes.rows.length === 0) {
+        throw new AppError('Supplier payment not found.', 404, 'PAYMENT_NOT_FOUND');
+      }
+      const sp = payRes.rows[0];
+      if (sp.status === 'reversed') {
+        throw new AppError(
+          `Payment "${sp.receipt_number}" is already fully reversed.`,
+          409,
+          'PAYMENT_ALREADY_REVERSED'
+        );
+      }
+
+      const allocMetaRes = await client.query(
+        `SELECT id, purchase_bill_id, supplier_id
+         FROM supplier_payment_allocations
+         WHERE id = $1 AND payment_id = $2`,
+        [allocationId, paymentId]
+      );
+      if (allocMetaRes.rows.length === 0) {
+        throw new AppError(
+          'Allocation not found for this supplier payment.',
+          404,
+          'ALLOCATION_NOT_FOUND'
+        );
+      }
+      const purchaseBillId = Number(allocMetaRes.rows[0].purchase_bill_id);
+
+      // Lock bill before allocation to preserve global payment -> bill -> allocation lock order
+      await client.query(
+        'SELECT id FROM supplier_purchase_bills WHERE id = $1 FOR UPDATE',
+        [purchaseBillId]
+      );
+
+      const allocLockRes = await client.query(
+        `SELECT id, amount
+         FROM supplier_payment_allocations
+         WHERE id = $1 AND payment_id = $2
+         FOR UPDATE`,
+        [allocationId, paymentId]
+      );
+      const grossAlloc = new Decimal(allocLockRes.rows[0].amount || 0);
+
+      const revSumRes = await client.query(
+        `SELECT COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+         FROM supplier_payment_allocation_reversals
+         WHERE allocation_id = $1`,
+        [allocationId]
+      );
+      const alreadyReversed = new Decimal(revSumRes.rows[0].reversed_amount || 0);
+      const activeRemaining = Decimal.max(grossAlloc.minus(alreadyReversed), new Decimal(0));
+
+      if (reversalAmt.greaterThan(activeRemaining)) {
+        throw new AppError(
+          `Reversal amount (${reversalAmt.toFixed(2)}) exceeds active remaining allocation (${activeRemaining.toFixed(2)}).`,
+          409,
+          'ALLOCATION_REVERSAL_EXCEEDS_ACTIVE_AMOUNT'
+        );
+      }
+
+      await client.query(
+        `INSERT INTO supplier_payment_allocation_reversals (
+          allocation_id, payment_id, purchase_bill_id, supplier_id, reversed_amount, reason
+        ) VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          allocationId,
+          paymentId,
+          purchaseBillId,
+          sp.supplier_id,
+          reversalAmt.toFixed(2),
+          trimmedReason,
+        ]
+      );
+
+      await client.query(
+        `UPDATE supplier_payments SET updated_at = NOW() WHERE id = $1`,
+        [paymentId]
+      );
+
+      const updatedPayment = await this.getSupplierPaymentById(paymentId, client);
+
+      if (cleanKey && requestHash) {
+        await storeIdempotencyRecord(client, {
+          key: cleanKey,
+          action: 'REVERSE_SUPPLIER_ALLOCATION',
+          requestHash,
+          responseStatus: 200,
+          responseBody: updatedPayment,
+        });
+      }
+
+      await client.query('COMMIT');
+      return updatedPayment;
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
       throw err;
@@ -1856,6 +2525,7 @@ export class SuppliersService {
   public async listSupplierPayments(options?: {
     supplierId?: string;
     paymentMethod?: 'cash' | 'upi' | 'bank_transfer' | 'cheque' | 'other';
+    status?: 'active' | 'reversed' | 'all';
     fromDate?: string;
     toDate?: string;
     limit?: number;
@@ -1878,6 +2548,10 @@ export class SuppliersService {
       params.push(options.paymentMethod);
       conditions.push(`sp.payment_method = $${params.length}`);
     }
+    if (options?.status && options.status !== 'all') {
+      params.push(options.status);
+      conditions.push(`sp.status = $${params.length}`);
+    }
     if (options?.fromDate) {
       params.push(options.fromDate);
       conditions.push(`sp.payment_date >= $${params.length}::date`);
@@ -1890,10 +2564,18 @@ export class SuppliersService {
     const whereClause = conditions.length > 0 ? conditions.join(' AND ') : 'TRUE';
 
     const query = `
-      WITH alloc AS (
-        SELECT payment_id, COALESCE(SUM(amount), 0)::numeric AS allocated_amount
-        FROM supplier_payment_allocations
-        GROUP BY payment_id
+      WITH alloc_rev AS (
+        SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+        FROM supplier_payment_allocation_reversals
+        GROUP BY allocation_id
+      ),
+      alloc AS (
+        SELECT
+          spa.payment_id,
+          COALESCE(SUM(GREATEST(spa.amount - COALESCE(ar.reversed_amount, 0), 0)), 0)::numeric AS allocated_amount
+        FROM supplier_payment_allocations spa
+        LEFT JOIN alloc_rev ar ON ar.allocation_id = spa.id
+        GROUP BY spa.payment_id
       )
       SELECT
         sp.id,
@@ -1906,7 +2588,14 @@ export class SuppliersService {
         s.archived_at AS supplier_archived_at,
         TO_CHAR(sp.payment_date, 'YYYY-MM-DD') AS payment_date,
         sp.amount,
-        COALESCE(alloc.allocated_amount, 0) AS allocated_amount,
+        sp.status,
+        sp.reversed_at,
+        sp.reversal_reason,
+        spr.reversal_number,
+        CASE
+          WHEN sp.status = 'active' THEN COALESCE(alloc.allocated_amount, 0)::numeric
+          ELSE 0::numeric
+        END AS allocated_amount,
         sp.payment_method,
         sp.transaction_reference,
         sp.notes,
@@ -1916,29 +2605,48 @@ export class SuppliersService {
       FROM supplier_payments sp
       INNER JOIN suppliers s ON s.id = sp.supplier_id
       LEFT JOIN alloc ON alloc.payment_id = sp.id
+      LEFT JOIN supplier_payment_reversals spr ON spr.payment_id = sp.id
       WHERE ${whereClause}
       ORDER BY sp.payment_date DESC, sp.id DESC
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
 
     const res = await appPool.query(query, [...params, limit, offset]);
-    const total = res.rows.length > 0 ? parseInt(res.rows[0].full_count, 10) : 0;
+    const total = await resolvePaginatedTotal(
+      appPool,
+      res.rows,
+      offset,
+      `SELECT COUNT(*)::bigint AS total FROM supplier_payments sp WHERE ${whereClause}`,
+      params
+    );
 
     const paymentIds = res.rows.map((r) => Number(r.id));
+    const paymentStatusById = new Map<number, 'active' | 'reversed'>();
+    for (const r of res.rows) {
+      paymentStatusById.set(Number(r.id), r.status === 'reversed' ? 'reversed' : 'active');
+    }
+
     const allocationsByPayment = new Map<number, SupplierPaymentAllocationRecord[]>();
 
     if (paymentIds.length > 0) {
       const allocRes = await appPool.query(
-        `SELECT
+        `WITH alloc_rev AS (
+          SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+          FROM supplier_payment_allocation_reversals
+          GROUP BY allocation_id
+        )
+        SELECT
           spa.id AS allocation_id,
           spa.payment_id,
           spa.purchase_bill_id,
           spa.amount,
+          COALESCE(ar.reversed_amount, 0)::numeric AS reversed_amount,
           spb.invoice_number,
           TO_CHAR(spb.invoice_date, 'YYYY-MM-DD') AS invoice_date,
           spb.grand_total
         FROM supplier_payment_allocations spa
         INNER JOIN supplier_purchase_bills spb ON spb.id = spa.purchase_bill_id
+        LEFT JOIN alloc_rev ar ON ar.allocation_id = spa.id
         WHERE spa.payment_id = ANY($1::bigint[])
         ORDER BY spb.invoice_date ASC, spa.id ASC`,
         [paymentIds]
@@ -1946,6 +2654,13 @@ export class SuppliersService {
 
       for (const r of allocRes.rows) {
         const pid = Number(r.payment_id);
+        const payStatus = paymentStatusById.get(pid) || 'active';
+        const gross = new Decimal(r.amount || 0);
+        const revAmt = new Decimal(r.reversed_amount || 0);
+        const effectiveAmt = payStatus === 'active'
+          ? Decimal.max(gross.minus(revAmt), new Decimal(0))
+          : new Decimal(0);
+
         const list = allocationsByPayment.get(pid) || [];
         list.push({
           allocationId: Number(r.allocation_id),
@@ -1953,16 +2668,21 @@ export class SuppliersService {
           invoiceNumber: r.invoice_number,
           invoiceDate: r.invoice_date,
           billGrandTotal: toFixedMoney(r.grand_total),
-          amount: toFixedMoney(r.amount),
+          amount: toFixedMoney(effectiveAmt),
+          originalAmount: toFixedMoney(gross),
+          reversedAmount: toFixedMoney(revAmt),
         });
         allocationsByPayment.set(pid, list);
       }
     }
 
     const payments: SupplierPaymentRecord[] = res.rows.map((r) => {
+      const payStatus: 'active' | 'reversed' = r.status === 'reversed' ? 'reversed' : 'active';
       const totalAmt = new Decimal(r.amount || 0);
-      const allocatedAmt = new Decimal(r.allocated_amount || 0);
-      const unallocatedAmt = Decimal.max(totalAmt.minus(allocatedAmt), new Decimal(0));
+      const allocatedAmt = payStatus === 'active' ? new Decimal(r.allocated_amount || 0) : new Decimal(0);
+      const unallocatedAmt = payStatus === 'active'
+        ? Decimal.max(totalAmt.minus(allocatedAmt), new Decimal(0))
+        : new Decimal(0);
       const pid = Number(r.id);
 
       return {
@@ -1976,8 +2696,13 @@ export class SuppliersService {
         supplierArchivedAt: r.supplier_archived_at ? new Date(r.supplier_archived_at).toISOString() : null,
         paymentDate: r.payment_date,
         amount: toFixedMoney(totalAmt),
+        effectiveAmount: payStatus === 'active' ? toFixedMoney(totalAmt) : '0.00',
         allocatedAmount: toFixedMoney(allocatedAmt),
         unallocatedAmount: toFixedMoney(unallocatedAmt),
+        status: payStatus,
+        reversedAt: r.reversed_at ? new Date(r.reversed_at).toISOString() : null,
+        reversalReason: r.reversal_reason ?? null,
+        reversalNumber: r.reversal_number ?? null,
         paymentMethod: r.payment_method,
         transactionReference: r.transaction_reference ?? null,
         notes: r.notes ?? null,
@@ -2000,13 +2725,25 @@ export class SuppliersService {
     };
   }
 
-  public async getSupplierPaymentById(paymentId: number): Promise<SupplierPaymentRecord> {
-    const payRes = await appPool.query(
-      `WITH alloc AS (
-        SELECT payment_id, COALESCE(SUM(amount), 0)::numeric AS allocated_amount
-        FROM supplier_payment_allocations
+  public async getSupplierPaymentById(
+    paymentId: number,
+    db: PoolClient | typeof appPool = appPool
+  ): Promise<SupplierPaymentRecord> {
+    const payRes = await db.query(
+      `WITH alloc_rev AS (
+        SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+        FROM supplier_payment_allocation_reversals
         WHERE payment_id = $1
-        GROUP BY payment_id
+        GROUP BY allocation_id
+      ),
+      alloc AS (
+        SELECT
+          spa.payment_id,
+          COALESCE(SUM(GREATEST(spa.amount - COALESCE(ar.reversed_amount, 0), 0)), 0)::numeric AS allocated_amount
+        FROM supplier_payment_allocations spa
+        LEFT JOIN alloc_rev ar ON ar.allocation_id = spa.id
+        WHERE spa.payment_id = $1
+        GROUP BY spa.payment_id
       )
       SELECT
         sp.id,
@@ -2019,7 +2756,14 @@ export class SuppliersService {
         s.archived_at AS supplier_archived_at,
         TO_CHAR(sp.payment_date, 'YYYY-MM-DD') AS payment_date,
         sp.amount,
-        COALESCE(alloc.allocated_amount, 0) AS allocated_amount,
+        sp.status,
+        sp.reversed_at,
+        sp.reversal_reason,
+        spr.reversal_number,
+        CASE
+          WHEN sp.status = 'active' THEN COALESCE(alloc.allocated_amount, 0)::numeric
+          ELSE 0::numeric
+        END AS allocated_amount,
         sp.payment_method,
         sp.transaction_reference,
         sp.notes,
@@ -2028,6 +2772,7 @@ export class SuppliersService {
       FROM supplier_payments sp
       INNER JOIN suppliers s ON s.id = sp.supplier_id
       LEFT JOIN alloc ON alloc.payment_id = sp.id
+      LEFT JOIN supplier_payment_reversals spr ON spr.payment_id = sp.id
       WHERE sp.id = $1`,
       [paymentId]
     );
@@ -2037,27 +2782,54 @@ export class SuppliersService {
     }
 
     const r = payRes.rows[0];
-    const [allocRes, supplier] = await Promise.all([
-      appPool.query(
-        `SELECT
+    const payStatus: 'active' | 'reversed' = r.status === 'reversed' ? 'reversed' : 'active';
+
+    const [allocRes, allocRevRes, supplier] = await Promise.all([
+      db.query(
+        `WITH alloc_rev AS (
+          SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+          FROM supplier_payment_allocation_reversals
+          WHERE payment_id = $1
+          GROUP BY allocation_id
+        )
+        SELECT
           spa.id AS allocation_id,
           spa.purchase_bill_id,
           spa.amount,
+          COALESCE(ar.reversed_amount, 0)::numeric AS reversed_amount,
           spb.invoice_number,
           TO_CHAR(spb.invoice_date, 'YYYY-MM-DD') AS invoice_date,
           spb.grand_total
         FROM supplier_payment_allocations spa
         INNER JOIN supplier_purchase_bills spb ON spb.id = spa.purchase_bill_id
+        LEFT JOIN alloc_rev ar ON ar.allocation_id = spa.id
         WHERE spa.payment_id = $1
         ORDER BY spb.invoice_date ASC, spa.id ASC`,
         [paymentId]
       ),
-      this.getSupplierById(r.supplier_id),
+      db.query(
+        `SELECT
+          spar.id,
+          spar.allocation_id,
+          spar.purchase_bill_id,
+          spb.invoice_number,
+          spar.reversed_amount,
+          spar.reason,
+          spar.created_at
+        FROM supplier_payment_allocation_reversals spar
+        INNER JOIN supplier_purchase_bills spb ON spb.id = spar.purchase_bill_id
+        WHERE spar.payment_id = $1
+        ORDER BY spar.created_at DESC, spar.id DESC`,
+        [paymentId]
+      ),
+      this.getSupplierById(r.supplier_id, db),
     ]);
 
     const totalAmt = new Decimal(r.amount || 0);
-    const allocatedAmt = new Decimal(r.allocated_amount || 0);
-    const unallocatedAmt = Decimal.max(totalAmt.minus(allocatedAmt), new Decimal(0));
+    const allocatedAmt = payStatus === 'active' ? new Decimal(r.allocated_amount || 0) : new Decimal(0);
+    const unallocatedAmt = payStatus === 'active'
+      ? Decimal.max(totalAmt.minus(allocatedAmt), new Decimal(0))
+      : new Decimal(0);
 
     return {
       id: Number(r.id),
@@ -2070,20 +2842,43 @@ export class SuppliersService {
       supplierArchivedAt: r.supplier_archived_at ? new Date(r.supplier_archived_at).toISOString() : null,
       paymentDate: r.payment_date,
       amount: toFixedMoney(totalAmt),
+      effectiveAmount: payStatus === 'active' ? toFixedMoney(totalAmt) : '0.00',
       allocatedAmount: toFixedMoney(allocatedAmt),
       unallocatedAmount: toFixedMoney(unallocatedAmt),
+      status: payStatus,
+      reversedAt: r.reversed_at ? new Date(r.reversed_at).toISOString() : null,
+      reversalReason: r.reversal_reason ?? null,
+      reversalNumber: r.reversal_number ?? null,
       paymentMethod: r.payment_method,
       transactionReference: r.transaction_reference ?? null,
       notes: r.notes ?? null,
       createdAt: new Date(r.created_at).toISOString(),
       updatedAt: new Date(r.updated_at).toISOString(),
-      allocations: allocRes.rows.map((a) => ({
-        allocationId: Number(a.allocation_id),
-        purchaseBillId: Number(a.purchase_bill_id),
-        invoiceNumber: a.invoice_number,
-        invoiceDate: a.invoice_date,
-        billGrandTotal: toFixedMoney(a.grand_total),
-        amount: toFixedMoney(a.amount),
+      allocations: allocRes.rows.map((a) => {
+        const gross = new Decimal(a.amount || 0);
+        const revAmt = new Decimal(a.reversed_amount || 0);
+        const effectiveAmt = payStatus === 'active'
+          ? Decimal.max(gross.minus(revAmt), new Decimal(0))
+          : new Decimal(0);
+        return {
+          allocationId: Number(a.allocation_id),
+          purchaseBillId: Number(a.purchase_bill_id),
+          invoiceNumber: a.invoice_number,
+          invoiceDate: a.invoice_date,
+          billGrandTotal: toFixedMoney(a.grand_total),
+          amount: toFixedMoney(effectiveAmt),
+          originalAmount: toFixedMoney(gross),
+          reversedAmount: toFixedMoney(revAmt),
+        };
+      }),
+      allocationReversals: allocRevRes.rows.map((rev) => ({
+        id: Number(rev.id),
+        allocationId: Number(rev.allocation_id),
+        purchaseBillId: Number(rev.purchase_bill_id),
+        invoiceNumber: rev.invoice_number,
+        reversedAmount: toFixedMoney(rev.reversed_amount),
+        reason: rev.reason,
+        createdAt: new Date(rev.created_at).toISOString(),
       })),
       supplierSummary: {
         totalPurchases: supplier.totalPurchases,
@@ -2115,16 +2910,19 @@ export class SuppliersService {
 
     let priorPurchases = '0.00';
     let priorPayments = '0.00';
+    let priorReversals = '0.00';
 
     if (fromDate) {
       const priorRes = await appPool.query(
         `SELECT
           (SELECT COALESCE(SUM(grand_total), 0)::numeric FROM supplier_purchase_bills WHERE supplier_id = $1 AND status = 'finalized' AND invoice_date < $2::date) AS prior_purchases,
-          (SELECT COALESCE(SUM(amount), 0)::numeric FROM supplier_payments WHERE supplier_id = $1 AND payment_date < $2::date) AS prior_payments`,
+          (SELECT COALESCE(SUM(amount), 0)::numeric FROM supplier_payments WHERE supplier_id = $1 AND payment_date < $2::date) AS prior_payments,
+          (SELECT COALESCE(SUM(original_amount), 0)::numeric FROM supplier_payment_reversals WHERE supplier_id = $1 AND (reversed_at AT TIME ZONE 'Asia/Kolkata')::date < $2::date) AS prior_reversals`,
         [supplierId, fromDate]
       );
       priorPurchases = toFixedMoney(priorRes.rows[0]?.prior_purchases || 0);
       priorPayments = toFixedMoney(priorRes.rows[0]?.prior_payments || 0);
+      priorReversals = toFixedMoney(priorRes.rows[0]?.prior_reversals || 0);
     }
 
     const billConditions = [`spb.supplier_id = $1`, `spb.status = 'finalized'`];
@@ -2149,35 +2947,93 @@ export class SuppliersService {
       payConditions.push(`sp.payment_date <= $${payParams.length}::date`);
     }
 
-    const [billsRes, paymentsRes] = await Promise.all([
+    const revConditions = [`spr.supplier_id = $1`];
+    const revParams: unknown[] = [supplierId];
+    if (fromDate) {
+      revParams.push(fromDate);
+      revConditions.push(`(spr.reversed_at AT TIME ZONE 'Asia/Kolkata')::date >= $${revParams.length}::date`);
+    }
+    if (toDate) {
+      revParams.push(toDate);
+      revConditions.push(`(spr.reversed_at AT TIME ZONE 'Asia/Kolkata')::date <= $${revParams.length}::date`);
+    }
+
+    const [billsRes, paymentsRes, reversalsRes] = await Promise.all([
       appPool.query(
-        `SELECT
+        `WITH alloc_rev AS (
+          SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+          FROM supplier_payment_allocation_reversals
+          GROUP BY allocation_id
+        ),
+        active_bill_alloc AS (
+          SELECT
+            spa.purchase_bill_id,
+            COALESCE(SUM(GREATEST(spa.amount - COALESCE(ar.reversed_amount, 0), 0)), 0)::numeric AS paid_amount
+          FROM supplier_payment_allocations spa
+          INNER JOIN supplier_payments sp ON sp.id = spa.payment_id
+          LEFT JOIN alloc_rev ar ON ar.allocation_id = spa.id
+          WHERE sp.status = 'active'
+          GROUP BY spa.purchase_bill_id
+        )
+        SELECT
           spb.id,
           spb.invoice_number,
           TO_CHAR(spb.invoice_date, 'YYYY-MM-DD') AS invoice_date,
           spb.grand_total,
           spb.status,
-          COALESCE(SUM(spa.amount), 0)::numeric AS paid_amount
+          COALESCE(aba.paid_amount, 0)::numeric AS paid_amount
         FROM supplier_purchase_bills spb
-        LEFT JOIN supplier_payment_allocations spa ON spa.purchase_bill_id = spb.id
-        WHERE ${billConditions.join(' AND ')}
-        GROUP BY spb.id`,
+        LEFT JOIN active_bill_alloc aba ON aba.purchase_bill_id = spb.id
+        WHERE ${billConditions.join(' AND ')}`,
         billParams
       ),
       appPool.query(
-        `SELECT
+        `WITH alloc_rev AS (
+          SELECT allocation_id, COALESCE(SUM(reversed_amount), 0)::numeric AS reversed_amount
+          FROM supplier_payment_allocation_reversals
+          GROUP BY allocation_id
+        ),
+        active_pay_alloc AS (
+          SELECT
+            spa.payment_id,
+            COALESCE(SUM(GREATEST(spa.amount - COALESCE(ar.reversed_amount, 0), 0)), 0)::numeric AS allocated_amount
+          FROM supplier_payment_allocations spa
+          INNER JOIN supplier_purchase_bills spb ON spb.id = spa.purchase_bill_id
+          LEFT JOIN alloc_rev ar ON ar.allocation_id = spa.id
+          WHERE spb.status = 'finalized'
+          GROUP BY spa.payment_id
+        )
+        SELECT
           sp.id,
           sp.receipt_number,
           TO_CHAR(sp.payment_date, 'YYYY-MM-DD') AS payment_date,
           sp.amount,
+          sp.status,
           sp.payment_method,
           sp.transaction_reference,
-          COALESCE(SUM(spa.amount), 0)::numeric AS allocated_amount
+          CASE
+            WHEN sp.status = 'active' THEN COALESCE(apa.allocated_amount, 0)::numeric
+            ELSE 0::numeric
+          END AS allocated_amount
         FROM supplier_payments sp
-        LEFT JOIN supplier_payment_allocations spa ON spa.payment_id = sp.id
-        WHERE ${payConditions.join(' AND ')}
-        GROUP BY sp.id`,
+        LEFT JOIN active_pay_alloc apa ON apa.payment_id = sp.id
+        WHERE ${payConditions.join(' AND ')}`,
         payParams
+      ),
+      appPool.query(
+        `SELECT
+          spr.id,
+          spr.reversal_number,
+          TO_CHAR((spr.reversed_at AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS reversal_date,
+          spr.original_amount,
+          spr.reason,
+          sp.receipt_number AS original_receipt_number,
+          sp.payment_method,
+          sp.transaction_reference
+        FROM supplier_payment_reversals spr
+        INNER JOIN supplier_payments sp ON sp.id = spr.payment_id
+        WHERE ${revConditions.join(' AND ')}`,
+        revParams
       ),
     ]);
 
@@ -2208,23 +3064,50 @@ export class SuppliersService {
     for (const p of paymentsRes.rows) {
       const amt = new Decimal(p.amount || 0);
       const allocated = new Decimal(p.allocated_amount || 0);
-      const unallocated = Decimal.max(amt.minus(allocated), new Decimal(0));
+      const unallocated = p.status === 'active'
+        ? Decimal.max(amt.minus(allocated), new Decimal(0))
+        : new Decimal(0);
+      const methodLabel = p.payment_method.replace('_', ' ').toUpperCase();
       rawEntries.push({
         entryType: 'payment',
         entryDate: p.payment_date,
         sortOrder: 1,
         id: Number(p.id),
         referenceNumber: p.receipt_number,
-        description: `Payment ${p.receipt_number} (${p.payment_method.replace('_', ' ').toUpperCase()})`,
+        description: `Payment ${p.receipt_number} (${methodLabel})${p.status === 'reversed' ? ' [Reversed]' : ''}`,
         amount: toFixedMoney(amt),
         paymentMethod: p.payment_method,
         transactionReference: p.transaction_reference ?? null,
+        paymentStatus: p.status === 'reversed' ? 'reversed' : 'active',
         paymentAllocatedAmount: toFixedMoney(allocated),
         paymentUnallocatedAmount: toFixedMoney(unallocated),
       });
     }
 
-    const statement = buildSupplierStatementLedger(priorPurchases, priorPayments, rawEntries);
+    for (const rev of reversalsRes.rows) {
+      const amt = new Decimal(rev.original_amount || 0);
+      rawEntries.push({
+        entryType: 'payment_reversal',
+        entryDate: rev.reversal_date,
+        sortOrder: 2,
+        id: Number(rev.id),
+        referenceNumber: rev.reversal_number,
+        description: `Reversal of ${rev.original_receipt_number} — ${rev.reason}`,
+        amount: toFixedMoney(amt),
+        paymentMethod: rev.payment_method,
+        transactionReference: rev.transaction_reference ?? null,
+        paymentStatus: 'reversed',
+        reversalReason: rev.reason,
+        originalPaymentReceipt: rev.original_receipt_number,
+      });
+    }
+
+    const statement = buildSupplierStatementLedger(
+      priorPurchases,
+      priorPayments,
+      rawEntries,
+      priorReversals
+    );
 
     return {
       supplier,
@@ -2255,7 +3138,7 @@ export class SuppliersService {
         'Reference',
         'Details',
         'Method / Payment Status',
-        'Purchases (Debit)',
+        'Purchases / Reversals (Debit)',
         'Payments (Credit)',
         'Running Balance',
       ]
@@ -2279,15 +3162,23 @@ export class SuppliersService {
     }
 
     for (const entry of statement.entries) {
-      const statusOrMethod =
-        entry.entryType === 'purchase_bill'
-          ? `Bill: ${(entry.billStatus || 'unpaid').toUpperCase()}`
-          : `${(entry.paymentMethod || '').toUpperCase()}${entry.transactionReference ? ` (${entry.transactionReference})` : ''}`;
+      let typeLabel = 'Payment';
+      let statusOrMethod = '';
+      if (entry.entryType === 'purchase_bill') {
+        typeLabel = 'Purchase Bill';
+        statusOrMethod = `Bill: ${(entry.billStatus || 'unpaid').toUpperCase()}`;
+      } else if (entry.entryType === 'payment_reversal') {
+        typeLabel = 'Payment Reversal';
+        statusOrMethod = `REVERSED (${entry.originalPaymentReceipt || entry.referenceNumber})`;
+      } else {
+        const revTag = entry.paymentStatus === 'reversed' ? ' [REVERSED]' : '';
+        statusOrMethod = `${(entry.paymentMethod || '').toUpperCase()}${entry.transactionReference ? ` (${entry.transactionReference})` : ''}${revTag}`;
+      }
 
       lines.push(
         [
           csvSafeCell(entry.entryDate),
-          csvSafeCell(entry.entryType === 'purchase_bill' ? 'Purchase Bill' : 'Payment'),
+          csvSafeCell(typeLabel),
           csvSafeCell(entry.referenceNumber),
           csvSafeCell(entry.description),
           csvSafeCell(statusOrMethod),
@@ -2298,7 +3189,26 @@ export class SuppliersService {
       );
     }
 
+    const totalDebits = new Decimal(statement.periodPurchases || 0)
+      .plus(new Decimal(statement.periodReversals || 0))
+      .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+      .toFixed(2);
+
     lines.push('');
+    if (new Decimal(statement.periodReversals || 0).greaterThan(0)) {
+      lines.push(
+        [
+          csvSafeCell('Period Breakdown'),
+          csvSafeCell(''),
+          csvSafeCell(''),
+          csvSafeCell(`Purchases: ${statement.periodPurchases} | Payment Reversals: ${statement.periodReversals}`),
+          csvSafeCell(''),
+          csvSafeCell(totalDebits),
+          csvSafeCell(statement.periodPayments),
+          csvSafeCell(statement.closingBalance),
+        ].join(',')
+      );
+    }
     lines.push(
       [
         csvSafeCell('Totals'),
@@ -2308,7 +3218,7 @@ export class SuppliersService {
         csvSafeCell(
           new Decimal(statement.closingBalance).greaterThanOrEqualTo(0) ? 'Payable' : 'Advance Credit'
         ),
-        csvSafeCell(statement.periodPurchases),
+        csvSafeCell(totalDebits),
         csvSafeCell(statement.periodPayments),
         csvSafeCell(statement.closingBalance),
       ].join(',')

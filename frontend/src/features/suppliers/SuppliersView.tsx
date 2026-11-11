@@ -23,7 +23,10 @@ import {
   restoreSupplierApi,
   updateSupplierApi,
 } from './suppliersApi.js';
+import { SupplierPaginationBar } from './SupplierPaginationBar.js';
 import type { CreateSupplierPayload, SupplierRecord } from './suppliers.types.js';
+
+const SUPPLIER_PAGE_LIMIT = 50;
 
 export interface SuppliersViewProps {
   onOpenSupplierDetails: (supplierId: string) => void;
@@ -53,6 +56,9 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
   refreshSignal = 0,
 }) => {
   const [suppliers, setSuppliers] = useState<SupplierRecord[]>([]);
+  const [totalSuppliers, setTotalSuppliers] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'active' | 'archived' | 'all'>('active');
@@ -65,11 +71,24 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const loadSuppliers = async (query = search, status = statusFilter) => {
+  const loadSuppliers = async (
+    query = search,
+    status = statusFilter,
+    targetOffset = offset
+  ) => {
     setLoading(true);
     try {
-      const res = await listSuppliersApi({ search: query, status, limit: 200 });
+      const res = await listSuppliersApi({
+        search: query,
+        status,
+        limit: SUPPLIER_PAGE_LIMIT,
+        offset: targetOffset,
+      });
       setSuppliers(res.suppliers);
+      setTotalSuppliers(res.total);
+      setHasMore(
+        res.pagination?.hasMore ?? targetOffset + res.suppliers.length < res.total
+      );
     } catch (err: any) {
       setNotice({ type: 'error', text: err?.message || 'Failed to load suppliers.' });
     } finally {
@@ -79,10 +98,10 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      void loadSuppliers(search, statusFilter);
+      void loadSuppliers(search, statusFilter, offset);
     }, 200);
     return () => clearTimeout(timer);
-  }, [search, statusFilter, refreshSignal]);
+  }, [search, statusFilter, offset, refreshSignal]);
 
   useEffect(() => {
     if (openCreateModalSignal > 0) {
@@ -257,7 +276,10 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
             <input
               type="text"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setOffset(0);
+              }}
               placeholder="Search name, contact person, phone, GSTIN..."
               className="neu-input w-full pl-9 pr-3 py-1.5 text-xs font-medium"
             />
@@ -268,7 +290,10 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
               <button
                 key={tab}
                 type="button"
-                onClick={() => setStatusFilter(tab)}
+                onClick={() => {
+                  setStatusFilter(tab);
+                  setOffset(0);
+                }}
                 className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize transition ${
                   statusFilter === tab
                     ? 'bg-[var(--khata-accent)] text-white shadow'
@@ -433,6 +458,18 @@ export const SuppliersView: React.FC<SuppliersViewProps> = ({
               </div>
             );
           })}
+          <div className="md:col-span-2 neu-card p-3 sm:p-4 rounded-2xl">
+            <SupplierPaginationBar
+              offset={offset}
+              limit={SUPPLIER_PAGE_LIMIT}
+              total={totalSuppliers}
+              currentCount={suppliers.length}
+              hasMore={hasMore}
+              loading={loading}
+              itemLabel="suppliers"
+              onPageChange={(nextOffset) => setOffset(nextOffset)}
+            />
+          </div>
         </div>
       )}
 

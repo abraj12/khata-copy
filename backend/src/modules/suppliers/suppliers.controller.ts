@@ -7,9 +7,12 @@ import {
   createPurchaseBillSchema,
   createSupplierPaymentSchema,
   createSupplierSchema,
+  extractAndValidateIdempotencyKey,
   listPurchaseBillsQuerySchema,
   listSupplierPaymentsQuerySchema,
   listSuppliersQuerySchema,
+  reversePaymentAllocationSchema,
+  reversePaymentSchema,
   supplierStatementQuerySchema,
   updatePurchaseBillSchema,
   updateSupplierSchema,
@@ -382,12 +385,16 @@ export const suppliersController = {
 
   async createPayment(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const idempotencyKey = extractAndValidateIdempotencyKey(req.headers['idempotency-key'], true);
       const parsed = createSupplierPaymentSchema.safeParse(req.body);
       if (!parsed.success) {
         sendValidationError(res, parsed.error.errors[0]?.message || 'Invalid payment payload.');
         return;
       }
-      const payment = await suppliersService.createSupplierPayment(parsed.data);
+      const payment = await suppliersService.createSupplierPayment({
+        ...parsed.data,
+        idempotencyKey,
+      });
       res.status(201).json({ success: true, data: payment });
     } catch (err) {
       next(err);
@@ -401,6 +408,7 @@ export const suppliersController = {
         sendValidationError(res, 'Invalid payment ID.');
         return;
       }
+      const idempotencyKey = extractAndValidateIdempotencyKey(req.headers['idempotency-key'], true);
       const parsed = allocateAdvanceSchema.safeParse(req.body);
       if (!parsed.success) {
         sendValidationError(res, parsed.error.errors[0]?.message || 'Invalid allocation payload.');
@@ -408,7 +416,65 @@ export const suppliersController = {
       }
       const payment = await suppliersService.allocateAdvancePayment(
         paymentId,
-        parsed.data.allocations
+        parsed.data.allocations,
+        idempotencyKey
+      );
+      res.json({ success: true, data: payment });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  async reversePayment(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const paymentId = parsePositiveIntId(req.params.paymentId, 'payment ID');
+      if (!paymentId) {
+        sendValidationError(res, 'Invalid payment ID.');
+        return;
+      }
+      const idempotencyKey = extractAndValidateIdempotencyKey(req.headers['idempotency-key'], true);
+      const parsed = reversePaymentSchema.safeParse(req.body);
+      if (!parsed.success) {
+        sendValidationError(res, parsed.error.errors[0]?.message || 'Invalid payment reversal payload.');
+        return;
+      }
+      const payment = await suppliersService.reverseSupplierPayment(
+        paymentId,
+        parsed.data.reason,
+        idempotencyKey
+      );
+      res.json({ success: true, data: payment });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  async reversePaymentAllocation(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const paymentId = parsePositiveIntId(req.params.paymentId, 'payment ID');
+      if (!paymentId) {
+        sendValidationError(res, 'Invalid payment ID.');
+        return;
+      }
+      const allocationId = parsePositiveIntId(req.params.allocationId, 'allocation ID');
+      if (!allocationId) {
+        sendValidationError(res, 'Invalid allocation ID.');
+        return;
+      }
+      const idempotencyKey = extractAndValidateIdempotencyKey(req.headers['idempotency-key'], true);
+      const parsed = reversePaymentAllocationSchema.safeParse(req.body);
+      if (!parsed.success) {
+        sendValidationError(
+          res,
+          parsed.error.errors[0]?.message || 'Invalid allocation reversal payload.'
+        );
+        return;
+      }
+      const payment = await suppliersService.reversePaymentAllocation(
+        paymentId,
+        allocationId,
+        parsed.data,
+        idempotencyKey
       );
       res.json({ success: true, data: payment });
     } catch (err) {

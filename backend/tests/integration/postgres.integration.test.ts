@@ -52,6 +52,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     try {
       // 1. Drop public schema tables cleanly for test isolation
       await client.query(`
+        DROP TABLE IF EXISTS "supplier_payment_allocation_reversals" CASCADE;
+        DROP TABLE IF EXISTS "supplier_payment_reversals" CASCADE;
         DROP TABLE IF EXISTS "supplier_payment_allocations" CASCADE;
         DROP TABLE IF EXISTS "supplier_payments" CASCADE;
         DROP SEQUENCE IF EXISTS "supplier_payment_receipt_seq" CASCADE;
@@ -106,6 +108,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '018_numbering_and_legacy_data_integrity.sql',
         '019_customer_tax_integrity_and_idempotency.sql',
         '020_supplier_management.sql',
+      '021_supplier_financial_integrity.sql',
+        // Release #021 listed above
       ];
 
       await client.query(`
@@ -162,6 +166,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '018_numbering_and_legacy_data_integrity.sql',
       '019_customer_tax_integrity_and_idempotency.sql',
       '020_supplier_management.sql',
+      '021_supplier_financial_integrity.sql',
     ]);
 
     const expectedTables = [
@@ -188,6 +193,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       'supplier_purchase_bill_history',
       'supplier_payments',
       'supplier_payment_allocations',
+      'supplier_payment_reversals',
+      'supplier_payment_allocation_reversals',
     ];
 
     const tablesRes = await pool.query(
@@ -1693,7 +1700,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       });
       await expect(
         pool.query(
-          `INSERT INTO supplier_payment_allocations (supplier_id, supplier_payment_id, supplier_purchase_bill_id, allocated_amount)
+          `INSERT INTO supplier_payment_allocations (supplier_id, payment_id, purchase_bill_id, amount)
            VALUES ($1, $2, $3, 50.00)`,
           [supB.id, payB.id, billA1.id]
         )
@@ -1761,6 +1768,639 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         (await pool.query('SELECT COUNT(*)::int AS c FROM supplier_purchase_bills')).rows[0].c
       );
       expect(afterBillCount).toBe(beforeBillCount);
+
+      // Assert exact PG composite FK constraints on supplier_payment_allocations
+      await expect(
+        pool.query(
+          `INSERT INTO supplier_payment_allocations (supplier_id, payment_id, purchase_bill_id, amount)
+           VALUES ($1, $2, $3, 50.00)`,
+          [supB.id, payB.id, billA1.id]
+        )
+      ).rejects.toMatchObject({
+        code: '23503',
+        constraint: 'fk_supplier_alloc_bill_supplier',
+      });
+
+      await expect(
+        pool.query(
+          `INSERT INTO supplier_payment_allocations (supplier_id, payment_id, purchase_bill_id, amount)
+           VALUES ($1, $2, $3, 50.00)`,
+          [supA.id, payB.id, billA1.id]
+        )
+      ).rejects.toMatchObject({
+        code: '23503',
+        constraint: 'fk_supplier_alloc_payment_supplier',
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  // 26. Release #021 Migration Upgrade Path (001->020->021)
+  it('26. Release #021 Upgrade Path: detects duplicate active digital references pre-index, applies idempotently once resolved & preserves legacy fallback schema', async () => {
+    const upgradeClient = await pool.connect();
+    try {
+      await upgradeClient.query('DROP SCHEMA IF EXISTS test_upgrade_020 CASCADE');
+      await upgradeClient.query('CREATE SCHEMA test_upgrade_020');
+      await upgradeClient.query('SET search_path TO test_upgrade_020, public');
+
+      const migrationsDir = path.resolve(__dirname, '../../migrations');
+      const pre021Migrations = [
+        '001_auth_tables.sql',
+        '002_khata_transactions.sql',
+        '003_idempotency_and_hardening.sql',
+        '004_integer_quantity_and_money_constraints.sql',
+        '005_search_indexes_and_identity_constraints.sql',
+        '006_quantity_two_decimal_places.sql',
+        '007_quantity_strict_scale_and_allocation_integrity.sql',
+        '008_strict_quantity_scale.sql',
+        '009_product_images_and_offline_bills.sql',
+        '010_product_hsn_code.sql',
+        '011_gst_invoices.sql',
+        '012_normal_bills.sql',
+        '013_customer_address.sql',
+        '014_billing_quantity_and_sequences.sql',
+        '015_product_barcode.sql',
+        '016_quotations.sql',
+        '017_quotation_conversion_financial_fields.sql',
+        '018_numbering_and_legacy_data_integrity.sql',
+        '019_customer_tax_integrity_and_idempotency.sql',
+        '020_supplier_management.sql',
+      ];
+      for (const file of pre021Migrations) {
+        const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+        await upgradeClient.query(sql);
+      }
+
+      // Seed pre-021 supplier, bill (no supplier_snapshot column yet), and duplicate active UPI ref
+      const supRes = await upgradeClient.query(
+        `INSERT INTO suppliers (name, normalized_name) VALUES ('Legacy Vendor', 'legacy vendor') RETURNING id`
+      );
+      const supId = supRes.rows[0].id as string;
+
+      const billRes = await upgradeClient.query(
+        `INSERT INTO supplier_purchase_bills (
+          supplier_id, invoice_number, normalized_invoice_number, invoice_date,
+          subtotal_amount, discount_amount, taxable_amount, gst_rate, gst_amount, grand_total
+        ) VALUES ($1, 'LEG-001', 'LEG-001', '2026-04-01', 100.00, 0.00, 100.00, 0.00, 0.00, 100.00)
+        RETURNING id`,
+        [supId]
+      );
+      const legacyBillId = Number(billRes.rows[0].id);
+
+      await upgradeClient.query(
+        `INSERT INTO supplier_payments (
+          receipt_number, supplier_id, payment_date, amount, payment_method, transaction_reference
+        ) VALUES
+          ('SUP-PAY-9001', $1, '2026-04-02', 50.00, 'upi', '  UTR-DUP-2026  '),
+          ('SUP-PAY-9002', $1, '2026-04-02', 50.00, 'upi', 'utr-dup-2026')`,
+        [supId]
+      );
+
+      const sql021 = fs.readFileSync(
+        path.join(migrationsDir, '021_supplier_financial_integrity.sql'),
+        'utf8'
+      );
+
+      // Must fail with clear diagnostic message when conflicting active digital refs exist
+      await expect(upgradeClient.query(sql021)).rejects.toThrow(
+        /conflicting active duplicate digital payment references/i
+      );
+
+      // Resolve duplicate reference and re-apply 021 (and re-run again for idempotency check)
+      await upgradeClient.query(
+        `UPDATE supplier_payments SET transaction_reference = 'utr-dup-2026-fixed' WHERE receipt_number = 'SUP-PAY-9002'`
+      );
+      await upgradeClient.query(sql021);
+      await upgradeClient.query(sql021);
+
+      const postCheck = await upgradeClient.query(
+        `SELECT status, reversed_at, reversal_reason FROM supplier_payments WHERE receipt_number = 'SUP-PAY-9001'`
+      );
+      expect(postCheck.rows[0].status).toBe('active');
+      expect(postCheck.rows[0].reversed_at).toBeNull();
+
+      const snapCheck = await upgradeClient.query(
+        `SELECT supplier_snapshot FROM supplier_purchase_bills WHERE id = $1`,
+        [legacyBillId]
+      );
+      expect(snapCheck.rows[0].supplier_snapshot).toBeNull();
+    } finally {
+      await upgradeClient.query('SET search_path TO public').catch(() => {});
+      await upgradeClient.query('DROP SCHEMA IF EXISTS test_upgrade_020 CASCADE').catch(() => {});
+      upgradeClient.release();
+    }
+  });
+
+  // 27. Release #021 Payment & Advance Idempotency, Expiry, Concurrent Safety & Active Digital Ref Uniqueness
+  it('27. Release #021 Enforces payment/allocation idempotency, 24h expiry, concurrent dedup & active digital reference uniqueness', async () => {
+    vi.spyOn(appPool, 'connect').mockImplementation(() => pool.connect());
+    vi.spyOn(appPool, 'query').mockImplementation((...args: any[]) => (pool.query as any)(...args));
+
+    try {
+      const sup1 = await suppliersService.createSupplier({ name: 'Rel021 Idempotency Supplier' });
+      const sup2 = await suppliersService.createSupplier({ name: 'Rel021 Other Supplier' });
+      const bill1 = await suppliersService.createPurchaseBill({
+        supplierId: sup1.id,
+        invoiceNumber: 'IDEM-BILL-01',
+        invoiceDate: '2026-04-08',
+        items: [{ description: 'Switchgear', quantity: '1', purchaseRate: '1000.00' }],
+      });
+      const bill2 = await suppliersService.createPurchaseBill({
+        supplierId: sup1.id,
+        invoiceNumber: 'IDEM-BILL-02',
+        invoiceDate: '2026-04-09',
+        items: [{ description: 'Busbar', quantity: '1', purchaseRate: '600.00' }],
+      });
+
+      // A. Idempotent createSupplierPayment replay
+      const p1 = await suppliersService.createSupplierPayment({
+        supplierId: sup1.id,
+        paymentDate: '2026-04-10',
+        amount: '500.00',
+        paymentMethod: 'upi',
+        transactionReference: '  UTR-IDEM-001  ',
+        allocations: [{ purchaseBillId: bill1.id, amount: '300.00' }],
+        idempotencyKey: 'rel021-create-pay-001',
+      });
+      const p1Replay = await suppliersService.createSupplierPayment({
+        supplierId: sup1.id,
+        paymentDate: '2026-04-10',
+        amount: '500.00',
+        paymentMethod: 'upi',
+        transactionReference: 'UTR-IDEM-001',
+        allocations: [{ purchaseBillId: bill1.id, amount: '300.00' }],
+        idempotencyKey: 'rel021-create-pay-001',
+      });
+      expect(p1Replay.id).toBe(p1.id);
+      expect(p1Replay.receiptNumber).toBe(p1.receiptNumber);
+
+      // Same Idempotency-Key with mismatched payload must 409 IDEMPOTENCY_CONFLICT
+      await expect(
+        suppliersService.createSupplierPayment({
+          supplierId: sup1.id,
+          paymentDate: '2026-04-10',
+          amount: '550.00',
+          paymentMethod: 'upi',
+          transactionReference: 'UTR-IDEM-001',
+          idempotencyKey: 'rel021-create-pay-001',
+        })
+      ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_CONFLICT' });
+
+      // Expired idempotency key (>24h old) allows clean new execution
+      await pool.query(
+        `UPDATE idempotency_keys SET expires_at = NOW() - INTERVAL '1 hour' WHERE key = 'rel021-create-pay-001'`
+      );
+      const p1AfterExpiry = await suppliersService.createSupplierPayment({
+        supplierId: sup1.id,
+        paymentDate: '2026-04-10',
+        amount: '100.00',
+        paymentMethod: 'cash',
+        idempotencyKey: 'rel021-create-pay-001',
+      });
+      expect(p1AfterExpiry.id).not.toBe(p1.id);
+
+      // Concurrent duplicate Idempotency-Key serialized safely -> single payment created
+      const [c1, c2] = await Promise.all([
+        suppliersService.createSupplierPayment({
+          supplierId: sup1.id,
+          paymentDate: '2026-04-10',
+          amount: '150.00',
+          paymentMethod: 'bank_transfer',
+          transactionReference: 'NEFT-CONC-1',
+          idempotencyKey: 'rel021-conc-pay-001',
+        }),
+        suppliersService.createSupplierPayment({
+          supplierId: sup1.id,
+          paymentDate: '2026-04-10',
+          amount: '150.00',
+          paymentMethod: 'bank_transfer',
+          transactionReference: 'NEFT-CONC-1',
+          idempotencyKey: 'rel021-conc-pay-001',
+        }),
+      ]);
+      expect(c1.id).toBe(c2.id);
+
+      // B. Duplicate active digital reference rejection (case/space insensitive + DB partial unique index)
+      await expect(
+        suppliersService.createSupplierPayment({
+          supplierId: sup1.id,
+          paymentDate: '2026-04-10',
+          amount: '200.00',
+          paymentMethod: 'upi',
+          transactionReference: 'utr-idem-001',
+          idempotencyKey: 'rel021-dup-ref-check-01',
+        })
+      ).rejects.toMatchObject({ status: 409, code: 'SUPPLIER_PAYMENT_REFERENCE_DUPLICATE' });
+
+      await expect(
+        pool.query(
+          `INSERT INTO supplier_payments (
+            receipt_number, supplier_id, payment_date, amount, payment_method, transaction_reference
+          ) VALUES ('SUP-PAY-RAW-DUP', $1, '2026-04-10', 25.00, 'upi', 'UTR-IDEM-001')`,
+          [sup1.id]
+        )
+      ).rejects.toMatchObject({
+        code: '23505',
+        constraint: 'uq_supplier_payments_active_reference',
+      });
+
+      // Same reference permitted on cash payments and on other suppliers
+      const cashSameRef = await suppliersService.createSupplierPayment({
+        supplierId: sup1.id,
+        paymentDate: '2026-04-10',
+        amount: '50.00',
+        paymentMethod: 'cash',
+        transactionReference: 'UTR-IDEM-001',
+        idempotencyKey: 'rel021-cash-ref-01',
+      });
+      expect(cashSameRef.paymentMethod).toBe('cash');
+
+      const otherSupSameRef = await suppliersService.createSupplierPayment({
+        supplierId: sup2.id,
+        paymentDate: '2026-04-10',
+        amount: '50.00',
+        paymentMethod: 'upi',
+        transactionReference: 'UTR-IDEM-001',
+        idempotencyKey: 'rel021-other-sup-ref-01',
+      });
+      expect(otherSupSameRef.supplierId).toBe(sup2.id);
+
+      // C. Advance allocation top-up + idempotency replay
+      const topUp1 = await suppliersService.allocateAdvancePayment(
+        p1.id,
+        [
+          { purchaseBillId: bill1.id, amount: '100.00' },
+          { purchaseBillId: bill2.id, amount: '50.00' },
+        ],
+        'rel021-alloc-topup-01'
+      );
+      expect(topUp1.allocatedAmount).toBe('450.00');
+      expect(topUp1.unallocatedAmount).toBe('50.00');
+
+      const topUpReplay = await suppliersService.allocateAdvancePayment(
+        p1.id,
+        [
+          { purchaseBillId: bill1.id, amount: '100.00' },
+          { purchaseBillId: bill2.id, amount: '50.00' },
+        ],
+        'rel021-alloc-topup-01'
+      );
+      expect(topUpReplay.allocatedAmount).toBe('450.00');
+      expect(topUpReplay.unallocatedAmount).toBe('50.00');
+
+      await expect(
+        suppliersService.allocateAdvancePayment(
+          p1.id,
+          [{ purchaseBillId: bill2.id, amount: '25.00' }],
+          'rel021-alloc-topup-01'
+        )
+      ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_CONFLICT' });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  // 28. Release #021 Full/Partial Reversals, Concurrency, Snapshots & >200 SQL Pagination
+  it('28. Release #021 Reversals, Historical Bill Snapshots, Statement Reconciliation & >200 SQL Pagination', async () => {
+    vi.spyOn(appPool, 'connect').mockImplementation(() => pool.connect());
+    vi.spyOn(appPool, 'query').mockImplementation((...args: any[]) => (pool.query as any)(...args));
+
+    try {
+      const baseDash = await suppliersService.getDashboard();
+
+      // A. Historical supplier snapshot immutability & legacy fallback
+      const supX = await suppliersService.createSupplier({
+        name: 'Snapshot Origin Vendor',
+        contactPerson: 'Anil Mehta',
+        phone: '9811122233',
+        state: 'Maharashtra',
+        gstin: '27ABCDE1234F1Z0',
+        address: '10 MG Road, Mumbai',
+      });
+
+      const billX1 = await suppliersService.createPurchaseBill({
+        supplierId: supX.id,
+        invoiceNumber: 'SNAP-001',
+        invoiceDate: '2026-04-02',
+        items: [{ description: 'Transformer', quantity: '1', purchaseRate: '1000.00' }],
+      });
+      const billX2 = await suppliersService.createPurchaseBill({
+        supplierId: supX.id,
+        invoiceNumber: 'SNAP-002',
+        invoiceDate: '2026-04-03',
+        items: [{ description: 'Relay', quantity: '1', purchaseRate: '500.00' }],
+      });
+      expect(billX1.supplierSnapshotSource).toBe('snapshot');
+      expect(billX1.supplierName).toBe('Snapshot Origin Vendor');
+      expect(billX1.supplierGstin).toBe('27ABCDE1234F1Z0');
+
+      // Simulate a pre-021 legacy row with NULL snapshot on billX2
+      await pool.query(`UPDATE supplier_purchase_bills SET supplier_snapshot = NULL WHERE id = $1`, [
+        billX2.id,
+      ]);
+
+      await suppliersService.updateSupplier(supX.id, {
+        name: 'Renamed Current Vendor LLP',
+        phone: '9899988877',
+        state: 'Bihar',
+        stateCode: '10',
+        gstin: '10ABCDE1234F1ZF',
+        address: '99 Station Road, Patna',
+      });
+
+      const fetchedX1 = await suppliersService.getPurchaseBillById(billX1.id);
+      expect(fetchedX1.supplierSnapshotSource).toBe('snapshot');
+      expect(fetchedX1.supplierName).toBe('Snapshot Origin Vendor');
+      expect(fetchedX1.supplierGstin).toBe('27ABCDE1234F1Z0');
+      expect(fetchedX1.supplierAddress).toBe('10 MG Road, Mumbai');
+
+      const listedBillsX = await suppliersService.listPurchaseBills({ supplierId: supX.id });
+      const snapRow = listedBillsX.purchaseBills.find((b) => b.id === billX1.id)!;
+      const legacyRow = listedBillsX.purchaseBills.find((b) => b.id === billX2.id)!;
+      expect(snapRow.supplierSnapshotSource).toBe('snapshot');
+      expect(snapRow.supplierName).toBe('Snapshot Origin Vendor');
+      expect(legacyRow.supplierSnapshotSource).toBe('legacy_live_fallback');
+      expect(legacyRow.supplierName).toBe('Renamed Current Vendor LLP');
+
+      // B. Partial, concurrent & full allocation reversals + full payment reversal
+      const payX = await suppliersService.createSupplierPayment({
+        supplierId: supX.id,
+        paymentDate: '2026-04-05',
+        amount: '1000.00',
+        paymentMethod: 'bank_transfer',
+        transactionReference: 'NEFT-REV-100',
+        allocations: [
+          { purchaseBillId: billX1.id, amount: '600.00' },
+          { purchaseBillId: billX2.id, amount: '400.00' },
+        ],
+        idempotencyKey: 'rel021-snap-pay-01',
+      });
+
+      const allocBill1 = payX.allocations.find((a) => a.purchaseBillId === billX1.id)!;
+
+      // Partial allocation reversal: reverse 250 of 600
+      const afterPartial = await suppliersService.reversePaymentAllocation(
+        payX.id,
+        allocBill1.allocationId,
+        { amount: '250.00', reason: 'Over-allocated to SNAP-001' },
+        'rel021-alloc-rev-partial'
+      );
+      const updatedAlloc1 = afterPartial.allocations.find((a) => a.purchaseBillId === billX1.id)!;
+      expect(updatedAlloc1.originalAmount).toBe('600.00');
+      expect(updatedAlloc1.reversedAmount).toBe('250.00');
+      expect(updatedAlloc1.amount).toBe('350.00');
+      expect(afterPartial.allocatedAmount).toBe('750.00');
+      expect(afterPartial.unallocatedAmount).toBe('250.00');
+
+      // Idempotent replay does NOT double reverse
+      const replayPartial = await suppliersService.reversePaymentAllocation(
+        payX.id,
+        allocBill1.allocationId,
+        { amount: '250.00', reason: 'Over-allocated to SNAP-001' },
+        'rel021-alloc-rev-partial'
+      );
+      expect(replayPartial.allocatedAmount).toBe('750.00');
+
+      // Over-reversal (>350 remaining) must 409
+      await expect(
+        suppliersService.reversePaymentAllocation(
+          payX.id,
+          allocBill1.allocationId,
+          { amount: '400.00', reason: 'Too much' },
+          'rel021-alloc-rev-over'
+        )
+      ).rejects.toMatchObject({ status: 409, code: 'ALLOCATION_REVERSAL_EXCEEDS_ACTIVE_AMOUNT' });
+
+      // Concurrent over-limit allocation reversals serialized safely via FOR UPDATE
+      const [concRev1, concRev2] = await Promise.allSettled([
+        suppliersService.reversePaymentAllocation(
+          payX.id,
+          allocBill1.allocationId,
+          { amount: '200.00', reason: 'Concurrent 1' },
+          'rel021-conc-arev-1'
+        ),
+        suppliersService.reversePaymentAllocation(
+          payX.id,
+          allocBill1.allocationId,
+          { amount: '200.00', reason: 'Concurrent 2' },
+          'rel021-conc-arev-2'
+        ),
+      ]);
+      const concSuccesses = [concRev1, concRev2].filter((r) => r.status === 'fulfilled');
+      const concFailures = [concRev1, concRev2].filter((r) => r.status === 'rejected');
+      expect(concSuccesses).toHaveLength(1);
+      expect(concFailures).toHaveLength(1);
+
+      // Reverse final 150 remaining on billX1 so billX1 becomes 0.00 paid & can be cancelled
+      await suppliersService.reversePaymentAllocation(
+        payX.id,
+        allocBill1.allocationId,
+        { amount: '150.00', reason: 'Release full bill allocation' },
+        'rel021-alloc-rev-final'
+      );
+      const billX1Unlocked = await suppliersService.getPurchaseBillById(billX1.id);
+      expect(billX1Unlocked.allocatedAmount).toBe('0.00');
+      expect(billX1Unlocked.paymentStatus).toBe('unpaid');
+
+      const cancelledX1 = await suppliersService.cancelPurchaseBill(billX1.id, 'Recalled by vendor');
+      expect(cancelledX1.status).toBe('cancelled');
+
+      // Now fully reverse payX
+      const reversedPayX = await suppliersService.reverseSupplierPayment(
+        payX.id,
+        'NEFT bounced back',
+        'rel021-full-pay-rev-01'
+      );
+      expect(reversedPayX.status).toBe('reversed');
+      expect(reversedPayX.effectiveAmount).toBe('0.00');
+      expect(reversedPayX.reversalNumber).toBe(`REV-${payX.receiptNumber}`);
+      expect(reversedPayX.reversalReason).toBe('NEFT bounced back');
+
+      // Re-reversing or allocating a reversed payment is blocked (409)
+      await expect(
+        suppliersService.reverseSupplierPayment(payX.id, 'Again', 'rel021-full-pay-rev-02')
+      ).rejects.toMatchObject({ status: 409, code: 'PAYMENT_ALREADY_REVERSED' });
+      await expect(
+        suppliersService.allocateAdvancePayment(
+          payX.id,
+          [{ purchaseBillId: billX2.id, amount: '50.00' }],
+          'rel021-alloc-after-rev'
+        )
+      ).rejects.toMatchObject({ status: 409, code: 'PAYMENT_REVERSED' });
+
+      // Bill X2 payable is restored to 500.00 after payX reversal
+      const billX2Restored = await suppliersService.getPurchaseBillById(billX2.id);
+      expect(billX2Restored.allocatedAmount).toBe('0.00');
+      expect(billX2Restored.remainingAmount).toBe('500.00');
+
+      // Digital ref NEFT-REV-100 can now be reused after reversal
+      const reusedRefPay = await suppliersService.createSupplierPayment({
+        supplierId: supX.id,
+        paymentDate: '2026-04-06',
+        amount: '100.00',
+        paymentMethod: 'bank_transfer',
+        transactionReference: 'NEFT-REV-100',
+        idempotencyKey: 'rel021-reuse-ref-after-rev',
+      });
+      expect(reusedRefPay.status).toBe('active');
+
+      // Statement, Supplier Details, Dashboard KPIs & CSV stay mathematically unified
+      const supXSummary = await suppliersService.getSupplierById(supX.id);
+      // Purchases = 500.00 (billX1 cancelled), Active Payments = 100.00 => Payable = 400.00
+      expect(supXSummary.totalPurchases).toBe('500.00');
+      expect(supXSummary.totalPayments).toBe('100.00');
+      expect(supXSummary.netBalance).toBe('400.00');
+
+      const fullStmt = await suppliersService.getSupplierStatement(supX.id, {});
+      expect(fullStmt.periodReversals).toBe('1000.00');
+      expect(fullStmt.closingBalance).toBe(supXSummary.netBalance);
+      expect(fullStmt.entries.some((e) => e.entryType === 'payment_reversal')).toBe(true);
+
+      // Date-filtered statement split around today's reversal still reconciles ending balance
+      const lateStmt = await suppliersService.getSupplierStatement(supX.id, {
+        fromDate: '2026-04-06',
+      });
+      expect(lateStmt.closingBalance).toBe(supXSummary.netBalance);
+
+      const csvOut = suppliersService.formatStatementCsv(fullStmt);
+      expect(csvOut).toContain('"Payment Reversal"');
+      expect(csvOut).toContain(`"${reversedPayX.reversalNumber}"`);
+
+      const endDash = await suppliersService.getDashboard();
+      expect(
+        new Decimal(endDash.kpis.totalOutstandingPayable)
+          .minus(new Decimal(baseDash.kpis.totalOutstandingPayable))
+          .toFixed(2)
+      ).toBe('400.00');
+
+      // C. True SQL Pagination (>200 records without truncation or overlap)
+      const bulkSup = await suppliersService.createSupplier({
+        name: 'Pagination Target Vendor',
+      });
+
+      await pool.query(
+        `INSERT INTO suppliers (name, normalized_name)
+         SELECT
+           'Paginated Bulk Supplier ' || LPAD(g::text, 3, '0'),
+           'paginated bulk supplier ' || LPAD(g::text, 3, '0')
+         FROM generate_series(1, 205) AS g`
+      );
+      await pool.query(
+        `INSERT INTO supplier_purchase_bills (
+           supplier_id, invoice_number, normalized_invoice_number, invoice_date,
+           subtotal_amount, discount_amount, taxable_amount, gst_rate, gst_amount, grand_total, supplier_snapshot
+         )
+         SELECT
+           $1,
+           'PAG-BILL-' || LPAD(g::text, 3, '0'),
+           'PAG-BILL-' || LPAD(g::text, 3, '0'),
+           DATE '2026-01-01' + (g % 28),
+           100.00, 0.00, 100.00, 0.00, 0.00, 100.00,
+           $2::jsonb
+         FROM generate_series(1, 205) AS g`,
+        [
+          bulkSup.id,
+          JSON.stringify({
+            id: bulkSup.id,
+            name: bulkSup.name,
+            contactPerson: null,
+            phone: null,
+            email: null,
+            address: null,
+            state: null,
+            stateCode: null,
+            gstin: null,
+          }),
+        ]
+      );
+      await pool.query(
+        `INSERT INTO supplier_payments (
+           receipt_number, supplier_id, payment_date, amount, payment_method
+         )
+         SELECT
+           'SUP-PAY-BULK-' || LPAD(g::text, 4, '0'),
+           $1,
+           DATE '2026-01-01' + (g % 28),
+           50.00,
+           'cash'
+         FROM generate_series(1, 205) AS g`,
+        [bulkSup.id]
+      );
+
+      const collectIds = async <T extends { id: string | number }>(
+        loadPage: (offset: number, limit: number) => Promise<{
+          items: T[];
+          total: number;
+          pagination: { hasMore: boolean; nextOffset: number | null };
+        }>
+      ) => {
+        const ids: Array<string | number> = [];
+        let offset = 0;
+        let reportedTotal = 0;
+        while (true) {
+          const page = await loadPage(offset, 60);
+          reportedTotal = page.total;
+          ids.push(...page.items.map((x) => x.id));
+          if (!page.pagination.hasMore || page.pagination.nextOffset === null) break;
+          offset = page.pagination.nextOffset;
+        }
+        return { ids, reportedTotal };
+      };
+
+      const supPages = await collectIds(async (offset, limit) => {
+        const r = await suppliersService.listSuppliers({
+          search: 'Paginated Bulk Supplier',
+          limit,
+          offset,
+        });
+        return { items: r.suppliers, total: r.total, pagination: r.pagination };
+      });
+      expect(supPages.reportedTotal).toBe(205);
+      expect(new Set(supPages.ids).size).toBe(205);
+      const supOutOfRange = await suppliersService.listSuppliers({
+        search: 'Paginated Bulk Supplier',
+        limit: 60,
+        offset: 500,
+      });
+      expect(supOutOfRange.suppliers).toHaveLength(0);
+      expect(supOutOfRange.total).toBe(205);
+
+      const billPages = await collectIds(async (offset, limit) => {
+        const r = await suppliersService.listPurchaseBills({
+          supplierId: bulkSup.id,
+          limit,
+          offset,
+        });
+        return { items: r.purchaseBills, total: r.total, pagination: r.pagination };
+      });
+      expect(billPages.reportedTotal).toBe(205);
+      expect(new Set(billPages.ids).size).toBe(205);
+      const billOutOfRange = await suppliersService.listPurchaseBills({
+        supplierId: bulkSup.id,
+        limit: 60,
+        offset: 500,
+      });
+      expect(billOutOfRange.purchaseBills).toHaveLength(0);
+      expect(billOutOfRange.total).toBe(205);
+
+      const payPages = await collectIds(async (offset, limit) => {
+        const r = await suppliersService.listSupplierPayments({
+          supplierId: bulkSup.id,
+          limit,
+          offset,
+        });
+        return { items: r.payments, total: r.total, pagination: r.pagination };
+      });
+      expect(payPages.reportedTotal).toBe(205);
+      expect(new Set(payPages.ids).size).toBe(205);
+      const payOutOfRange = await suppliersService.listSupplierPayments({
+        supplierId: bulkSup.id,
+        limit: 60,
+        offset: 500,
+      });
+      expect(payOutOfRange.payments).toHaveLength(0);
+      expect(payOutOfRange.total).toBe(205);
     } finally {
       vi.restoreAllMocks();
     }
