@@ -329,7 +329,21 @@ html, body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
+  min-height: 100dvh;
   overflow-x: clip;
+  overscroll-behavior-y: contain;
+  -webkit-tap-highlight-color: transparent;
+  scrollbar-width: thin;
+  scrollbar-color: var(--khata-border) transparent;
+}
+
+button, [role="button"], [role="menuitem"], select, summary {
+  touch-action: manipulation;
+}
+
+header, nav, footer, button, [role="menuitem"] {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 input, button, select, textarea, table {

@@ -40,6 +40,18 @@ export const DEFAULT_WORKFLOW_PREFERENCES: WorkflowPrintPreferences = {
 
 const WORKFLOW_PREFERENCES_STORAGE_KEY = 'khata_workflow_preferences_v1';
 
+const PRESET_CHROME_PALETTE: Record<NeuPresetId, { themeColor: string; colorScheme: 'light' | 'dark' }> = {
+  'soft-light': { themeColor: '#eef2f6', colorScheme: 'light' },
+  'soft-dark': { themeColor: '#202736', colorScheme: 'dark' },
+  raised: { themeColor: '#edf1f7', colorScheme: 'light' },
+  pressed: { themeColor: '#dde4ec', colorScheme: 'light' },
+  concave: { themeColor: '#edf2f7', colorScheme: 'light' },
+  convex: { themeColor: '#eceff4', colorScheme: 'light' },
+  flat: { themeColor: '#ffffff', colorScheme: 'light' },
+  'high-contrast': { themeColor: '#ffffff', colorScheme: 'light' },
+  accent: { themeColor: '#ecf3f9', colorScheme: 'light' },
+};
+
 interface ThemeAccessibilityContextType {
   preferences: UIPreferences;
   workflowDefaults: WorkflowPrintPreferences;
@@ -215,6 +227,19 @@ export const ThemeAccessibilityProvider: React.FC<{ children: React.ReactNode }>
     root.setAttribute('data-motion', preferences.reduceMotion);
     root.setAttribute('data-spacing', preferences.increaseSpacing ? 'increased' : 'normal');
     root.setAttribute('data-strong-focus', preferences.strongFocus ? 'true' : 'false');
+
+    const chrome = PRESET_CHROME_PALETTE[preferences.preset] ?? PRESET_CHROME_PALETTE.flat;
+    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeColorMeta) {
+      themeColorMeta.setAttribute('content', chrome.themeColor);
+    }
+    const statusBarMeta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+    if (statusBarMeta) {
+      statusBarMeta.setAttribute(
+        'content',
+        chrome.colorScheme === 'dark' ? 'black-translucent' : 'default'
+      );
+    }
 
     // Save non-sensitive preferences safely
     try {

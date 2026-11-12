@@ -8,7 +8,7 @@ import { PdfDocumentPreviewModal } from '../src/components/PdfDocumentPreviewMod
 import { CustomerPickerDropdown } from '../src/features/bills/BillingCataloguePickers.js';
 import { AuthProvider } from '../src/features/auth/AuthProvider.js';
 import { authApi } from '../src/features/auth/authApi.js';
-import { ThemeAccessibilityProvider } from '../src/context/ThemeAccessibilityContext.js';
+import { ThemeAccessibilityProvider, useThemeAccessibility } from '../src/context/ThemeAccessibilityContext.js';
 import * as appDataApi from '../src/lib/appDataApi.js';
 import { computeClampedPopoverGeometry } from '../src/utils/useViewportPopover.js';
 import App from '../src/App.js';
@@ -618,6 +618,101 @@ describe('Mobile responsiveness: flex-wrap containers and bounded popovers', () 
     expect(utilityButtons.length).toBe(4);
     for (const btn of utilityButtons) {
       expect(btn.className).toContain('min-h-[38px]');
+    }
+  });
+
+  it('10. Clicking header brand icon navigates back to Home dashboard and closes open menus', async () => {
+    vi.spyOn(authApi, 'me').mockResolvedValue({
+      authenticated: true,
+      owner: { phone: '9876543210', role: 'OWNER' },
+      csrfToken: 'csrf-brand-home-test',
+    } as any);
+    vi.spyOn(appDataApi, 'fetchNotificationsApi').mockResolvedValue({
+      success: true,
+      notifications: [],
+      unreadCount: 0,
+      source: 'default',
+    });
+
+    const onTabChange = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <ThemeAccessibilityProvider>
+          <AuthProvider>
+            <Navbar
+              currentTab="products"
+              onTabChange={onTabChange}
+              onOpenAppearance={() => {}}
+            />
+          </AuthProvider>
+        </ThemeAccessibilityProvider>
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const toggleBtn = container.querySelector('button[aria-controls="main-navigation-menu"]') as HTMLButtonElement;
+    await act(async () => {
+      toggleBtn.click();
+    });
+    expect(toggleBtn.getAttribute('aria-expanded')).toBe('true');
+
+    const homeBrandBtn = container.querySelector('button[aria-label="Go to Home dashboard"]') as HTMLButtonElement;
+    expect(homeBrandBtn).not.toBeNull();
+    expect(homeBrandBtn.textContent).toContain('Khata');
+
+    await act(async () => {
+      homeBrandBtn.click();
+    });
+    expect(onTabChange).toHaveBeenCalledWith('home');
+    expect(toggleBtn.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('11. Native app chrome CSS and dynamic meta theme-color sync with theme presets', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const candidateInWorkspace = path.resolve(process.cwd(), 'src', 'index.css');
+    const candidateFromRoot = path.resolve(process.cwd(), 'frontend', 'src', 'index.css');
+    const cssPath = fs.existsSync(candidateInWorkspace) ? candidateInWorkspace : candidateFromRoot;
+    const cssText = fs.readFileSync(cssPath, 'utf-8');
+    expect(cssText).toContain('overscroll-behavior-y: contain');
+    expect(cssText).toContain('touch-action: manipulation');
+
+    localStorage.clear();
+    const meta = document.createElement('meta');
+    meta.setAttribute('name', 'theme-color');
+    meta.setAttribute('content', '#000000');
+    document.head.appendChild(meta);
+
+    try {
+      const ThemeProbe: React.FC = () => {
+        const { setPreset } = useThemeAccessibility();
+        return (
+          <button type="button" onClick={() => setPreset('soft-dark')}>
+            Switch Dark
+          </button>
+        );
+      };
+
+      await act(async () => {
+        root.render(
+          <ThemeAccessibilityProvider>
+            <ThemeProbe />
+          </ThemeAccessibilityProvider>
+        );
+      });
+      expect(meta.getAttribute('content')).toBe('#ffffff');
+
+      const btn = container.querySelector('button') as HTMLButtonElement;
+      await act(async () => {
+        btn.click();
+      });
+      expect(meta.getAttribute('content')).toBe('#202736');
+    } finally {
+      meta.remove();
+      localStorage.clear();
     }
   });
 });
