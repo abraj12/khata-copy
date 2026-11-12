@@ -16,13 +16,13 @@ describe('Khata Release #032 — Worker Claim-Ownership Fencing Suite', () => {
   });
 
   describe('1. Claim SQL Structure and Claim Tokens', () => {
-    it('generates unique claim_token and increments claim_version on claim', () => {
+    it('generates unique claim_token and increments claim_generation on claim', () => {
       expect(STORAGE_CLEANUP_CLAIM_SQL).toContain('claim_token = gen_random_uuid()');
-      expect(STORAGE_CLEANUP_CLAIM_SQL).toContain('claim_version = j.claim_version + 1');
+      expect(STORAGE_CLEANUP_CLAIM_SQL).toContain('claim_generation = j.claim_generation + 1');
       expect(STORAGE_CLEANUP_CLAIM_SQL).toContain('FOR UPDATE SKIP LOCKED');
       expect(STORAGE_CLEANUP_CLAIM_SQL).toContain('RETURNING');
       expect(STORAGE_CLEANUP_CLAIM_SQL).toContain('j.claim_token');
-      expect(STORAGE_CLEANUP_CLAIM_SQL).toContain('j.claim_version');
+      expect(STORAGE_CLEANUP_CLAIM_SQL).toContain('j.claim_generation');
     });
   });
 

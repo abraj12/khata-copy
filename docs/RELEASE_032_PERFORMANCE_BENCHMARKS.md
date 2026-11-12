@@ -2,7 +2,7 @@
 
 **Release:** `#032`  
 **Company:** ALGIONS AI LABS PRIVATE LIMITED  
-**Target Feature Branch:** `fix/release-032-mongodb-r2-reliability`  
+**Target Feature Branch:** `fix/release-032-full-production-hardening`  
 **Test Hardware/Environment:** PostgreSQL 18.x (Local 127.0.0.1:5432), MongoDB 8.x (Local 127.0.0.1:27017), Node.js v22.x  
 **Zero-Fabrication Guarantee:** All metrics recorded directly from live execution of `benchmark-release032.ts`.
 
@@ -29,12 +29,12 @@ claimed AS (
   SET status = 'processing',
       lease_expires_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
       attempt_count = j.attempt_count + 1,
-      claim_version = j.claim_version + 1,
+      claim_generation = j.claim_generation + 1,
       claim_token = gen_random_uuid(),
       updated_at = NOW()
   FROM next_batch nb
   WHERE j.id = nb.id
-  RETURNING j.id, j.object_key, j.claim_token, j.claim_version
+  RETURNING j.id, j.object_key, j.claim_token, j.claim_generation
 )
 SELECT * FROM claimed ORDER BY id ASC;
 ```
@@ -42,8 +42,8 @@ SELECT * FROM claimed ORDER BY id ASC;
 ### Execution Performance Across Table Scale:
 | Queue Scale (Jobs) | Median Latency | P95 Latency | Min Latency | Max Latency | Query Plan Root Node | Planning Time |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **1,000 pending** | **4.696 ms** | **5.644 ms** | 3.181 ms | 5.644 ms | Sort | 0.472 ms |
-| **10,000 pending** | **7.371 ms** | **9.135 ms** | 5.567 ms | 9.135 ms | Sort | 0.252 ms |
+| **1,000 pending** | **3.396 ms** | **4.387 ms** | 2.862 ms | 4.387 ms | Sort | 1.079 ms |
+| **10,000 pending** | **5.682 ms** | **6.849 ms** | 5.136 ms | 6.849 ms | Sort | 0.273 ms |
 
 Index verified: `idx_storage_cleanup_processing_claim` on `storage_cleanup_jobs (next_attempt_at ASC, id ASC)`.
 
@@ -55,8 +55,8 @@ Simulation setup: 5 workers issuing concurrent claim queries against a populated
 
 - **Workers:** 5 concurrent client connections
 - **Duplicate Claims Detected:** **0** (strictly enforced via `FOR UPDATE SKIP LOCKED`)
-- **Median Execution Time:** **2.748 ms**
-- **P95 Execution Time:** **4.885 ms**
+- **Median Execution Time:** **4.199 ms**
+- **P95 Execution Time:** **11.137 ms**
 - **Claim Token Generation:** 100% of claimed rows received unique `gen_random_uuid()` tokens and incremented `claim_version`.
 
 ---
@@ -68,9 +68,9 @@ Full lifecycle measured:
 2. `lockAndValidateIntent` (`FOR UPDATE` verification + expiration guard)
 3. `completeIntentInTransaction` (atomic status transition to `completed`)
 
-- **Median Duration:** **2.931 ms**
-- **P95 Duration:** **4.149 ms**
-- **Min / Max:** 1.702 ms / 4.432 ms
+- **Median Duration:** **2.768 ms**
+- **P95 Duration:** **3.862 ms**
+- **Min / Max:** 1.608 ms / 4.462 ms
 
 ---
 
@@ -78,8 +78,8 @@ Full lifecycle measured:
 
 Cycle measured: `acquireObjectSessionLock` (`pg_advisory_lock`) $\rightarrow$ `releaseObjectSessionLock` (`pg_advisory_unlock`) using 64-bit `hashtextextended(key, 0)`.
 
-- **Median Duration:** **0.537 ms**
-- **P95 Duration:** **1.011 ms**
+- **Median Duration:** **0.319 ms**
+- **P95 Duration:** **1.344 ms**
 - **Deadlock Immunity:** Verified via deterministic lexicographical sorting in `acquireObjectSessionLocks`.
 
 ---
@@ -88,8 +88,8 @@ Cycle measured: `acquireObjectSessionLock` (`pg_advisory_lock`) $\rightarrow$ `r
 
 Measured via explicit `admin().ping()` against local MongoDB instance:
 
-- **Median Latency:** **0.576 ms**
-- **P95 Latency:** **1.329 ms**
+- **Median Latency:** **0.441 ms**
+- **P95 Latency:** **1.111 ms**
 
 ---
 
@@ -97,5 +97,5 @@ Measured via explicit `admin().ping()` against local MongoDB instance:
 
 Simultaneous execution of background cleanup claim batch and user upload intent lifecycle:
 
-- **Median Combined Time:** **2.697 ms**
-- **P95 Combined Time:** **3.707 ms**
+- **Median Combined Time:** **2.898 ms**
+- **P95 Combined Time:** **4.316 ms**

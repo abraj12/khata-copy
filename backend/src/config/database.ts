@@ -187,8 +187,7 @@ export const EXPECTED_MIGRATIONS = [
   '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
   '030_storage_cleanup_jobs.sql',
   '031_outbox_worker_search_indexes.sql',
-  '032_storage_cleanup_claim_fencing.sql',
-  '033_storage_upload_intents.sql',
+  '032_storage_lifecycle_and_worker_fencing.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [

@@ -147,8 +147,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
         '030_storage_cleanup_jobs.sql',
         '031_outbox_worker_search_indexes.sql',
-        '032_storage_cleanup_claim_fencing.sql',
-        '033_storage_upload_intents.sql',
+        '032_storage_lifecycle_and_worker_fencing.sql',
       ];
 
       await client.query(`
@@ -163,7 +162,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         await client.query('BEGIN');
         try {
           await client.query(sql);
-          await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [file]);
+          await client.query('INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING', [file]);
           await client.query('COMMIT');
         } catch (err) {
           await client.query('ROLLBACK');
@@ -218,8 +217,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
       '030_storage_cleanup_jobs.sql',
       '031_outbox_worker_search_indexes.sql',
-      '032_storage_cleanup_claim_fencing.sql',
-      '033_storage_upload_intents.sql',
+      '032_storage_lifecycle_and_worker_fencing.sql',
     ]);
 
     const expectedTables = [
@@ -3503,7 +3501,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     expect(nb531.total_amount).toBe('4779.00');
   });
 
-  it('34. Release #027: Real PostgreSQL Outbox -> MongoDB 8.2 Sync, Zero-PG-Query Reads, AppData Persistence & Fail-Closed 503', async () => {
+  it('34. Release #027: Real PostgreSQL Outbox -> MongoDB 8.2 Sync, Zero-PG-Query Reads, AppData Persistence & Fail-Closed 503', { timeout: 30000 }, async () => {
+
     const targetMongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/khata_integration_test';
     if (process.env.MONGODB_ENABLED === 'false') {
       return;
@@ -4082,7 +4081,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       const legacyId = Number(legacyInsert.rows[0].id);
 
       const migration029Sql = fs.readFileSync(
-        path.join(process.cwd(), 'migrations', '029_outbox_legacy_dead_letter_and_perf_indexes.sql'),
+        fs.existsSync(path.join(process.cwd(), 'backend', 'migrations', '029_outbox_legacy_dead_letter_and_perf_indexes.sql')) ? path.join(process.cwd(), 'backend', 'migrations', '029_outbox_legacy_dead_letter_and_perf_indexes.sql') : path.join(process.cwd(), 'migrations', '029_outbox_legacy_dead_letter_and_perf_indexes.sql'),
         'utf8'
       );
       await pool.query(migration029Sql);

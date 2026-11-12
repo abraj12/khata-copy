@@ -103,7 +103,7 @@ describeIntegration('Khata Release #032 — PostgreSQL 18+ Integration Test Suit
     );
     const cleanupCols = cleanupColsRes.rows.map((r) => r.column_name);
     expect(cleanupCols).toContain('claim_token');
-    expect(cleanupCols).toContain('claim_version');
+    expect(cleanupCols.includes('claim_version') || cleanupCols.includes('claim_generation')).toBe(true);
 
     // Verify index idx_storage_cleanup_processing_claim
     const idxRes = await pool.query(
@@ -146,7 +146,7 @@ describeIntegration('Khata Release #032 — PostgreSQL 18+ Integration Test Suit
       const c = await pool.connect();
       try {
         await c.query('BEGIN');
-        const res = await c.query(STORAGE_CLEANUP_CLAIM_SQL, [4, 60000]);
+        const res = await c.query(STORAGE_CLEANUP_CLAIM_SQL, [4, 60000, 'test_worker_' + Math.random().toString(36).slice(2, 6)]);
         await c.query('COMMIT');
         return res.rows;
       } catch (err) {
@@ -170,7 +170,7 @@ describeIntegration('Khata Release #032 — PostgreSQL 18+ Integration Test Suit
       for (const job of batch) {
         expect(job.claim_token).toBeDefined();
         expect(job.claim_token).not.toBeNull();
-        expect(job.claim_version).toBeGreaterThanOrEqual(1);
+        expect(Number(job.claim_generation || job.claim_version)).toBeGreaterThanOrEqual(1);
       }
     }
 
@@ -227,11 +227,11 @@ describeIntegration('Khata Release #032 — PostgreSQL 18+ Integration Test Suit
 
     // Verify completed in database
     const finalRes = await pool.query(
-      'SELECT status, completed_at FROM storage_upload_intents WHERE object_key = $1',
+      'SELECT status, attached_at FROM storage_upload_intents WHERE object_key = $1',
       [testKey]
     );
-    expect(finalRes.rows[0].status).toBe('completed');
-    expect(finalRes.rows[0].completed_at).not.toBeNull();
+    expect(finalRes.rows[0].status).toBe('attached');
+    expect(finalRes.rows[0].attached_at).not.toBeNull();
 
     // Clean up
     await pool.query('DELETE FROM storage_upload_intents WHERE object_key = $1', [testKey]);
@@ -271,6 +271,164 @@ describeIntegration('Khata Release #032 — PostgreSQL 18+ Integration Test Suit
     } finally {
       client1.release();
       client2.release();
+    }
+  });
+  it('5. Real PostgreSQL Transactional pg_notify and LISTEN on app_outbox_events', async () => {
+    const listenClient = await pool.connect();
+    const notifyClient = await pool.connect();
+
+    try {
+      const receivedNotifications: string[] = [];
+      listenClient.on('notification', (msg) => {
+        if (msg.channel === 'app_outbox_events') {
+          receivedNotifications.push(msg.payload || '');
+        }
+      });
+
+      await listenClient.query('LISTEN app_outbox_events');
+
+      // Test 1: ROLLBACK does NOT emit notification
+      await notifyClient.query('BEGIN');
+      await notifyClient.query("SELECT pg_notify('app_outbox_events', $1)", ['rolled_back_event']);
+      await notifyClient.query('ROLLBACK');
+
+      // Small delay to ensure no notification delivered
+      await new Promise((r) => setTimeout(r, 100));
+      expect(receivedNotifications).not.toContain('rolled_back_event');
+
+      // Test 2: COMMIT DOES emit notification
+      await notifyClient.query('BEGIN');
+      await notifyClient.query("SELECT pg_notify('app_outbox_events', $1)", ['committed_event_123']);
+      await notifyClient.query('COMMIT');
+
+      // Wait for async delivery
+      await new Promise((r) => setTimeout(r, 200));
+      expect(receivedNotifications).toContain('committed_event_123');
+
+      await listenClient.query('UNLISTEN app_outbox_events');
+    } finally {
+      listenClient.release();
+      notifyClient.release();
+    }
+  });
+
+  it('6. Worker Claim Fencing: stale worker completion is rejected (0 rows updated)', async () => {
+    const client = await pool.connect();
+    const testKey = 'products/fencing_test_' + Date.now() + '.png';
+
+    try {
+      // Seed a processing job
+      const insertRes = await client.query(
+        `INSERT INTO storage_cleanup_jobs (
+           object_key, object_kind, reason, status, attempt_count, max_attempts,
+           claim_token, claim_generation, lease_expires_at, next_attempt_at, created_at, updated_at
+         )
+         VALUES ($1, 'product_image', 'test_fencing', 'processing', 1, 5,
+                 gen_random_uuid(), 1, NOW() + INTERVAL '1 minute', NOW(), NOW(), NOW())
+         RETURNING id, claim_token`,
+        [testKey]
+      );
+      const jobId = insertRes.rows[0].id;
+      const initialToken = insertRes.rows[0].claim_token;
+
+      // Simulate lease recovery / second worker reclaiming the job
+      const newTokenRes = await client.query(
+        `UPDATE storage_cleanup_jobs
+         SET claim_token = gen_random_uuid(),
+             claim_generation = 2,
+             lease_expires_at = NOW() + INTERVAL '1 minute',
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING claim_token`,
+        [jobId]
+      );
+      const newToken = newTokenRes.rows[0].claim_token;
+      expect(newToken).not.toBe(initialToken);
+
+      // Original worker with stale initialToken tries to complete the job
+      const staleCompleteRes = await client.query(
+        `UPDATE storage_cleanup_jobs
+         SET status = 'completed',
+             lease_expires_at = NULL,
+             claim_token = NULL,
+             completed_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1
+           AND status = 'processing'
+           AND claim_token = $2`,
+        [jobId, initialToken]
+      );
+
+      // Stale update MUST affect 0 rows (fenced out)
+      expect(staleCompleteRes.rowCount).toBe(0);
+
+      // Winner worker with newToken successfully completes the job
+      const winnerCompleteRes = await client.query(
+        `UPDATE storage_cleanup_jobs
+         SET status = 'completed',
+             lease_expires_at = NULL,
+             claim_token = NULL,
+             completed_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1
+           AND status = 'processing'
+           AND claim_token = $2`,
+        [jobId, newToken]
+      );
+      expect(winnerCompleteRes.rowCount).toBe(1);
+
+      // Cleanup
+      await client.query('DELETE FROM storage_cleanup_jobs WHERE id = $1', [jobId]);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('7. Expired Lease Recovery: transitions exhausted jobs to dead_letter', async () => {
+    const client = await pool.connect();
+    const testKey = 'products/dead_letter_recovery_' + Date.now() + '.png';
+
+    try {
+      // Seed an expired processing job that reached max_attempts
+      const insertRes = await client.query(
+        `INSERT INTO storage_cleanup_jobs (
+           object_key, object_kind, reason, status, attempt_count, max_attempts,
+           claim_token, claim_generation, lease_expires_at, next_attempt_at, created_at, updated_at
+         )
+         VALUES ($1, 'product_image', 'test_exhausted', 'processing', 5, 5,
+                 gen_random_uuid(), 1, NOW() - INTERVAL '10 seconds', NOW(), NOW(), NOW())
+         RETURNING id`,
+        [testKey]
+      );
+      const jobId = insertRes.rows[0].id;
+
+      // Run expired lease recovery query
+      await client.query(
+        `UPDATE storage_cleanup_jobs
+         SET status = CASE WHEN attempt_count >= max_attempts THEN 'dead_letter' ELSE 'pending' END,
+             lease_expires_at = NULL,
+             claim_token = NULL,
+             claimed_at = NULL,
+             claimed_by = NULL,
+             dead_letter_at = CASE WHEN attempt_count >= max_attempts THEN COALESCE(dead_letter_at, NOW()) ELSE dead_letter_at END,
+             updated_at = NOW()
+         WHERE status = 'processing'
+           AND (lease_expires_at IS NULL OR lease_expires_at < NOW())`
+      );
+
+      // Verify status transitioned to dead_letter
+      const checkRes = await client.query(
+        'SELECT status, dead_letter_at, claim_token FROM storage_cleanup_jobs WHERE id = $1',
+        [jobId]
+      );
+      expect(checkRes.rows[0].status).toBe('dead_letter');
+      expect(checkRes.rows[0].dead_letter_at).not.toBeNull();
+      expect(checkRes.rows[0].claim_token).toBeNull();
+
+      // Cleanup
+      await client.query('DELETE FROM storage_cleanup_jobs WHERE id = $1', [jobId]);
+    } finally {
+      client.release();
     }
   });
 });

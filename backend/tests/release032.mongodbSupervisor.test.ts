@@ -68,7 +68,7 @@ describe('Khata Release #032 — MongoDB Supervisor & Resilient Reconnection Tes
       const listenerSpy = vi.fn();
       const unregister = mongodbConfig.registerMongoUnreadyListener(listenerSpy);
 
-      vi.spyOn(mongodbConfig, 'isMongoReady').mockReturnValue(false);
+      vi.spyOn(mongodbConfig, 'isMongoReady').mockImplementation(() => connectCalls > 1);
       vi.spyOn(mongodbConfig, 'getMongoAvailabilityState').mockReturnValue('disconnected');
 
       const readiness = await mongodbConfig.checkMongoReadiness();
@@ -95,7 +95,7 @@ describe('Khata Release #032 — MongoDB Supervisor & Resilient Reconnection Tes
       vi.spyOn(mongodbConfig, 'isMongoReady').mockImplementation(() => connectAttempts > 2);
 
       const supervisor = new MongoConnectionSupervisor({
-        baseRetryDelayMs: 100,
+        baseRetryDelayMs: 200,
         maxRetryDelayMs: 1000,
       });
 
@@ -109,11 +109,11 @@ describe('Khata Release #032 — MongoDB Supervisor & Resilient Reconnection Tes
       expect(connectAttempts).toBe(1);
 
       // Advance time for first retry
-      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(250);
       expect(connectAttempts).toBe(2);
 
       // Advance time for second retry (succeeds)
-      await vi.advanceTimersByTimeAsync(600);
+      await vi.advanceTimersByTimeAsync(500);
       expect(connectAttempts).toBe(3);
 
       await supervisor.stop();

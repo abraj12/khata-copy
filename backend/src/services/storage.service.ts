@@ -9,7 +9,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import crypto from 'crypto';
 import { env, isR2Configured } from '../config/env.js';
 import { AppError } from '../utils/errors.js';
-import { storageUploadIntentService, UploadIntentKind } from './storageUploadIntent.service.js';
+import type { UploadIntentKind } from './storageUploadIntent.service.js';
 
 export const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 export const ALLOWED_SUPPLIER_DOC_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
@@ -23,8 +23,7 @@ export type StorageFolder = 'products' | 'offline-bills' | 'supplier-bills';
 export type RejectedUploadCleanupHook = (
   objectKey: string,
   folder: StorageFolder,
-  reason: string,
-  deleteError: unknown
+  reason: string
 ) => Promise<void>;
 
 let rejectedUploadCleanupHook: RejectedUploadCleanupHook | null = null;
@@ -276,6 +275,7 @@ export class StorageService {
     };
 
     try {
+      const { storageUploadIntentService } = await import('./storageUploadIntent.service.js');
       await storageUploadIntentService.registerIntent({
         objectKey,
         objectKind: kindMap[folder] || 'other',
@@ -603,11 +603,11 @@ export class StorageService {
       await this.deleteObject(objectKey);
     } catch (delErr) {
       if (rejectedUploadCleanupHook) {
-        await rejectedUploadCleanupHook(objectKey, folder, reason, delErr).catch((hookErr) => {
-          console.warn('[STORAGE] Rejected-upload cleanup enqueue warning:', (hookErr as Error)?.message);
+        await rejectedUploadCleanupHook(objectKey, folder, reason).catch((hookErr) => {
+          console.warn('[STORAGE] Rejected-upload cleanup warning:', (hookErr as Error)?.message);
         });
       } else {
-        console.warn('[STORAGE] Failed to delete rejected R2 upload:', (delErr as Error)?.message);
+        console.warn('[STORAGE] Failed to clean up rejected R2 object:', (delErr as Error)?.message);
       }
     }
   }

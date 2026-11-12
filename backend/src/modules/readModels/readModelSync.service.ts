@@ -283,6 +283,10 @@ export interface OutboxBatchEventRow {
   payload: Record<string, unknown>;
   source_version: number;
   business_date: string | null;
+  claim_token?: string | null;
+  claim_generation?: string | number;
+  claimed_at?: string | Date | null;
+  claimed_by?: string | null;
 }
 
 export class ReadModelSyncService {

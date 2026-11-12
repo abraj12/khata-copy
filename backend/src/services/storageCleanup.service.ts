@@ -240,23 +240,29 @@ export class StorageCleanupService {
       try {
         references = await this.findLiveObjectReferences(objectKey, client || appPool);
       } catch (refCheckErr) {
-        if (!input.isRollbackNewUpload) {
-          const safeRefErr = sanitizeStorageErrorMessage(refCheckErr);
-          console.warn('[STORAGE CLEANUP] Reference verification failed; deferring to durable cleanup job:', {
+        const safeRefErr = sanitizeStorageErrorMessage(refCheckErr);
+        console.warn('[STORAGE CLEANUP] Reference verification failed; fail-closed and enqueue durable retry:', {
+          object: redactObjectKeyForLog(objectKey),
+          objectKind: input.objectKind,
+          reason: input.reason,
+          message: safeRefErr,
+        });
+        const jobId = await this.enqueueCleanupJob({
+          objectKey,
+          objectKind: input.objectKind,
+          reason: input.reason,
+          lastError: safeRefErr,
+          initialDelayMs: input.initialRetryDelayMs ?? 2000,
+        }).catch((enqueueErr) => {
+          console.error('[STORAGE CLEANUP] Failed to persist durable R2 cleanup job on ref check failure:', {
             object: redactObjectKeyForLog(objectKey),
             objectKind: input.objectKind,
             reason: input.reason,
-            message: safeRefErr,
+            error: sanitizeStorageErrorMessage(enqueueErr),
           });
-          const jobId = await this.enqueueCleanupJob({
-            objectKey,
-            objectKind: input.objectKind,
-            reason: input.reason,
-            lastError: safeRefErr,
-            initialDelayMs: input.initialRetryDelayMs ?? 2000,
-          }).catch(() => null);
-          return { outcome: jobId ? 'queued' : 'enqueue_failed', jobId };
-        }
+          return null;
+        });
+        return { outcome: jobId ? 'queued' : 'enqueue_failed', jobId };
       }
 
       if (references.length > 0) {
@@ -314,21 +320,16 @@ export class StorageCleanupService {
 
 export const storageCleanupService = new StorageCleanupService();
 
-setRejectedUploadCleanupHook(async (objectKey, folder, reason, deleteError) => {
+setRejectedUploadCleanupHook(async (objectKey, folder, reason) => {
   const objectKind: CleanupObjectKind =
     folder === 'supplier-bills'
       ? 'supplier_bill'
       : folder === 'offline-bills'
         ? 'offline_bill'
         : 'product_image';
-  const refs = await storageCleanupService.findLiveObjectReferences(objectKey).catch(() => []);
-  if (refs.length > 0) {
-    return;
-  }
-  await storageCleanupService.enqueueCleanupJob({
+  await storageCleanupService.attemptDeleteOrEnqueue({
     objectKey,
     objectKind,
     reason: `upload_rejected:${reason}`,
-    lastError: sanitizeStorageErrorMessage(deleteError),
   });
 });

@@ -61,6 +61,10 @@ export async function enqueueOutboxEvent(
       input.businessDate ?? null,
     ]
   );
+
+
+  // Transactional PostgreSQL notification for distributed outbox workers (fires strictly on COMMIT)
+  await client.query("SELECT pg_notify('app_outbox_events', $1)", [aggregateId]);
 }
 
 /**

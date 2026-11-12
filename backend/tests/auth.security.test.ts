@@ -114,13 +114,10 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             version: '031_outbox_worker_search_indexes.sql',
           },
           {
-            version: '032_storage_cleanup_claim_fencing.sql',
-          },
-          {
-            version: '033_storage_upload_intents.sql',
+            version: '032_storage_lifecycle_and_worker_fencing.sql',
           },
           ],
-          rowCount: 33,
+          rowCount: 32,
         } as any;
       }
       return { rows: [], rowCount: 0 } as any;

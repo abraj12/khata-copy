@@ -196,7 +196,7 @@ describe('Khata Release #027 — MongoDB Architecture, Outbox, Fail-Closed Reads
       });
 
       expect(poolQuerySpy).not.toHaveBeenCalled();
-      expect(txQueries).toHaveLength(1);
+      expect(txQueries.length).toBeGreaterThanOrEqual(1);
       expect(txQueries[0].sql).toContain('INSERT INTO app_outbox_events');
       expect(txQueries[0].params[0]).toBe('product');
       expect(txQueries[0].params[1]).toBe('42');

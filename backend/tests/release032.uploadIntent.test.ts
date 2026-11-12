@@ -111,7 +111,7 @@ describe('Khata Release #032 — Storage Upload Intent Lifecycle Suite', () => {
       ).rejects.toThrowError(AppError);
 
       expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringContaining("SET status = 'expired'"),
+        expect.stringContaining("SET status = 'cleanup_pending'"),
         ['intent-expired-1']
       );
     });
@@ -168,7 +168,7 @@ describe('Khata Release #032 — Storage Upload Intent Lifecycle Suite', () => {
 
       expect(completed).toBe(true);
       expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringContaining("SET status = 'completed'"),
+        expect.stringContaining("SET status = 'attached'"),
         ['products/prod_1_123.jpg']
       );
     });

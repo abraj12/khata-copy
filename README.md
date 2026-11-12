@@ -32,7 +32,7 @@ npm ci
 # 2. Compile both backend and frontend workspaces
 npm run build
 
-# 3. Execute automated unit test suites (405 backend tests)
+# 3. Execute automated unit test suites (406 backend tests)
 npm test
 
 # 4. Execute real PostgreSQL + MongoDB integration suite (requires TEST_DATABASE_URL / TEST_MONGODB_URI)

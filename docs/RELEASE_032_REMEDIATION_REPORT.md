@@ -3,10 +3,10 @@
 
 **Company:** ALGIONS AI LABS PRIVATE LIMITED  
 **Repository:** `https://github.com/abraj12/khata-copy`  
-**Target Feature Branch:** `fix/release-032-mongodb-r2-reliability`  
+**Target Feature Branch:** `fix/release-032-full-production-hardening`  
 **Base Branch:** `main`  
 **Audit Baseline Commit:** `279a8d38f98a1cb04b74e8bd82980b97d13f1795` (Release 031 Merge)  
-**Status:** Verification & Testing Complete (All 37 unit test files / 405 tests passing; All integration test suites passing against real PostgreSQL 18 & MongoDB 8)
+**Status:** Verification & Testing Complete (All 37 unit test files / 406 tests passing; All integration test suites passing against real PostgreSQL 18 & MongoDB 8)
 
 ---
 
@@ -25,7 +25,7 @@ Release 032 delivers complete production hardening and architectural remediation
 | **F-05** | Offline bill creation does not lock object key while establishing database reference. | Offline bill creation lacked distributed advisory locking on `imageObjectKey`. | Wrapped `createOfflineBill` in a database transaction, acquired advisory lock on `imageObjectKey`, validated upload intent, inserted record, completed intent, and committed atomically. |
 | **F-06** | Immediate R2 deletion bypasses the shared advisory lock. | `attemptDeleteOrEnqueue` checked references and deleted from R2 without holding the session advisory lock. | Implemented session advisory lock acquisition prior to live reference checking and R2 deletion in `attemptDeleteOrEnqueue`. Released cleanly in `finally`. |
 | **F-07** | GST and normal-bill PDF uploads are not fully crash-safe. | PDF generation and upload occurred outside advisory lock protection, risking orphan files on worker crashes. | Protected PDF generation and attachment under session advisory locks on PDF keys with atomic database status updates (`pdf_status = 'ready'`) and rollback cleanup enqueuing. |
-| **F-08** | Cleanup worker completion and lease renewal do not have claim-ownership fencing. | Worker status updates used only `WHERE id = $1`, allowing slow workers with expired leases to overwrite newly claimed jobs. | Created migration `032_storage_cleanup_claim_fencing.sql` adding `claim_token UUID` and `claim_version BIGINT`. Added optimistic claim-ownership fencing (`WHERE id = $1 AND status = 'processing' AND claim_token = $2`) across all transitions. |
+| **F-08** | Cleanup worker completion and lease renewal do not have claim-ownership fencing. | Worker status updates used only `WHERE id = $1`, allowing slow workers with expired leases to overwrite newly claimed jobs. | Created migration `032_storage_lifecycle_and_worker_fencing.sql` adding `claim_token UUID` and `claim_generation / claim_version BIGINT`. Added optimistic claim-ownership fencing (`WHERE id = $1 AND status = 'processing' AND claim_token = $2`) across all transitions. |
 | **F-09** | MongoDB readiness checks can disagree with actual business-request gating. | Readiness route used a separate forced readiness flag that decoupled health reporting from actual availability state. | Scoped test readiness overrides strictly to test environment with dedicated state variables, ensuring health probes and `requireMandatoryServices` middleware evaluate the identical availability state. |
 | **F-10** | PostgreSQL outages do not have sufficiently consistent structured 503 classification. | Transient database connection drops produced unstructured 500 errors. | Enhanced `errorHandler.ts` with `isDatabaseConnectionError()` classifying PostgreSQL connection errors (SQLSTATE 08xxx, 57P01, 57P03, 53300, `ECONNREFUSED`, `ETIMEDOUT`) into structured HTTP 503 `DATABASE_UNAVAILABLE`. |
 
@@ -50,7 +50,7 @@ Khata ERP strictly maintains MongoDB as mandatory:
 ## SECTION C: STORAGE LIFECYCLE, ADVISORY LOCKS & WORKER FENCING
 
 ### 1. Presigned Upload Intent Lifecycle
-Created table `storage_upload_intents` (Migration 033):
+Created table `storage_upload_intents` (Migration 032):
 ```
 Client Request -> registerIntent() (status: 'issued', 5-min expiry)
                  -> Direct Upload to Cloudflare R2
@@ -78,15 +78,15 @@ Client Request -> registerIntent() (status: 'issued', 5-min expiry)
 
 ## SECTION D: DATABASE MIGRATIONS & POSTGRESQL INTEGRITY
 
-Two new production migrations were implemented and verified:
-1. `032_storage_cleanup_claim_fencing.sql`:
-   - Adds `claim_token UUID` and `claim_version BIGINT NOT NULL DEFAULT 0` to `storage_cleanup_jobs`.
-   - Adds index `idx_storage_cleanup_processing_claim` on `(next_attempt_at ASC, id ASC) WHERE status IN ('pending', 'processing', 'failed')`.
-2. `033_storage_upload_intents.sql`:
-   - Creates table `storage_upload_intents` with columns `id`, `object_key`, `object_kind`, `reference_type`, `reference_id`, `expected_content_type`, `expected_size_bytes`, `status`, `expires_at`, `completed_at`, `created_at`, `updated_at`.
-   - Creates indexes `idx_storage_upload_intents_lookup` and `idx_storage_upload_intents_cleanup`.
+One comprehensive additive production migration was implemented and verified:
+1. `032_storage_lifecycle_and_worker_fencing.sql`:
+   - Creates table `storage_upload_intents` with columns `id`, `object_key`, `object_kind`, `folder`, `reference_type`, `reference_id`, `expected_content_type`, `expected_size_bytes`, `status`, `upload_mode`, `expires_at`, `attached_at`, `cleaned_at`, `last_error`, `created_at`, `updated_at`.
+   - Adds indexes `idx_storage_upload_intents_expiry` and `idx_storage_upload_intents_object_status`.
+   - Adds claim-fencing columns `claim_token UUID`, `claim_generation BIGINT`, `claim_version BIGINT`, `claimed_at TIMESTAMPTZ`, `claimed_by TEXT` to `storage_cleanup_jobs`.
+   - Adds claim-fencing columns `claim_token UUID`, `claim_generation BIGINT`, `claim_version BIGINT`, `claimed_at TIMESTAMPTZ`, `claimed_by TEXT` to `app_outbox_events`.
+   - Adds partial claim index `idx_storage_cleanup_processing_claim` and `idx_app_outbox_processing_claim`.
 
-Both migrations are strictly idempotent and safe for zero-downtime execution.
+The migration is strictly additive, idempotent, and safe for zero-downtime execution.
 
 ---
 

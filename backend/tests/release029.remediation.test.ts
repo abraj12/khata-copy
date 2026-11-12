@@ -402,7 +402,7 @@ describe('Khata Release #029 — Reliability, DSA Search, Keyset Pagination & Ha
 
       await worker.drainNow();
 
-      const reclaimSql = capturedSqls.find((s) => s.includes("SET status = 'pending'"));
+      const reclaimSql = capturedSqls.find((s) => s.includes("SET status = 'pending'") || s.includes("ELSE 'pending' END"));
       expect(reclaimSql).toBeTruthy();
       expect(reclaimSql).toContain('lease_expires_at IS NULL');
       expect(reclaimSql).toContain('lease_expires_at < NOW()');

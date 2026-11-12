@@ -265,8 +265,7 @@ describeIntegration('Release #030 — Real PostgreSQL 18.6 & MongoDB 8.2.4 Integ
     expect(post029Migrations).toEqual([
       '030_storage_cleanup_jobs.sql',
       '031_outbox_worker_search_indexes.sql',
-      '032_storage_cleanup_claim_fencing.sql',
-      '033_storage_upload_intents.sql',
+      '032_storage_lifecycle_and_worker_fencing.sql',
     ]);
 
     const client = await pool.connect();

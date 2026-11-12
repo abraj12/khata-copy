@@ -4,7 +4,7 @@
 
 Before triggering production deployments, ensure all preflight gates are green:
 
-- [x] Backend Unit Test Suite: 37 test files, 405 tests passing (`npm test --workspace=backend`).
+- [x] Backend Unit Test Suite: 37 test files, 406 tests passing (`npm test --workspace=backend`).
 - [x] Integration Test Suite: Real PostgreSQL 18 & MongoDB 8 passing (`npm run test:integration --workspace=backend`).
 - [x] TypeScript Compilation: Backend `tsc` succeeds with 0 errors (`npm run build --workspace=backend`).
 - [x] Frontend Build: Vite production build succeeds (`npm run build --workspace=frontend`).
@@ -51,13 +51,12 @@ Migrations must be applied in sequential order. In Khata ERP, migrations run aut
 npm run migrate --workspace=backend
 ```
 
-New Release 032 Migrations:
-1. `032_storage_cleanup_claim_fencing.sql`:
-   - Adds `claim_token` UUID column to `storage_cleanup_jobs`.
-   - Adds `claim_version` BIGINT column to `storage_cleanup_jobs`.
-   - Adds partial index `idx_storage_cleanup_processing_claim`.
-2. `033_storage_upload_intents.sql`:
-   - Creates table `storage_upload_intents`.
+New Release 032 Migration:
+1. `032_storage_lifecycle_and_worker_fencing.sql`:
+   - Creates table `storage_upload_intents` with folder, upload_mode, attached_at, cleaned_at, and status checks.
+   - Adds `claim_token`, `claim_generation`, `claim_version`, `claimed_at`, `claimed_by` to `storage_cleanup_jobs`.
+   - Adds `claim_token`, `claim_generation`, `claim_version`, `claimed_at`, `claimed_by` to `app_outbox_events`.
+   - Adds partial indexes `idx_storage_cleanup_processing_claim` and `idx_app_outbox_processing_claim`.
    - Creates indexes `idx_storage_upload_intents_lookup` and `idx_storage_upload_intents_cleanup`.
 
 Both migrations are safe, online, non-blocking, and idempotent.
@@ -99,5 +98,5 @@ Execute the following HTTP checks against production:
 If an unexpected critical incident occurs during deployment:
 
 1. **Backend Rollback:** In Render Dashboard, redeploy the previous release commit (`279a8d38f98a1cb04b74e8bd82980b97d13f1795`).
-2. **Schema Compatibility:** Migrations 032 and 033 are purely additive (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`). Previous code ignores the new columns and table, requiring NO destructive database rollbacks.
+2. **Schema Compatibility:** Migration 032 is purely additive (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`). Previous code ignores the new columns and table, requiring NO destructive database rollbacks.
 3. **Storage Fallback:** R2 objects and signed URLs remain backward-compatible across releases.

@@ -187,7 +187,7 @@ async function main() {
     }
 
     // EXPLAIN ANALYZE of claim query
-    const explainResult = await runExplainPg(pool, STORAGE_CLEANUP_CLAIM_SQL, [25, 60000]);
+    const explainResult = await runExplainPg(pool, STORAGE_CLEANUP_CLAIM_SQL, [25, 60000, 'bench_explain']);
     console.log(`     Scale ${scale} Plan: Node=${explainResult.rootNode}, ExecTime=${explainResult.executionTimeMs}ms, PlanningTime=${explainResult.planningTimeMs}ms`);
 
     // Measured runs
@@ -195,7 +195,7 @@ async function main() {
       const conn = await pool.connect();
       try {
         await conn.query('BEGIN');
-        const res = await conn.query(STORAGE_CLEANUP_CLAIM_SQL, [25, 60000]);
+        const res = await conn.query(STORAGE_CLEANUP_CLAIM_SQL, [25, 60000, 'bench_scale']);
         await conn.query('COMMIT');
         return res.rowCount ?? 0;
       } catch (err) {
@@ -242,7 +242,7 @@ async function main() {
       const conn = await pool.connect();
       try {
         await conn.query('BEGIN');
-        const res = await conn.query(STORAGE_CLEANUP_CLAIM_SQL, [10, 60000]);
+        const res = await conn.query(STORAGE_CLEANUP_CLAIM_SQL, [10, 60000, 'bench_worker_' + Math.random().toString(36).slice(2, 6)]);
         await conn.query('COMMIT');
         return res.rows;
       } catch (err) {
@@ -352,7 +352,7 @@ async function main() {
         const conn = await pool.connect();
         try {
           await conn.query('BEGIN');
-          const res = await conn.query(STORAGE_CLEANUP_CLAIM_SQL, [5, 60000]);
+          const res = await conn.query(STORAGE_CLEANUP_CLAIM_SQL, [5, 60000, 'bench_combined']);
           await conn.query('COMMIT');
           return res.rows;
         } catch (e) {
@@ -402,7 +402,7 @@ async function main() {
 
 **Release:** \`#032\`  
 **Company:** ALGIONS AI LABS PRIVATE LIMITED  
-**Target Feature Branch:** \`fix/release-032-mongodb-r2-reliability\`  
+**Target Feature Branch:** \`fix/release-032-full-production-hardening\`  
 **Test Hardware/Environment:** PostgreSQL 18.x (Local 127.0.0.1:5432), MongoDB 8.x (Local 127.0.0.1:27017), Node.js v22.x  
 **Zero-Fabrication Guarantee:** All metrics recorded directly from live execution of \`benchmark-release032.ts\`.
 
@@ -429,12 +429,12 @@ claimed AS (
   SET status = 'processing',
       lease_expires_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
       attempt_count = j.attempt_count + 1,
-      claim_version = j.claim_version + 1,
+      claim_generation = j.claim_generation + 1,
       claim_token = gen_random_uuid(),
       updated_at = NOW()
   FROM next_batch nb
   WHERE j.id = nb.id
-  RETURNING j.id, j.object_key, j.claim_token, j.claim_version
+  RETURNING j.id, j.object_key, j.claim_token, j.claim_generation
 )
 SELECT * FROM claimed ORDER BY id ASC;
 \`\`\`

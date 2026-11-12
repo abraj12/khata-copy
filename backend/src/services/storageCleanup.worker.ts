@@ -16,6 +16,7 @@ export interface StorageCleanupWorkerOptions {
   baseBackoffMs?: number;
   maxBackoffMs?: number;
   registerGlobalListener?: boolean;
+  workerId?: string;
 }
 
 export interface ClaimedCleanupJob {
@@ -26,7 +27,10 @@ export interface ClaimedCleanupJob {
   attempt_count: number;
   max_attempts: number;
   claim_token?: string | null;
+  claim_generation?: string | number;
   claim_version?: string | number;
+  claimed_at?: string | Date | null;
+  claimed_by?: string | null;
 }
 
 export interface StorageBacklogStatus {
@@ -101,8 +105,10 @@ export const STORAGE_CLEANUP_CLAIM_SQL = `
     SET status = 'processing',
         lease_expires_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
         attempt_count = j.attempt_count + 1,
-        claim_version = j.claim_version + 1,
+        claim_generation = j.claim_generation + 1,
         claim_token = gen_random_uuid(),
+        claimed_at = NOW(),
+        claimed_by = $3,
         updated_at = NOW()
     FROM next_batch nb
     WHERE j.id = nb.id
@@ -114,7 +120,10 @@ export const STORAGE_CLEANUP_CLAIM_SQL = `
       j.attempt_count,
       j.max_attempts,
       j.claim_token,
-      j.claim_version
+      j.claim_generation,
+      j.claim_generation AS claim_version,
+      j.claimed_at,
+      j.claimed_by
   )
   SELECT * FROM claimed ORDER BY id ASC
 `;
@@ -126,6 +135,7 @@ export const STORAGE_CLEANUP_CLAIM_SQL = `
  * cross-table live-reference verification, and one-shot wakeup timers (zero idle DB polling).
  */
 export class StorageCleanupWorker {
+  public readonly workerId: string;
   private readonly batchSize: number;
   private readonly leaseDurationMs: number;
   private readonly leaseHeartbeatIntervalMs: number;
@@ -146,6 +156,7 @@ export class StorageCleanupWorker {
   private listenConnecting = false;
 
   constructor(options: StorageCleanupWorkerOptions = {}) {
+    this.workerId = options.workerId ?? `storage_cleanup_${process.pid}_${Math.random().toString(36).slice(2, 8)}`;
     this.batchSize = Math.max(1, Math.min(100, options.batchSize ?? 20));
     this.leaseDurationMs = Math.max(500, options.leaseDurationMs ?? 60_000);
     this.leaseHeartbeatIntervalMs = Math.max(200, options.leaseHeartbeatIntervalMs ?? 20_000);
@@ -485,18 +496,25 @@ export class StorageCleanupWorker {
     try {
       await client.query('BEGIN');
 
-      // Reclaim expired or missing processing leases first
+      // Reclaim expired processing leases; transition to dead_letter if attempts exhausted
       await client.query(
         `UPDATE storage_cleanup_jobs
-         SET status = 'pending',
+         SET status = CASE WHEN attempt_count >= max_attempts THEN 'dead_letter' ELSE 'pending' END,
              lease_expires_at = NULL,
              claim_token = NULL,
+             claimed_at = NULL,
+             claimed_by = NULL,
+             dead_letter_at = CASE WHEN attempt_count >= max_attempts THEN COALESCE(dead_letter_at, NOW()) ELSE dead_letter_at END,
              updated_at = NOW()
          WHERE status = 'processing'
            AND (lease_expires_at IS NULL OR lease_expires_at < NOW())`
       );
 
-      const res = await client.query(STORAGE_CLEANUP_CLAIM_SQL, [this.batchSize, this.leaseDurationMs]);
+      const res = await client.query(STORAGE_CLEANUP_CLAIM_SQL, [
+        this.batchSize,
+        this.leaseDurationMs,
+        this.workerId,
+      ]);
 
       await client.query('COMMIT');
       return res.rows as ClaimedCleanupJob[];
@@ -549,6 +567,8 @@ export class StorageCleanupWorker {
          SET status = 'pending',
              lease_expires_at = NULL,
              claim_token = NULL,
+             claimed_at = NULL,
+             claimed_by = NULL,
              attempt_count = GREATEST(j.attempt_count - 1, 0),
              updated_at = NOW()
          FROM (
@@ -565,6 +585,8 @@ export class StorageCleanupWorker {
          SET status = 'pending',
              lease_expires_at = NULL,
              claim_token = NULL,
+             claimed_at = NULL,
+             claimed_by = NULL,
              attempt_count = GREATEST(attempt_count - 1, 0),
              updated_at = NOW()
          WHERE id = ANY($1::bigint[])
@@ -581,6 +603,8 @@ export class StorageCleanupWorker {
          SET status = 'completed',
              lease_expires_at = NULL,
              claim_token = NULL,
+             claimed_at = NULL,
+             claimed_by = NULL,
              last_error = $3,
              completed_at = NOW(),
              updated_at = NOW()
@@ -592,6 +616,8 @@ export class StorageCleanupWorker {
          SET status = 'completed',
              lease_expires_at = NULL,
              claim_token = NULL,
+             claimed_at = NULL,
+             claimed_by = NULL,
              last_error = $2,
              completed_at = NOW(),
              updated_at = NOW()
@@ -618,6 +644,8 @@ export class StorageCleanupWorker {
            SET status = 'dead_letter',
                lease_expires_at = NULL,
                claim_token = NULL,
+               claimed_at = NULL,
+               claimed_by = NULL,
                dead_letter_at = COALESCE(dead_letter_at, NOW()),
                last_error = $3,
                updated_at = NOW()
@@ -629,6 +657,8 @@ export class StorageCleanupWorker {
            SET status = 'dead_letter',
                lease_expires_at = NULL,
                claim_token = NULL,
+               claimed_at = NULL,
+               claimed_by = NULL,
                dead_letter_at = COALESCE(dead_letter_at, NOW()),
                last_error = $2,
                updated_at = NOW()
@@ -665,6 +695,8 @@ export class StorageCleanupWorker {
          SET status = 'failed',
              lease_expires_at = NULL,
              claim_token = NULL,
+             claimed_at = NULL,
+             claimed_by = NULL,
              next_attempt_at = NOW() + ($3::bigint * INTERVAL '1 millisecond'),
              last_error = $4,
              updated_at = NOW()
@@ -676,6 +708,8 @@ export class StorageCleanupWorker {
          SET status = 'failed',
              lease_expires_at = NULL,
              claim_token = NULL,
+             claimed_at = NULL,
+             claimed_by = NULL,
              next_attempt_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
              last_error = $3,
              updated_at = NOW()

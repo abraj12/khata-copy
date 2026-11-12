@@ -5,6 +5,9 @@ const EXEMPT_PATHS = new Set([
   '/api/v1/health/live',
   '/api/v1/health/ready',
   '/api/v1/health',
+  '/health/live',
+  '/health/ready',
+  '/health',
 ]);
 
 /**
@@ -12,7 +15,7 @@ const EXEMPT_PATHS = new Set([
  * mandatory database services (specifically MongoDB read models and collections)
  * are unavailable or disconnected.
  *
- * Excludes only public monitoring/health probe paths.
+ * Excludes only public monitoring/health probe paths and session logout.
  */
 export function requireMandatoryServices(
   req: Request,
@@ -21,8 +24,24 @@ export function requireMandatoryServices(
 ): void {
   // Normalize path without trailing slashes
   const normalizedPath = req.path.replace(/\/+$/, '') || '/';
+  const originalPath = (req.originalUrl || '').split('?')[0].replace(/\/+$/, '') || '/';
 
-  if (EXEMPT_PATHS.has(normalizedPath) || EXEMPT_PATHS.has(req.path)) {
+  if (
+    EXEMPT_PATHS.has(normalizedPath) ||
+    EXEMPT_PATHS.has(req.path) ||
+    EXEMPT_PATHS.has(originalPath)
+  ) {
+    next();
+    return;
+  }
+
+  // Exempt POST /api/v1/auth/logout so users can always terminate sessions during MongoDB outage
+  if (
+    req.method === 'POST' &&
+    (normalizedPath === '/api/v1/auth/logout' ||
+      normalizedPath === '/auth/logout' ||
+      originalPath === '/api/v1/auth/logout')
+  ) {
     next();
     return;
   }

@@ -13,7 +13,7 @@ Khata ERP uses Cloudflare R2 (S3-compatible object storage) for:
 
 ## 2. Presigned Storage Upload Intent Lifecycle
 
-To prevent orphaned objects and guarantee reference integrity, all presigned client uploads follow a 3-step lifecycle backed by PostgreSQL table `storage_upload_intents` (Migration 033):
+To prevent orphaned objects and guarantee reference integrity, all presigned client uploads follow a 3-step lifecycle backed by PostgreSQL table `storage_upload_intents` (Migration 032):
 
 ```
        CLIENT                             SERVER (EXPRESS)                    POSTGRESQL                    CLOUDFLARE R2

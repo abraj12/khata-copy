@@ -1,3 +1,4 @@
+import { appPool } from '../src/config/database.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@aws-sdk/s3-request-presigner', () => ({
@@ -6,6 +7,7 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({
 
 import {
   StorageService,
+  storageService as globalStorageService,
   validateImageMagicBytes,
   MAX_PRODUCT_IMAGE_BYTES,
   MAX_OFFLINE_BILL_BYTES,
@@ -32,6 +34,7 @@ describe('Cloudflare R2 Storage Service & Image Validation Suite', () => {
       send: vi.fn(),
     };
     storageService.setClient(mockS3Client as unknown as S3Client);
+    globalStorageService.setClient(mockS3Client as unknown as S3Client);
   });
 
   describe('1. Image Magic Bytes & Content-Type Spoofing Protection', () => {
@@ -180,6 +183,11 @@ describe('Cloudflare R2 Storage Service & Image Validation Suite', () => {
     });
 
     it('detects spoofed content-type, deletes object from R2 and throws AppError 400', async () => {
+      vi.spyOn(appPool, 'query').mockResolvedValue({ rows: [] } as any);
+      vi.spyOn(appPool, 'connect').mockResolvedValue({
+        query: vi.fn().mockResolvedValue({ rows: [] }),
+        release: vi.fn(),
+      } as any);
       const fakeJpegBytes = new Uint8Array([0x7f, 0x45, 0x4c, 0x46]); // ELF executable
       let deleteCalledWithKey = '';
 
