@@ -3,7 +3,11 @@ import { z } from 'zod';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { khataService } from './khata.service.js';
 import { isMongoEnabled } from '../../config/mongodb.js';
-import { readModelsQueryService, ReadModelUnavailableError } from '../readModels/readModelsQuery.service.js';
+import {
+  InvalidPaginationCursorError,
+  readModelsQueryService,
+  ReadModelUnavailableError,
+} from '../readModels/readModelsQuery.service.js';
 import { appDataService } from '../appData/appData.service.js';
 
 const router = Router();
@@ -70,6 +74,7 @@ const customerSearchQuerySchema = z.object({
   search: z.string().max(100).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(25),
   offset: z.coerce.number().int().min(0).default(0),
+  cursor: z.string().max(256).optional(),
 });
 
 function handleStructuredKhataError(err: unknown, res: Response, next: NextFunction) {
@@ -104,6 +109,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
           offset: result.offset,
           hasMore: result.hasMore,
           nextOffset: result.nextOffset,
+          nextCursor: result.nextCursor ?? null,
         },
         syncStatus: result.syncStatus,
       });
@@ -112,6 +118,10 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const { customers, pagination } = await khataService.listCustomers(options);
     res.json({ success: true, customers, pagination });
   } catch (err) {
+    if (err instanceof InvalidPaginationCursorError) {
+      res.status(400).json({ success: false, code: err.code, message: err.message });
+      return;
+    }
     if (err instanceof ReadModelUnavailableError) {
       res.status(503).json({ success: false, code: err.code, message: err.message });
       return;
@@ -160,9 +170,10 @@ router.get('/customers', async (req: Request, res: Response, next: NextFunction)
       const startedAt = Date.now();
       const result = await readModelsQueryService.listCustomersFromMongo(parsed.data);
       if (parsed.data.search && parsed.data.search.trim()) {
+        const searchCategory = appDataService.classifyCustomerSearchQuery(parsed.data.search);
         void appDataService.recordSearchAnalytics({
           module: 'customers',
-          query: parsed.data.search,
+          query: searchCategory,
           resultCount: result.customers.length,
           source: 'mongodb',
           durationMs: Date.now() - startedAt,
@@ -177,6 +188,7 @@ router.get('/customers', async (req: Request, res: Response, next: NextFunction)
           offset: result.offset,
           hasMore: result.hasMore,
           nextOffset: result.nextOffset,
+          nextCursor: result.nextCursor ?? null,
         },
         syncStatus: result.syncStatus,
       });
@@ -186,6 +198,10 @@ router.get('/customers', async (req: Request, res: Response, next: NextFunction)
     const { customers, pagination } = await khataService.listCustomers(parsed.data);
     res.json({ success: true, customers, pagination });
   } catch (err) {
+    if (err instanceof InvalidPaginationCursorError) {
+      res.status(400).json({ success: false, code: err.code, message: err.message });
+      return;
+    }
     if (err instanceof ReadModelUnavailableError) {
       res.status(503).json({ success: false, code: err.code, message: err.message });
       return;

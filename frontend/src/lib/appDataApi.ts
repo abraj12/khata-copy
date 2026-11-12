@@ -161,8 +161,46 @@ export async function fetchHealthReadyApi(signal?: AbortSignal): Promise<SystemR
   }
 }
 
+export interface ReadModelSyncDiagnosticsResponse {
+  success: boolean;
+  data: {
+    mongodbEnabled: boolean;
+    mongodbReady: boolean;
+    outbox: {
+      pendingCount: number;
+      processingCount: number;
+      failedRetryableCount: number;
+      deadLetterCount: number;
+      processedCount: number;
+      oldestUnresolvedAgeMs: number | null;
+    };
+    syncStatus: {
+      source: 'mongodb' | 'postgresql';
+      syncedAt: string | null;
+      ageMs: number | null;
+      isStale: boolean;
+      projectionSyncedAt?: string | null;
+      projectionAgeMs?: number | null;
+      dashboardSyncedAt?: string | null;
+      dashboardAgeMs?: number | null;
+      deadLetterCount?: number;
+      outboxDegraded?: boolean;
+    } | null;
+  };
+}
+
 export async function fetchRealtimeStatusApi(signal?: AbortSignal): Promise<RealtimeStatusResponse> {
   const { data } = await apiClient<RealtimeStatusResponse>('/api/v1/realtime/status', {
+    method: 'GET',
+    signal,
+  });
+  return data;
+}
+
+export async function fetchReadModelSyncStatusApi(
+  signal?: AbortSignal
+): Promise<ReadModelSyncDiagnosticsResponse> {
+  const { data } = await apiClient<ReadModelSyncDiagnosticsResponse>('/api/v1/read-model-sync/status', {
     method: 'GET',
     signal,
   });

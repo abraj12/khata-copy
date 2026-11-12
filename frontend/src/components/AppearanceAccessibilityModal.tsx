@@ -20,9 +20,11 @@ import {
 import {
   fetchHealthReadyApi,
   fetchRealtimeStatusApi,
+  fetchReadModelSyncStatusApi,
   sendTelemetryApi,
   SystemReadinessResponse,
   RealtimeStatusResponse,
+  ReadModelSyncDiagnosticsResponse,
 } from '../lib/appDataApi.js';
 import {
   NEUMORPHIC_PRESETS,
@@ -58,6 +60,7 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
   const [checkingDiagnostics, setCheckingDiagnostics] = useState(false);
   const [readiness, setReadiness] = useState<SystemReadinessResponse | null>(null);
   const [realtime, setRealtime] = useState<RealtimeStatusResponse['data'] | null>(null);
+  const [readModelSync, setReadModelSync] = useState<ReadModelSyncDiagnosticsResponse['data'] | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
 
   const handleCheckSystemStatus = async () => {
@@ -65,12 +68,14 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
     setDiagnosticsError(null);
     const startedAt = Date.now();
     try {
-      const [readyRes, realtimeRes] = await Promise.all([
+      const [readyRes, realtimeRes, syncRes] = await Promise.all([
         fetchHealthReadyApi(),
         fetchRealtimeStatusApi(),
+        fetchReadModelSyncStatusApi().catch(() => null),
       ]);
       setReadiness(readyRes);
       setRealtime(realtimeRes?.data ?? null);
+      setReadModelSync(syncRes?.data ?? null);
       void sendTelemetryApi({
         kind: 'read_latency',
         name: 'system_diagnostics',
@@ -449,7 +454,7 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
               <p className="text-xs text-rose-500">{diagnosticsError}</p>
             )}
 
-            {(readiness || realtime) && (
+            {(readiness || realtime || readModelSync) && (
               <div className="space-y-1.5 text-xs text-[var(--khata-text-muted)]">
                 {readiness && (
                   <div className="flex flex-wrap items-center gap-2">
@@ -481,6 +486,26 @@ export const AppearanceAccessibilityModal: React.FC<AppearanceAccessibilityModal
                     Sync mode: <strong className="text-[var(--khata-text)]">{realtime.status}</strong> via{' '}
                     <span className="font-mono">{realtime.authoritativeSource}</span> — {realtime.notes}
                   </p>
+                )}
+                {readModelSync?.outbox && (
+                  <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                    <span className="px-2 py-0.5 rounded bg-[var(--khata-surface)] border border-[var(--khata-border)]">
+                      Outbox pending: {readModelSync.outbox.pendingCount}
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-[var(--khata-surface)] border border-[var(--khata-border)]">
+                      Retryable: {readModelSync.outbox.failedRetryableCount}
+                    </span>
+                    <span
+                      className={
+                        'px-2 py-0.5 rounded border font-semibold ' +
+                        (readModelSync.outbox.deadLetterCount > 0
+                          ? 'bg-amber-500/15 text-amber-700 border-amber-500/30'
+                          : 'bg-[var(--khata-surface)] border-[var(--khata-border)]')
+                      }
+                    >
+                      Dead-letter: {readModelSync.outbox.deadLetterCount}
+                    </span>
+                  </div>
                 )}
               </div>
             )}

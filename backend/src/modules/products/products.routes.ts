@@ -4,7 +4,11 @@ import { z } from 'zod';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { productsService } from './products.service.js';
 import { isMongoEnabled } from '../../config/mongodb.js';
-import { readModelsQueryService, ReadModelUnavailableError } from '../readModels/readModelsQuery.service.js';
+import {
+  InvalidPaginationCursorError,
+  readModelsQueryService,
+  ReadModelUnavailableError,
+} from '../readModels/readModelsQuery.service.js';
 import { appDataService } from '../appData/appData.service.js';
 import { validateMoneyInput } from '../../utils/validation.js';
 import { storageService } from '../../services/storage.service.js';
@@ -87,6 +91,7 @@ const productSearchQuerySchema = z.object({
   search: z.string().max(100).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(25),
   offset: z.coerce.number().int().min(0).default(0),
+  cursor: z.string().max(256).optional(),
 });
 
 const createProductSchema = z.object({
@@ -224,6 +229,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
           offset: result.offset,
           hasMore: result.hasMore,
           nextOffset: result.nextOffset,
+          nextCursor: result.nextCursor ?? null,
         },
         syncStatus: result.syncStatus,
       });
@@ -233,6 +239,10 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const { products, pagination } = await productsService.listActiveProducts(parsed.data);
     res.json({ success: true, data: products, pagination });
   } catch (err) {
+    if (err instanceof InvalidPaginationCursorError) {
+      res.status(400).json({ success: false, code: err.code, message: err.message });
+      return;
+    }
     if (err instanceof ReadModelUnavailableError) {
       res.status(503).json({ success: false, code: err.code, message: err.message });
       return;

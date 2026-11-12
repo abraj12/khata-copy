@@ -1,5 +1,7 @@
+import mongoose from 'mongoose';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
+import { AppError } from '../../utils/errors.js';
 import { isMongoEnabled, isMongoReady } from '../../config/mongodb.js';
 import {
   AppActivityEventModel,
@@ -265,7 +267,12 @@ export class AppDataService {
     }
 
     const now = new Date();
-    const doc = {
+    const normalizedDedupeKey =
+      typeof parsed.dedupeKey === 'string' && parsed.dedupeKey.trim().length > 0
+        ? parsed.dedupeKey.trim()
+        : undefined;
+
+    const baseDoc: Omit<NotificationDoc, 'dedupeKey'> & { dedupeKey?: string } = {
       ownerKey: 'owner',
       category: parsed.category ?? 'system',
       severity: parsed.severity ?? 'info',
@@ -275,20 +282,28 @@ export class AppDataService {
       entityId: parsed.entityId ?? null,
       isRead: false,
       readAt: null,
-      dedupeKey: parsed.dedupeKey ?? null,
       createdAt: now,
     };
 
-    if (parsed.dedupeKey) {
-      await NotificationModel.updateOne(
-        { dedupeKey: parsed.dedupeKey },
-        { $setOnInsert: doc },
-        { upsert: true }
-      );
-      return { created: true, source: 'mongodb' };
+    if (normalizedDedupeKey) {
+      baseDoc.dedupeKey = normalizedDedupeKey;
+      try {
+        const res = await NotificationModel.updateOne(
+          { dedupeKey: normalizedDedupeKey },
+          { $setOnInsert: baseDoc },
+          { upsert: true }
+        );
+        const inserted = Number((res as any)?.upsertedCount || 0) > 0 || Boolean((res as any)?.upsertedId);
+        return { created: inserted, source: 'mongodb' };
+      } catch (err: any) {
+        if (err?.code === 11000) {
+          return { created: false, source: 'mongodb' };
+        }
+        throw err;
+      }
     }
 
-    await NotificationModel.create(doc);
+    await NotificationModel.create(baseDoc);
     return { created: true, source: 'mongodb' };
   }
 
@@ -303,6 +318,9 @@ export class AppDataService {
     const now = new Date();
     const filter: Record<string, unknown> = { ownerKey: 'owner', isRead: false };
     if (notificationId && notificationId !== 'all') {
+      if (!mongoose.Types.ObjectId.isValid(notificationId)) {
+        throw new AppError('Invalid notification identifier.', 400, 'INVALID_NOTIFICATION_ID');
+      }
       filter._id = notificationId;
     }
 
@@ -316,6 +334,20 @@ export class AppDataService {
     };
   }
 
+  public classifyCustomerSearchQuery(
+    rawQuery: string
+  ): 'customer_phone_search' | 'customer_name_search' | 'customer_other_search' {
+    const trimmed = rawQuery.trim();
+    if (!trimmed) return 'customer_other_search';
+    if (/^[+\d\s\-()]+$/.test(trimmed) && /\d/.test(trimmed)) {
+      return 'customer_phone_search';
+    }
+    if (!/\d/.test(trimmed) && !trimmed.includes('@') && /^[\p{L}\s.'&-]+$/u.test(trimmed)) {
+      return 'customer_name_search';
+    }
+    return 'customer_other_search';
+  }
+
   public async recordSearchAnalytics(entry: {
     module: SearchAnalyticsDoc['module'];
     query: string;
@@ -324,8 +356,16 @@ export class AppDataService {
     durationMs: number;
   }): Promise<void> {
     if (!isMongoEnabled() || !isMongoReady()) return;
-    const normalizedQuery = entry.query.trim().toLowerCase().slice(0, 100);
-    if (!normalizedQuery) return;
+    const trimmed = entry.query.trim();
+    if (!trimmed) return;
+    const normalizedQuery =
+      entry.module === 'customers'
+        ? trimmed === 'customer_phone_search' ||
+          trimmed === 'customer_name_search' ||
+          trimmed === 'customer_other_search'
+          ? trimmed
+          : this.classifyCustomerSearchQuery(trimmed)
+        : trimmed.toLowerCase().slice(0, 100);
     await SearchAnalyticsModel.create({
       module: entry.module,
       normalizedQuery,

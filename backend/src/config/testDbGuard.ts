@@ -111,12 +111,23 @@ function isUnconfiguredDefaultNeonUrl(url: string | undefined): boolean {
 export function resolveValidatedTestPoolUrls(
   rawEnv: Record<string, string | undefined> = process.env
 ): { isTestDbActive: boolean; testDbUrl: string | null } {
+  const requireTestDb = rawEnv.REQUIRE_TEST_DATABASE_URL === 'true';
   if (rawEnv.NODE_ENV !== 'test') {
+    if (requireTestDb) {
+      throw new Error(
+        '[TEST DB GUARD] REQUIRE_TEST_DATABASE_URL=true can only be used in NODE_ENV=test with a validated TEST_DATABASE_URL.'
+      );
+    }
     return { isTestDbActive: false, testDbUrl: null };
   }
 
   const testDbUrl = rawEnv.TEST_DATABASE_URL?.trim();
   if (!testDbUrl) {
+    if (requireTestDb) {
+      throw new Error(
+        '[TEST DB GUARD] REQUIRE_TEST_DATABASE_URL=true requires TEST_DATABASE_URL to be configured with a validated disposable test database URL.'
+      );
+    }
     return { isTestDbActive: false, testDbUrl: null };
   }
 

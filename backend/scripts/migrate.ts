@@ -4,16 +4,18 @@ import readline from 'readline';
 import dotenv from 'dotenv';
 import { runPendingMigrations, runPendingMigrationsWithRetry } from '../src/config/migrator.js';
 
-// Pre-load .env and .env.local from current directory or backend directory
-const envFiles = [
-  path.resolve(process.cwd(), '.env'),
-  path.resolve(process.cwd(), '.env.local'),
-  path.resolve(process.cwd(), 'backend/.env'),
-  path.resolve(process.cwd(), 'backend/.env.local'),
-];
+// Pre-load env files with override: false (highest-priority .env.local first) so shell/CI env vars always win
+const envFiles = Array.from(
+  new Set([
+    path.resolve(process.cwd(), 'backend/.env.local'),
+    path.resolve(process.cwd(), '.env.local'),
+    path.resolve(process.cwd(), 'backend/.env'),
+    path.resolve(process.cwd(), '.env'),
+  ])
+);
 for (const envFile of envFiles) {
   if (fs.existsSync(envFile)) {
-    dotenv.config({ path: envFile, override: true });
+    dotenv.config({ path: envFile, override: false });
   }
 }
 

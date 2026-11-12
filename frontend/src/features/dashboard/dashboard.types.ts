@@ -165,6 +165,12 @@ export interface DashboardSyncStatus {
   syncedAt: string | null;
   ageMs: number | null;
   isStale: boolean;
+  projectionSyncedAt?: string | null;
+  projectionAgeMs?: number | null;
+  dashboardSyncedAt?: string | null;
+  dashboardAgeMs?: number | null;
+  deadLetterCount?: number;
+  outboxDegraded?: boolean;
 }
 
 export interface DashboardOverviewData {

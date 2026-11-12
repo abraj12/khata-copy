@@ -70,12 +70,66 @@ function attachConnectionListeners(): void {
 }
 
 /**
+ * Safely migrates legacy sparse notifications dedupeKey unique index to a partial string index
+ * and removes legacy dedupeKey: null fields without touching valid string dedupeKey documents
+ * or calling destructive syncIndexes().
+ */
+export async function migrateNotificationDedupeIndex(): Promise<{
+  droppedLegacyIndex: boolean;
+  unsetNullCount: number;
+}> {
+  if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) {
+    return { droppedLegacyIndex: false, unsetNullCount: 0 };
+  }
+
+  const collection = mongoose.connection.db.collection('notifications');
+  let droppedLegacyIndex = false;
+
+  try {
+    const indexes = await collection.indexes();
+    const existingDedupeIndex = indexes.find(
+      (idx) => idx.name === 'idx_notifications_dedupe_unique'
+    ) as
+      | {
+          name?: string;
+          sparse?: boolean;
+          partialFilterExpression?: { dedupeKey?: { $type?: string } };
+        }
+      | undefined;
+
+    if (existingDedupeIndex) {
+      const hasPartialStringFilter =
+        existingDedupeIndex.partialFilterExpression?.dedupeKey?.$type === 'string';
+      if (existingDedupeIndex.sparse === true || !hasPartialStringFilter) {
+        await collection.dropIndex('idx_notifications_dedupe_unique');
+        droppedLegacyIndex = true;
+      }
+    }
+  } catch (err: any) {
+    if (err?.code !== 26 && err?.codeName !== 'NamespaceNotFound') {
+      throw err;
+    }
+  }
+
+  const unsetRes = await collection.updateMany(
+    { dedupeKey: null },
+    { $unset: { dedupeKey: '' } }
+  );
+
+  return {
+    droppedLegacyIndex,
+    unsetNullCount: Number(unsetRes.modifiedCount || 0),
+  };
+}
+
+/**
  * Explicitly builds controlled indexes across all read-model and app collections.
  * Uses createIndexes() intentionally instead of blind syncIndexes() to avoid dropping
  * custom indexes unintentionally during rolling deployments.
  */
 export async function ensureMongoIndexes(): Promise<void> {
   if (mongoose.connection.readyState !== 1) return;
+  await migrateNotificationDedupeIndex();
   const allModels = [...READ_MODEL_MODELS, ...APP_DATA_MODELS];
   for (const model of allModels) {
     await model.createIndexes();
