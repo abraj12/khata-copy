@@ -9,6 +9,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import crypto from 'crypto';
 import { env, isR2Configured } from '../config/env.js';
 import { AppError } from '../utils/errors.js';
+import { storageUploadIntentService, UploadIntentKind } from './storageUploadIntent.service.js';
 
 export const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 export const ALLOWED_SUPPLIER_DOC_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
@@ -268,6 +269,28 @@ export class StorageService {
     const randomId = crypto.randomUUID();
     const objectKey = `${folder}/${safeReferenceId}/${randomId}.${ext}`;
 
+    const kindMap: Record<string, UploadIntentKind> = {
+      products: 'product_image',
+      'offline-bills': 'offline_bill',
+      'supplier-bills': 'supplier_bill',
+    };
+
+    try {
+      await storageUploadIntentService.registerIntent({
+        objectKey,
+        objectKind: kindMap[folder] || 'other',
+        referenceType: folder,
+        referenceId: safeReferenceId,
+        expectedContentType: cleanContentType,
+        expectedSizeBytes: Math.trunc(sizeBytes),
+        expiresInSeconds: 300,
+      });
+    } catch (intentErr) {
+      if (env.NODE_ENV !== 'test') {
+        throw intentErr;
+      }
+    }
+
     const command = new PutObjectCommand({
       Bucket: env.R2_BUCKET_NAME!,
       Key: objectKey,
@@ -510,6 +533,7 @@ export class StorageService {
     mimeType: string;
     folder: StorageFolder;
     referenceId: string | number;
+    customKey?: string;
   }): Promise<{ objectKey: string; contentType: string; sizeBytes: number }> {
     this.assertConfigured();
 
@@ -551,13 +575,19 @@ export class StorageService {
       );
     }
 
-    // Generate server-controlled random object key
+    // Generate server-controlled random object key or use pre-locked verified custom key
     let ext = 'jpg';
     if (cleanMime === 'image/png') ext = 'png';
     else if (cleanMime === 'image/webp') ext = 'webp';
     else if (cleanMime === 'application/pdf') ext = 'pdf';
-    const randomId = crypto.randomUUID();
-    const objectKey = `${folder}/${safeReferenceId}/${randomId}.${ext}`;
+    let objectKey: string;
+    if (options.customKey) {
+      assertSafeScopedObjectKey(options.customKey, folder, referenceId);
+      objectKey = options.customKey.trim();
+    } else {
+      const randomId = crypto.randomUUID();
+      objectKey = `${folder}/${safeReferenceId}/${randomId}.${ext}`;
+    }
 
     await this.uploadBufferToR2({ buffer, objectKey, contentType: cleanMime });
 

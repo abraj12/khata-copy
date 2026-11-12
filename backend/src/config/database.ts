@@ -187,6 +187,8 @@ export const EXPECTED_MIGRATIONS = [
   '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
   '030_storage_cleanup_jobs.sql',
   '031_outbox_worker_search_indexes.sql',
+  '032_storage_cleanup_claim_fencing.sql',
+  '033_storage_upload_intents.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [
@@ -220,6 +222,7 @@ export const EXPECTED_CORE_TABLES = [
   'business_expense_events',
   'app_outbox_events',
   'storage_cleanup_jobs',
+  'storage_upload_intents',
 ];
 
 export const OPTIONAL_SEARCH_TRGM_INDEXES = [

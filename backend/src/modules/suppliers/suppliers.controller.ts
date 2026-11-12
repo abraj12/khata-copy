@@ -252,33 +252,12 @@ export const suppliersController = {
         return;
       }
 
-      // Verify bill exists before writing to R2
-      await suppliersService.getPurchaseBillAttachmentMeta(billId);
-
-      const uploaded = await storageService.validateAndUploadBuffer({
+      const updatedBill = await suppliersService.uploadAndSetPurchaseBillAttachment(billId, {
         buffer: req.file.buffer,
-        mimeType: req.file.mimetype,
-        folder: 'supplier-bills',
-        referenceId: billId,
+        mimetype: req.file.mimetype,
+        originalname: req.file.originalname,
       });
-
-      try {
-        const updatedBill = await suppliersService.setPurchaseBillAttachment(billId, {
-          objectKey: uploaded.objectKey,
-          contentType: uploaded.contentType,
-          sizeBytes: uploaded.sizeBytes,
-          filename: req.file.originalname || `purchase-bill-${billId}`,
-        });
-        res.json({ success: true, data: updatedBill });
-      } catch (dbErr) {
-        await storageCleanupService.attemptDeleteOrEnqueue({
-          objectKey: uploaded.objectKey,
-          objectKind: 'supplier_bill',
-          reason: 'supplier_attachment_rollback',
-          isRollbackNewUpload: true,
-        });
-        throw dbErr;
-      }
+      res.json({ success: true, data: updatedBill });
     } catch (err) {
       next(err);
     }

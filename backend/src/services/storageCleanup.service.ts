@@ -1,6 +1,7 @@
 import { Pool, PoolClient } from 'pg';
 import { appPool } from '../config/database.js';
 import { setRejectedUploadCleanupHook, storageService } from './storage.service.js';
+import { acquireObjectSessionLock, releaseObjectSessionLock } from './storageObjectLock.js';
 
 export type CleanupObjectKind =
   | 'product_image'
@@ -94,8 +95,8 @@ type Queryable = Pick<Pool, 'query'> | Pick<PoolClient, 'query'>;
 
 export class StorageCleanupService {
   /**
-   * Verifies across all R2-backed tables that objectKey is not referenced by any live DB record
-   * before deleting it from object storage.
+   * Verifies across all R2-backed tables and active upload intents that objectKey is not
+   * referenced by any live DB record or protected by an unexpired upload intent.
    */
   public async findLiveObjectReferences(
     objectKey: string,
@@ -104,6 +105,8 @@ export class StorageCleanupService {
     if (!objectKey || !objectKey.trim()) {
       return [];
     }
+
+    const cleanKey = objectKey.trim();
 
     const res = await db.query(
       `SELECT
@@ -116,9 +119,16 @@ export class StorageCleanupService {
            SELECT 1
            FROM quotation_settings
            WHERE logo_url = $1
-              OR RIGHT(SPLIT_PART(logo_url, '?', 1), LENGTH($1) + 1) = '/' || $1
-         ) AS in_quotation_settings`,
-      [objectKey]
+              OR RIGHT(SPLIT_PART(SPLIT_PART(logo_url, '?', 1), '#', 1), LENGTH($1) + 1) = '/' || $1
+         ) AS in_quotation_settings,
+         EXISTS (
+           SELECT 1
+           FROM storage_upload_intents
+           WHERE object_key = $1
+             AND status = 'issued'
+             AND expires_at > NOW()
+         ) AS in_upload_intents`,
+      [cleanKey]
     );
 
     const row = res.rows?.[0] || {};
@@ -129,6 +139,7 @@ export class StorageCleanupService {
     if (row.in_gst_invoices) refs.push('gst_invoices');
     if (row.in_normal_bills) refs.push('normal_bills');
     if (row.in_quotation_settings) refs.push('quotation_settings');
+    if (row.in_upload_intents) refs.push('storage_upload_intents');
     return refs;
   }
 
@@ -146,8 +157,8 @@ export class StorageCleanupService {
 
   /**
    * Idempotently enqueues or updates an active cleanup retry job in PostgreSQL.
-   * Only enforces uniqueness across active statuses ('pending', 'processing', 'failed')
-   * so completed/dead-letter history does not block future cleanup of a re-used key.
+   * Executes pg_notify('storage_cleanup_jobs', id::text) so PostgreSQL delivers the
+   * notification to all distributed instances strictly upon transaction commit.
    */
   public async enqueueCleanupJob(
     input: EnqueueCleanupJobInput,
@@ -161,37 +172,43 @@ export class StorageCleanupService {
     const safeError = input.lastError ? sanitizeStorageErrorMessage(input.lastError) : null;
 
     const res = await db.query(
-      `INSERT INTO storage_cleanup_jobs (
-         object_key,
-         object_kind,
-         reason,
-         status,
-         attempt_count,
-         max_attempts,
-         next_attempt_at,
-         last_error,
-         created_at,
-         updated_at
+      `WITH upserted AS (
+         INSERT INTO storage_cleanup_jobs (
+           object_key,
+           object_kind,
+           reason,
+           status,
+           attempt_count,
+           max_attempts,
+           next_attempt_at,
+           last_error,
+           created_at,
+           updated_at
+         )
+         VALUES (
+           $1,
+           $2,
+           $3,
+           'pending',
+           0,
+           $4,
+           NOW() + ($5::bigint * INTERVAL '1 millisecond'),
+           $6,
+           NOW(),
+           NOW()
+         )
+         ON CONFLICT (object_key)
+           WHERE status IN ('pending', 'processing', 'failed')
+         DO UPDATE SET
+           reason = EXCLUDED.reason,
+           last_error = COALESCE(EXCLUDED.last_error, storage_cleanup_jobs.last_error),
+           updated_at = NOW()
+         RETURNING id
        )
-       VALUES (
-         $1,
-         $2,
-         $3,
-         'pending',
-         0,
-         $4,
-         NOW() + ($5::bigint * INTERVAL '1 millisecond'),
-         $6,
-         NOW(),
-         NOW()
-       )
-       ON CONFLICT (object_key)
-         WHERE status IN ('pending', 'processing', 'failed')
-       DO UPDATE SET
-         reason = EXCLUDED.reason,
-         last_error = COALESCE(EXCLUDED.last_error, storage_cleanup_jobs.last_error),
-         updated_at = NOW()
-       RETURNING id`,
+       SELECT
+         id,
+         pg_notify('storage_cleanup_jobs', id::text)
+       FROM upserted`,
       [trimmedKey, input.objectKind, input.reason, maxAttempts, delayMs, safeError]
     );
 
@@ -201,9 +218,9 @@ export class StorageCleanupService {
   }
 
   /**
-   * Attempts immediate safe R2 deletion after confirming no live DB record references the object.
-   * If R2 deletion fails, persists a durable retry job in storage_cleanup_jobs without throwing or
-   * masking any caller transaction error.
+   * Safe R2 cleanup request handler:
+   * Acquires the session advisory lock before verifying references and deleting.
+   * Eliminates uncoordinated direct deletions racing with active attachment writers.
    */
   public async attemptDeleteOrEnqueue(input: AttemptCleanupInput): Promise<AttemptCleanupResult> {
     const objectKey = input.objectKey?.trim();
@@ -211,81 +228,85 @@ export class StorageCleanupService {
       return { outcome: 'noop' };
     }
 
-    let references: string[] = [];
+    const client = await appPool.connect().catch(() => null);
+    let lockAcquired = false;
+
     try {
-      references = await this.findLiveObjectReferences(objectKey);
-    } catch (refCheckErr) {
-      if (!input.isRollbackNewUpload) {
-        const safeRefErr = sanitizeStorageErrorMessage(refCheckErr);
-        console.warn('[STORAGE CLEANUP] Reference verification failed; deferring to durable cleanup job:', {
-          object: redactObjectKeyForLog(objectKey),
-          objectKind: input.objectKind,
-          reason: input.reason,
-          message: safeRefErr,
-        });
-        try {
+      if (client) {
+        lockAcquired = await acquireObjectSessionLock(client, objectKey).catch(() => false);
+      }
+
+      let references: string[] = [];
+      try {
+        references = await this.findLiveObjectReferences(objectKey, client || appPool);
+      } catch (refCheckErr) {
+        if (!input.isRollbackNewUpload) {
+          const safeRefErr = sanitizeStorageErrorMessage(refCheckErr);
+          console.warn('[STORAGE CLEANUP] Reference verification failed; deferring to durable cleanup job:', {
+            object: redactObjectKeyForLog(objectKey),
+            objectKind: input.objectKind,
+            reason: input.reason,
+            message: safeRefErr,
+          });
           const jobId = await this.enqueueCleanupJob({
             objectKey,
             objectKind: input.objectKind,
             reason: input.reason,
             lastError: safeRefErr,
             initialDelayMs: input.initialRetryDelayMs ?? 2000,
+          }).catch(() => null);
+          return { outcome: jobId ? 'queued' : 'enqueue_failed', jobId };
+        }
+      }
+
+      if (references.length > 0) {
+        console.info('[STORAGE CLEANUP] Skipping R2 delete because object key is still referenced in database:', {
+          object: redactObjectKeyForLog(objectKey),
+          objectKind: input.objectKind,
+          reason: input.reason,
+          referencedIn: references,
+        });
+        return { outcome: 'skipped_referenced', referencedIn: references };
+      }
+
+      try {
+        await storageService.deleteObject(objectKey);
+        return { outcome: 'deleted' };
+      } catch (deleteErr) {
+        const safeError = sanitizeStorageErrorMessage(deleteErr);
+        console.warn('[STORAGE CLEANUP] Immediate R2 delete failed; enqueueing durable retry:', {
+          object: redactObjectKeyForLog(objectKey),
+          objectKind: input.objectKind,
+          reason: input.reason,
+          message: safeError,
+        });
+
+        try {
+          const jobId = await this.enqueueCleanupJob({
+            objectKey,
+            objectKind: input.objectKind,
+            reason: input.reason,
+            lastError: safeError,
+            initialDelayMs: input.initialRetryDelayMs ?? 2000,
           });
           return { outcome: 'queued', jobId };
         } catch (enqueueErr) {
-          console.error('[STORAGE CLEANUP] Failed to persist deferred cleanup job after reference check error:', {
+          console.error('[STORAGE CLEANUP] Failed to persist durable R2 cleanup job:', {
             object: redactObjectKeyForLog(objectKey),
             objectKind: input.objectKind,
             reason: input.reason,
-            message: sanitizeStorageErrorMessage(enqueueErr),
+            deleteError: safeError,
+            enqueueError: sanitizeStorageErrorMessage(enqueueErr),
           });
           return { outcome: 'enqueue_failed' };
         }
       }
-      // For rolled-back freshly generated uploads where DB itself may be degraded,
-      // proceed to attempt direct R2 orphan deletion immediately.
-    }
-
-    if (references.length > 0) {
-      console.info('[STORAGE CLEANUP] Skipping R2 delete because object key is still referenced in database:', {
-        object: redactObjectKeyForLog(objectKey),
-        objectKind: input.objectKind,
-        reason: input.reason,
-        referencedIn: references,
-      });
-      return { outcome: 'skipped_referenced', referencedIn: references };
-    }
-
-    try {
-      await storageService.deleteObject(objectKey);
-      return { outcome: 'deleted' };
-    } catch (deleteErr) {
-      const safeError = sanitizeStorageErrorMessage(deleteErr);
-      console.warn('[STORAGE CLEANUP] Immediate R2 delete failed; enqueueing durable retry:', {
-        object: redactObjectKeyForLog(objectKey),
-        objectKind: input.objectKind,
-        reason: input.reason,
-        message: safeError,
-      });
-
-      try {
-        const jobId = await this.enqueueCleanupJob({
-          objectKey,
-          objectKind: input.objectKind,
-          reason: input.reason,
-          lastError: safeError,
-          initialDelayMs: input.initialRetryDelayMs ?? 2000,
-        });
-        return { outcome: 'queued', jobId };
-      } catch (enqueueErr) {
-        console.error('[STORAGE CLEANUP] Failed to persist durable R2 cleanup job:', {
-          object: redactObjectKeyForLog(objectKey),
-          objectKind: input.objectKind,
-          reason: input.reason,
-          deleteError: safeError,
-          enqueueError: sanitizeStorageErrorMessage(enqueueErr),
-        });
-        return { outcome: 'enqueue_failed' };
+    } finally {
+      if (client) {
+        if (lockAcquired) {
+          await releaseObjectSessionLock(client, objectKey).catch(() => {});
+        }
+        client.release();
       }
     }
   }

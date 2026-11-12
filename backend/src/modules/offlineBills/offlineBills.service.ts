@@ -5,6 +5,7 @@ import { khataService } from '../khata/khata.service.js';
 import { storageService } from '../../services/storage.service.js';
 import { storageCleanupService } from '../../services/storageCleanup.service.js';
 import { acquireObjectLocksInTransaction } from '../../services/storageObjectLock.js';
+import { storageUploadIntentService } from '../../services/storageUploadIntent.service.js';
 import crypto from 'crypto';
 
 export interface OfflineBillRecord {

@@ -14,19 +14,51 @@ export type MongoAvailabilityState =
 let mongoConnectionReady = false;
 let mongoInitializationReady = false;
 let mongoAvailabilityState: MongoAvailabilityState = 'disconnected';
-let forceMongoReadyInTests = false;
+let testMongoReadyOverride: boolean | null = null;
 
-export function setForceMongoReadyInTests(value: boolean): void {
-  forceMongoReadyInTests = value;
-  if (value) {
-    mongoAvailabilityState = 'ready';
-    mongoConnectionReady = true;
-    mongoInitializationReady = true;
-  } else {
-    mongoAvailabilityState = 'disconnected';
-    mongoConnectionReady = false;
-    mongoInitializationReady = false;
+export function setForceMongoReadyInTests(value: boolean | null): void {
+  if (env.NODE_ENV !== 'test') {
+    throw new Error('MongoDB readiness override is only available in test mode.');
   }
+  testMongoReadyOverride = value;
+}
+
+export function resetForceMongoReadyInTests(): void {
+  testMongoReadyOverride = null;
+}
+
+type MongoUnreadyListener = (err?: unknown) => void;
+const mongoUnreadyListeners = new Set<MongoUnreadyListener>();
+
+export function registerMongoUnreadyListener(listener: MongoUnreadyListener): () => void {
+  mongoUnreadyListeners.add(listener);
+  return () => {
+    mongoUnreadyListeners.delete(listener);
+  };
+}
+
+export function notifyMongoUnreadyListeners(err?: unknown): void {
+  for (const listener of mongoUnreadyListeners) {
+    try {
+      listener(err);
+    } catch (e) {
+      console.error('[MONGODB] Error in unready listener:', e);
+    }
+  }
+}
+
+export function markMongoUnavailable(error?: unknown): void {
+  mongoConnectionReady = false;
+  mongoInitializationReady = false;
+  mongoAvailabilityState = 'degraded';
+
+  if (error) {
+    console.warn('[MONGODB] Health verification failed:', {
+      message: (error as Error)?.message,
+    });
+  }
+
+  notifyMongoUnreadyListeners(error);
 }
 
 let listenersAttached = false;
@@ -54,8 +86,8 @@ export function isMongoEnabled(): boolean {
  * Mongoose connection is ready ONLY when enabled, connected, and initialization/indexes succeeded.
  */
 export function isMongoReady(): boolean {
-  if (forceMongoReadyInTests) {
-    return true;
+  if (env.NODE_ENV === 'test' && testMongoReadyOverride !== null) {
+    return testMongoReadyOverride;
   }
   return (
     isMongoEnabled() &&
@@ -67,7 +99,6 @@ export function isMongoReady(): boolean {
 
 export function getMongoAvailabilityState(): MongoAvailabilityState {
   if (!isMongoEnabled()) return 'disabled';
-  if (forceMongoReadyInTests) return 'ready';
   return mongoAvailabilityState;
 }
 
@@ -76,7 +107,6 @@ export function setMongoAvailabilityState(
   options?: { connectionReady?: boolean; initializationReady?: boolean }
 ): void {
   mongoAvailabilityState = state;
-  forceMongoReadyInTests = state === 'ready';
   if (options?.connectionReady !== undefined) {
     mongoConnectionReady = options.connectionReady;
   } else if (state === 'ready') {
@@ -134,6 +164,7 @@ function attachConnectionListeners(): void {
     mongoInitializationReady = false;
     mongoAvailabilityState = 'disconnected';
     console.warn('[MONGODB] Connection disconnected');
+    notifyMongoUnreadyListeners(new Error('MongoDB disconnected'));
   });
 
   mongoose.connection.on('error', (err) => {
@@ -333,6 +364,20 @@ export async function checkMongoReadiness(): Promise<{
     return { enabled: false, isReady: true, state: 'disabled', latencyMs: 0 };
   }
 
+  if (env.NODE_ENV === 'test' && testMongoReadyOverride !== null) {
+    if (testMongoReadyOverride === true) {
+      return { enabled: true, isReady: true, state: 'ready', latencyMs: 0 };
+    } else {
+      return {
+        enabled: true,
+        isReady: false,
+        state: 'disconnected',
+        latencyMs: 0,
+        error: 'MongoDB readiness verification failed.',
+      };
+    }
+  }
+
   const start = Date.now();
   try {
     if (!isMongoReady() || !mongoose.connection.db) {
@@ -353,12 +398,13 @@ export async function checkMongoReadiness(): Promise<{
       latencyMs: Date.now() - start,
     };
   } catch (err) {
+    markMongoUnavailable(err);
     return {
       enabled: true,
       isReady: false,
       state: getMongoAvailabilityState(),
       latencyMs: Date.now() - start,
-      error: (err as Error).message,
+      error: 'MongoDB readiness verification failed.',
     };
   }
 }

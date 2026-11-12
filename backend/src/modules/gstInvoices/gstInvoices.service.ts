@@ -1,3 +1,5 @@
+import { acquireObjectSessionLock, releaseObjectSessionLock } from '../../services/storageObjectLock.js';
+import { storageCleanupService } from '../../services/storageCleanup.service.js';
 import Decimal from 'decimal.js';
 import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
@@ -532,18 +534,46 @@ export class GstInvoicesService {
         const [year, month] = getBusinessDateISO(env.BUSINESS_TIME_ZONE).split('-');
         const candidateKey = `gst-invoices/${year}/${month}/${createdInvoice.id}.pdf`;
 
+        const uploadClient = await appPool.connect();
+        let uploadedToR2 = false;
+
         try {
+          await acquireObjectSessionLock(uploadClient, candidateKey);
+
           await this.storageService.uploadBufferToR2({
             buffer: pdfBuffer,
             objectKey: candidateKey,
             contentType: 'application/pdf',
           });
+          uploadedToR2 = true;
+
+          await uploadClient.query('BEGIN');
+          await uploadClient.query(
+            'UPDATE gst_invoices SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3',
+            ['uploaded', candidateKey, createdInvoice.id]
+          );
+          await uploadClient.query('COMMIT');
           r2ObjectKey = candidateKey;
           pdfStatus = 'uploaded';
-        } catch (uploadErr) {
-          console.error('[GST INVOICE R2 UPLOAD] Upload failed:', uploadErr);
+        } catch (uploadOrDbErr) {
+          await uploadClient.query('ROLLBACK').catch(() => {});
+          if (uploadedToR2) {
+            await storageCleanupService.enqueueCleanupJob({
+              objectKey: candidateKey,
+              objectKind: 'gst_invoice',
+              reason: 'gst_invoice_pdf_db_failed',
+            }).catch(() => {});
+          }
+          console.error('[GST INVOICE R2 UPLOAD] Upload or DB update failed:', uploadOrDbErr);
           r2ObjectKey = null;
           pdfStatus = 'failed';
+          await appPool.query(
+            'UPDATE gst_invoices SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3',
+            ['failed', null, createdInvoice.id]
+          ).catch(() => {});
+        } finally {
+          await releaseObjectSessionLock(uploadClient, candidateKey).catch(() => {});
+          uploadClient.release();
         }
       }
     } catch (pdfErr) {
@@ -553,10 +583,6 @@ export class GstInvoicesService {
     }
 
     try {
-      await appPool.query(
-        'UPDATE gst_invoices SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3',
-        [pdfStatus, r2ObjectKey, createdInvoice.id]
-      );
       createdInvoice.pdf_status = pdfStatus;
       createdInvoice.r2_object_key = r2ObjectKey;
 
@@ -570,7 +596,7 @@ export class GstInvoicesService {
         });
       }
     } catch (updateErr) {
-      console.error('[GST INVOICE DB UPDATE] Failed to update pdf_status:', updateErr);
+      console.error('[GST INVOICE DB UPDATE] Failed to sync idempotency response:', updateErr);
     }
 
     return createdInvoice;
@@ -744,28 +770,63 @@ export class GstInvoicesService {
     const [year, month] = dateStr.split('-');
     const candidateKey = `gst-invoices/${year}/${month}/${invoice.id}.pdf`;
 
+    const retryClient = await appPool.connect();
+    let uploadedToR2 = false;
+
     try {
+      await acquireObjectSessionLock(retryClient, candidateKey);
+
       await this.storageService.uploadBufferToR2({
         buffer: pdfBuffer,
         objectKey: candidateKey,
         contentType: 'application/pdf',
       });
-    } catch (uploadErr) {
-      await appPool.query(
-        'UPDATE gst_invoices SET pdf_status = $1, r2_object_key = NULL, updated_at = NOW() WHERE id = $2',
-        ['failed', invoice.id]
+      uploadedToR2 = true;
+
+      await retryClient.query('BEGIN');
+      const prevRes = await retryClient.query(
+        'SELECT r2_object_key FROM gst_invoices WHERE id = $1 FOR UPDATE',
+        [invoice.id]
       );
+      const prevKey = prevRes.rows[0]?.r2_object_key ?? null;
+
+      await retryClient.query(
+        'UPDATE gst_invoices SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3',
+        ['uploaded', candidateKey, invoice.id]
+      );
+
+      if (prevKey && prevKey !== candidateKey) {
+        await storageCleanupService.enqueueCleanupJobInTransaction(retryClient, {
+          objectKey: prevKey,
+          objectKind: 'gst_invoice',
+          reason: 'gst_invoice_pdf_replace',
+        });
+      }
+
+      await retryClient.query('COMMIT');
+    } catch (uploadErr) {
+      await retryClient.query('ROLLBACK').catch(() => {});
+      if (uploadedToR2) {
+        await storageCleanupService.enqueueCleanupJob({
+          objectKey: candidateKey,
+          objectKind: 'gst_invoice',
+          reason: 'gst_invoice_pdf_retry_db_failed',
+        }).catch(() => {});
+      }
+      await appPool.query(
+        'UPDATE gst_invoices SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3',
+        ['failed', null, invoice.id]
+      ).catch(() => {});
       throw new AppError(
         `Failed to upload invoice PDF to storage: ${(uploadErr as Error).message}`,
         502,
         'PDF_UPLOAD_FAILED'
       );
+    } finally {
+      await releaseObjectSessionLock(retryClient, candidateKey).catch(() => {});
+      retryClient.release();
     }
 
-    await appPool.query(
-      'UPDATE gst_invoices SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3',
-      ['uploaded', candidateKey, invoice.id]
-    );
     return {
       ...invoice,
       pdf_status: 'uploaded',

@@ -7,13 +7,14 @@ import {
   isMongoEnabled,
   isMongoReady,
   redactMongoUri,
+  registerMongoUnreadyListener,
   setMongoAvailabilityState,
 } from '../config/mongodb.js';
 import { readModelOutboxWorker } from '../modules/readModels/readModelOutbox.worker.js';
 
 /**
  * Calculates exponential backoff delay with uniform jitter.
- * Formula: delay = min(maxMs, baseMs * 2^(attempt-1)) * (0.8 + 0.4 * random)
+ * Formula: delay = min(maxMs, min(maxMs, baseMs * 2^(attempt-1)) * (0.8 + 0.4 * random))
  */
 export function calculateMongoRetryDelay(
   attempt: number,
@@ -44,6 +45,7 @@ export class MongoConnectionSupervisor {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private activeReconnectPromise: Promise<void> | null = null;
   private listenersAttached = false;
+  private unregisterUnreadyListener: (() => void) | null = null;
 
   private readonly baseRetryDelayMs: number;
   private readonly maxRetryDelayMs: number;
@@ -70,6 +72,14 @@ export class MongoConnectionSupervisor {
 
     this.attachMongooseListeners();
 
+    if (!this.unregisterUnreadyListener) {
+      this.unregisterUnreadyListener = registerMongoUnreadyListener(() => {
+        if (this.stopped) return;
+        void readModelOutboxWorker.stop().catch(() => {});
+        this.scheduleReconnect();
+      });
+    }
+
     // Initial connection attempt on startup
     await this.triggerConnectionAttempt();
   }
@@ -78,6 +88,11 @@ export class MongoConnectionSupervisor {
     this.stopped = true;
     this.started = false;
     this.clearReconnectTimer();
+
+    if (this.unregisterUnreadyListener) {
+      this.unregisterUnreadyListener();
+      this.unregisterUnreadyListener = null;
+    }
 
     if (this.activeReconnectPromise) {
       try {
@@ -91,7 +106,7 @@ export class MongoConnectionSupervisor {
     await readModelOutboxWorker.stop().catch(() => {});
   }
 
-  private clearReconnectTimer(): void {
+  public clearReconnectTimer(): void {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -122,7 +137,12 @@ export class MongoConnectionSupervisor {
   }
 
   public scheduleReconnect(): void {
-    if (this.stopped || !isMongoEnabled() || this.reconnectTimer || this.activeReconnectPromise) {
+    if (
+      this.stopped ||
+      !isMongoEnabled() ||
+      this.reconnectTimer ||
+      this.activeReconnectPromise
+    ) {
       return;
     }
 
@@ -150,51 +170,96 @@ export class MongoConnectionSupervisor {
   }
 
   public async triggerConnectionAttempt(): Promise<void> {
-    if (this.stopped || !isMongoEnabled()) return;
+    if (this.stopped || !isMongoEnabled()) {
+      return;
+    }
+
     if (this.activeReconnectPromise) {
       return this.activeReconnectPromise;
     }
 
-    const runPromise = (async () => {
-      try {
-        setMongoAvailabilityState('connecting');
+    let attemptPromise!: Promise<void>;
 
-        if (mongoose.connection.readyState !== 1) {
-          await connectMongo({ maxRetries: 1 });
-        } else {
-          // Connection is open; verify index initialization
-          const indexRes = await ensureMongoIndexes();
-          if (!indexRes.success) {
-            throw new Error(`Index initialization failed: ${indexRes.error}`);
-          }
-        }
+    attemptPromise = this.performConnectionAttempt();
+    this.activeReconnectPromise = attemptPromise;
 
-        if (isMongoReady()) {
-          this.reconnectAttempt = 0;
-          console.log('[MONGO SUPERVISOR] MongoDB is fully initialized & ready. Starting outbox worker.');
-          readModelOutboxWorker.start();
-        }
-      } catch (err) {
-        console.warn(
-          `[MONGO SUPERVISOR] Connection/initialization attempt failed (target=${redactMongoUri(env.MONGODB_URI)}):`,
-          (err as Error)?.message
-        );
-        if (mongoose.connection.readyState === 1) {
-          setMongoAvailabilityState('degraded', { connectionReady: true, initializationReady: false });
-        } else {
-          setMongoAvailabilityState('disconnected', { connectionReady: false, initializationReady: false });
-        }
-        void readModelOutboxWorker.stop().catch(() => {});
-        if (!this.stopped) {
-          this.scheduleReconnect();
-        }
-      } finally {
+    try {
+      await attemptPromise;
+    } finally {
+      if (this.activeReconnectPromise === attemptPromise) {
         this.activeReconnectPromise = null;
       }
-    })();
 
-    this.activeReconnectPromise = runPromise;
-    return runPromise;
+      // Schedule retry only AFTER clearing the active promise
+      if (
+        !this.stopped &&
+        isMongoEnabled() &&
+        !isMongoReady() &&
+        !this.reconnectTimer
+      ) {
+        this.scheduleReconnect();
+      }
+    }
+  }
+
+  private async performConnectionAttempt(): Promise<void> {
+    try {
+      if (this.stopped || !isMongoEnabled()) {
+        return;
+      }
+
+      setMongoAvailabilityState('connecting');
+
+      if (mongoose.connection.readyState !== 1) {
+        await connectMongo({ maxRetries: 1 });
+      } else {
+        const indexResult = await ensureMongoIndexes();
+        if (!indexResult.success) {
+          throw new Error(
+            `MongoDB index initialization failed: ${indexResult.error}`
+          );
+        }
+      }
+
+      // Explicit ping during readiness restoration
+      if (mongoose.connection.db) {
+        await mongoose.connection.db.admin().ping();
+      }
+
+      if (!isMongoReady()) {
+        throw new Error(
+          'MongoDB connection or initialization did not reach ready state.'
+        );
+      }
+
+      this.reconnectAttempt = 0;
+      this.clearReconnectTimer();
+
+      console.log(
+        '[MONGO SUPERVISOR] MongoDB is fully ready. Starting read-model worker.'
+      );
+
+      readModelOutboxWorker.start();
+    } catch (err) {
+      if (mongoose.connection.readyState === 1) {
+        setMongoAvailabilityState('degraded', {
+          connectionReady: true,
+          initializationReady: false,
+        });
+      } else {
+        setMongoAvailabilityState('disconnected', {
+          connectionReady: false,
+          initializationReady: false,
+        });
+      }
+
+      console.error('[MONGO SUPERVISOR] Connection attempt failed:', {
+        target: redactMongoUri(env.MONGODB_URI),
+        message: (err as Error)?.message,
+      });
+
+      await readModelOutboxWorker.stop().catch(() => {});
+    }
   }
 }
 

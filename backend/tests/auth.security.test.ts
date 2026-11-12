@@ -60,6 +60,7 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { table_name: 'business_expense_events' },
             { table_name: 'app_outbox_events' },
             { table_name: 'storage_cleanup_jobs' },
+            { table_name: 'storage_upload_intents' },
           ],
           rowCount: 30,
         } as any;
@@ -112,8 +113,14 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
           {
             version: '031_outbox_worker_search_indexes.sql',
           },
+          {
+            version: '032_storage_cleanup_claim_fencing.sql',
+          },
+          {
+            version: '033_storage_upload_intents.sql',
+          },
           ],
-          rowCount: 31,
+          rowCount: 33,
         } as any;
       }
       return { rows: [], rowCount: 0 } as any;

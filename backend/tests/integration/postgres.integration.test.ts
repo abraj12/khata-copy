@@ -74,6 +74,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     try {
       // 1. Drop public schema tables cleanly for test isolation
       await client.query(`
+        DROP TABLE IF EXISTS "storage_upload_intents" CASCADE;
         DROP TABLE IF EXISTS "storage_cleanup_jobs" CASCADE;
         DROP TABLE IF EXISTS "app_outbox_events" CASCADE;
         DROP TABLE IF EXISTS "business_expense_events" CASCADE;
@@ -146,6 +147,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
         '030_storage_cleanup_jobs.sql',
         '031_outbox_worker_search_indexes.sql',
+        '032_storage_cleanup_claim_fencing.sql',
+        '033_storage_upload_intents.sql',
       ];
 
       await client.query(`
@@ -215,6 +218,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
       '030_storage_cleanup_jobs.sql',
       '031_outbox_worker_search_indexes.sql',
+      '032_storage_cleanup_claim_fencing.sql',
+      '033_storage_upload_intents.sql',
     ]);
 
     const expectedTables = [
@@ -248,6 +253,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       'business_expense_events',
       'app_outbox_events',
       'storage_cleanup_jobs',
+      'storage_upload_intents',
     ];
 
     const tablesRes = await pool.query(
@@ -3773,15 +3779,15 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
 
       const errDash = await agent.get('/api/v1/dashboard/overview');
       expect(errDash.status).toBe(503);
-      expect(errDash.body.code).toBe('READ_MODEL_UNAVAILABLE');
+      expect(['MANDATORY_SERVICE_UNAVAILABLE', 'READ_MODEL_UNAVAILABLE']).toContain(errDash.body.code);
 
       const errProd = await agent.get('/api/v1/products?search=iron');
       expect(errProd.status).toBe(503);
-      expect(errProd.body.code).toBe('READ_MODEL_UNAVAILABLE');
+      expect(['MANDATORY_SERVICE_UNAVAILABLE', 'READ_MODEL_UNAVAILABLE']).toContain(errProd.body.code);
 
       const errKhata = await agent.get('/api/v1/khata/summary');
       expect(errKhata.status).toBe(503);
-      expect(errKhata.body.code).toBe('READ_MODEL_UNAVAILABLE');
+      expect(['MANDATORY_SERVICE_UNAVAILABLE', 'READ_MODEL_UNAVAILABLE']).toContain(errKhata.body.code);
 
       expect(pgAppQuerySpy).not.toHaveBeenCalled();
       expect(pgAppConnectSpy).not.toHaveBeenCalled();

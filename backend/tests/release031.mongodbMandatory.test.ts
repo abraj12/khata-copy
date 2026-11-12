@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
+import mongoose from 'mongoose';
 import { createApp } from '../src/app.js';
 import { env } from '../src/config/env.js';
 import { appPool } from '../src/config/database.js';
@@ -121,6 +122,8 @@ describe('Khata Release #031 — Mandatory MongoDB Reliability & Supervisor Suit
       const origEnabled = env.MONGODB_ENABLED;
       try {
         (env as any).MONGODB_ENABLED = true;
+        mongodbConfig.setForceMongoReadyInTests(null);
+        vi.spyOn(mongoose.connection, 'readyState', 'get').mockReturnValue(1);
 
         mongodbConfig.setMongoAvailabilityState('disconnected');
         expect(mongodbConfig.getMongoAvailabilityState()).toBe('disconnected');
@@ -139,6 +142,7 @@ describe('Khata Release #031 — Mandatory MongoDB Reliability & Supervisor Suit
         expect(mongodbConfig.isMongoReady()).toBe(true);
       } finally {
         (env as any).MONGODB_ENABLED = origEnabled;
+        mongodbConfig.setForceMongoReadyInTests(true);
         mongodbConfig.setMongoAvailabilityState('disconnected');
       }
     });

@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { appPool } from '../config/database.js';
 import { storageService } from './storage.service.js';
 import { acquireObjectSessionLock, releaseObjectSessionLock } from './storageObjectLock.js';
@@ -24,6 +25,8 @@ export interface ClaimedCleanupJob {
   reason: string;
   attempt_count: number;
   max_attempts: number;
+  claim_token?: string | null;
+  claim_version?: string | number;
 }
 
 export interface StorageBacklogStatus {
@@ -78,8 +81,48 @@ export function computeStorageBacklogWakeStatus(
 }
 
 /**
+ * Shared claim SQL definition ensuring the benchmark and worker execute identical logic.
+ */
+export const STORAGE_CLEANUP_CLAIM_SQL = `
+  WITH next_batch AS (
+    SELECT id
+    FROM storage_cleanup_jobs
+    WHERE (
+      status = 'pending'
+      OR (status = 'failed' AND attempt_count < max_attempts)
+    )
+      AND next_attempt_at <= NOW()
+    ORDER BY next_attempt_at ASC, id ASC
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+  ),
+  claimed AS (
+    UPDATE storage_cleanup_jobs j
+    SET status = 'processing',
+        lease_expires_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
+        attempt_count = j.attempt_count + 1,
+        claim_version = j.claim_version + 1,
+        claim_token = gen_random_uuid(),
+        updated_at = NOW()
+    FROM next_batch nb
+    WHERE j.id = nb.id
+    RETURNING
+      j.id,
+      j.object_key,
+      j.object_kind,
+      j.reason,
+      j.attempt_count,
+      j.max_attempts,
+      j.claim_token,
+      j.claim_version
+  )
+  SELECT * FROM claimed ORDER BY id ASC
+`;
+
+/**
  * Bounded event-driven worker for durable Cloudflare R2 cleanup retries.
- * Uses FOR UPDATE SKIP LOCKED, lease expiry recovery, exponential backoff,
+ * Uses PostgreSQL LISTEN/NOTIFY for distributed multi-instance event delivery,
+ * FOR UPDATE SKIP LOCKED, claim-token fencing, lease recovery, exponential backoff,
  * cross-table live-reference verification, and one-shot wakeup timers (zero idle DB polling).
  */
 export class StorageCleanupWorker {
@@ -97,6 +140,10 @@ export class StorageCleanupWorker {
   private activeJobPromise: Promise<void> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private unregisterListener: (() => void) | null = null;
+
+  private listenClient: PoolClient | null = null;
+  private listenReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private listenConnecting = false;
 
   constructor(options: StorageCleanupWorkerOptions = {}) {
     this.batchSize = Math.max(1, Math.min(100, options.batchSize ?? 20));
@@ -121,6 +168,7 @@ export class StorageCleanupWorker {
     if (this.started && !this.stopped) return;
     this.started = true;
     this.stopped = false;
+    void this.setupListenConnection();
     void this.triggerDrain();
   }
 
@@ -128,6 +176,7 @@ export class StorageCleanupWorker {
     this.stopped = true;
     this.started = false;
     this.clearRetryTimer();
+    this.cleanupListenConnection(false);
 
     if (this.activeDrainPromise) {
       await this.activeDrainPromise.catch(() => {});
@@ -171,7 +220,74 @@ export class StorageCleanupWorker {
     }
   }
 
-  private triggerDrain(): Promise<{ processedCount: number }> {
+  private async setupListenConnection(): Promise<void> {
+    if (this.stopped || this.listenClient || this.listenConnecting) return;
+    this.listenConnecting = true;
+
+    try {
+      const client = await appPool.connect();
+      if (this.stopped) {
+        client.release();
+        return;
+      }
+
+      client.on('notification', (msg) => {
+        if (msg.channel === 'storage_cleanup_jobs') {
+          void this.triggerDrain();
+        }
+      });
+
+      client.on('error', (err) => {
+        console.warn('[STORAGE CLEANUP WORKER] LISTEN client error:', err.message);
+        this.cleanupListenConnection(true);
+      });
+
+      client.on('end', () => {
+        this.cleanupListenConnection(true);
+      });
+
+      await client.query('LISTEN storage_cleanup_jobs');
+      this.listenClient = client;
+      console.log('[STORAGE CLEANUP WORKER] Subscribed to PostgreSQL LISTEN storage_cleanup_jobs.');
+
+      // Perform bounded catch-up after establishing subscription
+      void this.triggerDrain();
+    } catch (err) {
+      console.warn('[STORAGE CLEANUP WORKER] Failed establishing LISTEN subscription:', (err as Error).message);
+      this.cleanupListenConnection(true);
+    } finally {
+      this.listenConnecting = false;
+    }
+  }
+
+  private cleanupListenConnection(scheduleReconnect = false): void {
+    if (this.listenReconnectTimer) {
+      clearTimeout(this.listenReconnectTimer);
+      this.listenReconnectTimer = null;
+    }
+
+    if (this.listenClient) {
+      const client = this.listenClient;
+      this.listenClient = null;
+      client.query('UNLISTEN storage_cleanup_jobs').catch(() => {}).finally(() => {
+        client.release();
+      });
+    }
+
+    if (scheduleReconnect && !this.stopped && this.started) {
+      this.listenReconnectTimer = setTimeout(() => {
+        this.listenReconnectTimer = null;
+        if (!this.stopped && this.started) {
+          void this.setupListenConnection();
+        }
+      }, 5000);
+      if (typeof this.listenReconnectTimer.unref === 'function') {
+        this.listenReconnectTimer.unref();
+      }
+    }
+  }
+
+  public triggerDrain(): Promise<{ processedCount: number }> {
     if (this.stopped) {
       return Promise.resolve({ processedCount: 0 });
     }
@@ -208,14 +324,13 @@ export class StorageCleanupWorker {
           let batchActive = true;
           let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
           let inFlightRenewal: Promise<void> | null = null;
-          const claimedIds = claimed.map((j) => j.id);
 
           const scheduleHeartbeat = () => {
             if (!batchActive || this.stopped) return;
             heartbeatTimer = setTimeout(() => {
               heartbeatTimer = null;
               if (!batchActive || this.stopped) return;
-              inFlightRenewal = this.renewBatchLease(claimedIds)
+              inFlightRenewal = this.renewBatchLease(claimed)
                 .catch((renewErr) => {
                   console.warn('[STORAGE CLEANUP WORKER] Lease renewal warning:', {
                     message: sanitizeStorageErrorMessage(renewErr),
@@ -238,9 +353,9 @@ export class StorageCleanupWorker {
           try {
             for (let i = 0; i < claimed.length; i += 1) {
               if (this.stopped) {
-                const unstartedIds = claimed.slice(i).map((j) => j.id);
-                if (unstartedIds.length > 0) {
-                  await this.releaseUnprocessedLeases(unstartedIds).catch(() => {});
+                const unstartedJobs = claimed.slice(i);
+                if (unstartedJobs.length > 0) {
+                  await this.releaseUnprocessedLeases(unstartedJobs).catch(() => {});
                 }
                 break;
               }
@@ -312,22 +427,45 @@ export class StorageCleanupWorker {
       lockAcquired = await acquireObjectSessionLock(client, job.object_key);
 
       await client.query('BEGIN');
+
+      // If claim token is present, confirm claim ownership remains active
+      if (job.claim_token) {
+        const claimCheck = await client.query(
+          `SELECT id FROM storage_cleanup_jobs
+           WHERE id = $1
+             AND status = 'processing'
+             AND claim_token = $2
+           FOR UPDATE`,
+          [job.id, job.claim_token]
+        );
+
+        if (claimCheck.rows.length === 0) {
+          await client.query('ROLLBACK');
+          console.warn('[STORAGE CLEANUP WORKER] Skipping job: claim ownership lost or lease expired.', {
+            jobId: job.id,
+            objectKey: redactObjectKeyForLog(job.object_key),
+          });
+          return false;
+        }
+      }
+
       const refs = await storageCleanupService.findLiveObjectReferences(job.object_key, client);
       if (refs.length > 0) {
         await client.query('COMMIT');
         await this.markJobCompleted(
           job.id,
+          job.claim_token,
           `Skipped deletion: object remains referenced in ${refs.join(', ')}`
         );
         return true;
       }
       await client.query('COMMIT');
 
-      // Advisory session lock remains held across R2 delete.
-      // PG transaction is closed during external network request.
+      // Advisory session lock remains held across external R2 delete.
+      // Database transaction is closed during external network request.
       await storageService.deleteObject(job.object_key);
 
-      await this.markJobCompleted(job.id, null);
+      await this.markJobCompleted(job.id, job.claim_token, null);
       return true;
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -342,7 +480,7 @@ export class StorageCleanupWorker {
     }
   }
 
-  private async claimNextBatch(): Promise<ClaimedCleanupJob[]> {
+  public async claimNextBatch(): Promise<ClaimedCleanupJob[]> {
     const client = await appPool.connect();
     try {
       await client.query('BEGIN');
@@ -352,37 +490,13 @@ export class StorageCleanupWorker {
         `UPDATE storage_cleanup_jobs
          SET status = 'pending',
              lease_expires_at = NULL,
+             claim_token = NULL,
              updated_at = NOW()
          WHERE status = 'processing'
            AND (lease_expires_at IS NULL OR lease_expires_at < NOW())`
       );
 
-      const res = await client.query(
-        `WITH next_batch AS (
-           SELECT id
-           FROM storage_cleanup_jobs
-           WHERE (
-             status = 'pending'
-             OR (status = 'failed' AND attempt_count < max_attempts)
-           )
-             AND next_attempt_at <= NOW()
-           ORDER BY next_attempt_at ASC, id ASC
-           LIMIT $1
-           FOR UPDATE SKIP LOCKED
-         ),
-         claimed AS (
-           UPDATE storage_cleanup_jobs j
-           SET status = 'processing',
-               lease_expires_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
-               attempt_count = j.attempt_count + 1,
-               updated_at = NOW()
-           FROM next_batch nb
-           WHERE j.id = nb.id
-           RETURNING j.id, j.object_key, j.object_kind, j.reason, j.attempt_count, j.max_attempts
-         )
-         SELECT * FROM claimed ORDER BY id ASC`,
-        [this.batchSize, this.leaseDurationMs]
-      );
+      const res = await client.query(STORAGE_CLEANUP_CLAIM_SQL, [this.batchSize, this.leaseDurationMs]);
 
       await client.query('COMMIT');
       return res.rows as ClaimedCleanupJob[];
@@ -394,58 +508,141 @@ export class StorageCleanupWorker {
     }
   }
 
-  private async renewBatchLease(ids: number[]): Promise<void> {
-    if (ids.length === 0 || this.stopped) return;
-    await appPool.query(
-      `UPDATE storage_cleanup_jobs
-       SET lease_expires_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
-           updated_at = NOW()
-       WHERE id = ANY($1::bigint[])
-         AND status = 'processing'`,
-      [ids, this.leaseDurationMs]
-    );
-  }
+  private async renewBatchLease(jobs: ClaimedCleanupJob[]): Promise<void> {
+    if (jobs.length === 0 || this.stopped) return;
+    const ids = jobs.map((j) => j.id);
+    const tokens = jobs.map((j) => j.claim_token).filter((t): t is string => Boolean(t));
 
-  private async releaseUnprocessedLeases(ids: number[]): Promise<void> {
-    if (ids.length === 0) return;
-    await appPool.query(
-      `UPDATE storage_cleanup_jobs
-       SET status = 'pending',
-           lease_expires_at = NULL,
-           attempt_count = GREATEST(attempt_count - 1, 0),
-           updated_at = NOW()
-       WHERE id = ANY($1::bigint[])
-         AND status = 'processing'`,
-      [ids]
-    );
-  }
-
-  private async markJobCompleted(id: number, note: string | null): Promise<void> {
-    await appPool.query(
-      `UPDATE storage_cleanup_jobs
-       SET status = 'completed',
-           lease_expires_at = NULL,
-           last_error = $2,
-           completed_at = NOW(),
-           updated_at = NOW()
-       WHERE id = $1`,
-      [id, note]
-    );
-  }
-
-  private async markJobFailedOrDeadLetter(job: ClaimedCleanupJob, errorMessage: string): Promise<void> {
-    const isExhausted = job.attempt_count >= job.max_attempts;
-    if (isExhausted) {
+    if (tokens.length === jobs.length) {
+      await appPool.query(
+        `UPDATE storage_cleanup_jobs j
+         SET lease_expires_at = NOW() + ($3::bigint * INTERVAL '1 millisecond'),
+             updated_at = NOW()
+         FROM (
+           SELECT UNNEST($1::bigint[]) AS id, UNNEST($2::uuid[]) AS claim_token
+         ) batch
+         WHERE j.id = batch.id
+           AND j.status = 'processing'
+           AND j.claim_token = batch.claim_token`,
+        [ids, tokens, this.leaseDurationMs]
+      );
+    } else {
       await appPool.query(
         `UPDATE storage_cleanup_jobs
-         SET status = 'dead_letter',
-             lease_expires_at = NULL,
-             dead_letter_at = COALESCE(dead_letter_at, NOW()),
-             last_error = $2,
+         SET lease_expires_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
              updated_at = NOW()
-         WHERE id = $1`,
-        [job.id, errorMessage]
+         WHERE id = ANY($1::bigint[])
+           AND status = 'processing'`,
+        [ids, this.leaseDurationMs]
       );
+    }
+  }
+
+  private async releaseUnprocessedLeases(jobs: ClaimedCleanupJob[]): Promise<void> {
+    if (jobs.length === 0) return;
+    const ids = jobs.map((j) => j.id);
+    const tokens = jobs.map((j) => j.claim_token).filter((t): t is string => Boolean(t));
+
+    if (tokens.length === jobs.length) {
+      await appPool.query(
+        `UPDATE storage_cleanup_jobs j
+         SET status = 'pending',
+             lease_expires_at = NULL,
+             claim_token = NULL,
+             attempt_count = GREATEST(j.attempt_count - 1, 0),
+             updated_at = NOW()
+         FROM (
+           SELECT UNNEST($1::bigint[]) AS id, UNNEST($2::uuid[]) AS claim_token
+         ) batch
+         WHERE j.id = batch.id
+           AND j.status = 'processing'
+           AND j.claim_token = batch.claim_token`,
+        [ids, tokens]
+      );
+    } else {
+      await appPool.query(
+        `UPDATE storage_cleanup_jobs
+         SET status = 'pending',
+             lease_expires_at = NULL,
+             claim_token = NULL,
+             attempt_count = GREATEST(attempt_count - 1, 0),
+             updated_at = NOW()
+         WHERE id = ANY($1::bigint[])
+           AND status = 'processing'`,
+        [ids]
+      );
+    }
+  }
+
+  public async markJobCompleted(id: number, claimToken?: string | null, note?: string | null): Promise<boolean> {
+    const hasToken = Boolean(claimToken);
+    const sql = hasToken
+      ? `UPDATE storage_cleanup_jobs
+         SET status = 'completed',
+             lease_expires_at = NULL,
+             claim_token = NULL,
+             last_error = $3,
+             completed_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1
+           AND status = 'processing'
+           AND claim_token = $2
+         RETURNING id`
+      : `UPDATE storage_cleanup_jobs
+         SET status = 'completed',
+             lease_expires_at = NULL,
+             claim_token = NULL,
+             last_error = $2,
+             completed_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING id`;
+
+    const params = hasToken ? [id, claimToken, note || null] : [id, note || null];
+    const res = await appPool.query(sql, params);
+
+    if ((res.rowCount ?? 0) === 0) {
+      console.warn('[STORAGE CLEANUP WORKER] Failed to mark completed: claim token mismatch or expired.', { id });
+      return false;
+    }
+    return true;
+  }
+
+  public async markJobFailedOrDeadLetter(job: ClaimedCleanupJob, errorMessage: string): Promise<boolean> {
+    const isExhausted = job.attempt_count >= job.max_attempts;
+    const hasToken = Boolean(job.claim_token);
+
+    if (isExhausted) {
+      const sql = hasToken
+        ? `UPDATE storage_cleanup_jobs
+           SET status = 'dead_letter',
+               lease_expires_at = NULL,
+               claim_token = NULL,
+               dead_letter_at = COALESCE(dead_letter_at, NOW()),
+               last_error = $3,
+               updated_at = NOW()
+           WHERE id = $1
+             AND status = 'processing'
+             AND claim_token = $2
+           RETURNING id`
+        : `UPDATE storage_cleanup_jobs
+           SET status = 'dead_letter',
+               lease_expires_at = NULL,
+               claim_token = NULL,
+               dead_letter_at = COALESCE(dead_letter_at, NOW()),
+               last_error = $2,
+               updated_at = NOW()
+           WHERE id = $1
+           RETURNING id`;
+
+      const params = hasToken ? [job.id, job.claim_token, errorMessage] : [job.id, errorMessage];
+      const res = await appPool.query(sql, params);
+
+      if ((res.rowCount ?? 0) === 0) {
+        console.warn('[STORAGE CLEANUP WORKER] Failed to transition to dead_letter: claim token mismatch.', { id: job.id });
+        return false;
+      }
+
       console.error('[STORAGE CLEANUP WORKER] Cleanup job transitioned to dead_letter after max_attempts.', {
         jobId: job.id,
         object: redactObjectKeyForLog(job.object_key),
@@ -454,7 +651,7 @@ export class StorageCleanupWorker {
         maxAttempts: job.max_attempts,
         message: errorMessage,
       });
-      return;
+      return true;
     }
 
     const delayMs = computeStorageCleanupBackoffMs(
@@ -462,19 +659,40 @@ export class StorageCleanupWorker {
       this.baseBackoffMs,
       this.maxBackoffMs
     );
-    await appPool.query(
-      `UPDATE storage_cleanup_jobs
-       SET status = 'failed',
-           lease_expires_at = NULL,
-           next_attempt_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
-           last_error = $3,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [job.id, delayMs, errorMessage]
-    );
+
+    const sql = hasToken
+      ? `UPDATE storage_cleanup_jobs
+         SET status = 'failed',
+             lease_expires_at = NULL,
+             claim_token = NULL,
+             next_attempt_at = NOW() + ($3::bigint * INTERVAL '1 millisecond'),
+             last_error = $4,
+             updated_at = NOW()
+         WHERE id = $1
+           AND status = 'processing'
+           AND claim_token = $2
+         RETURNING id`
+      : `UPDATE storage_cleanup_jobs
+         SET status = 'failed',
+             lease_expires_at = NULL,
+             claim_token = NULL,
+             next_attempt_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
+             last_error = $3,
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING id`;
+
+    const params = hasToken ? [job.id, job.claim_token, delayMs, errorMessage] : [job.id, delayMs, errorMessage];
+    const res = await appPool.query(sql, params);
+
+    if ((res.rowCount ?? 0) === 0) {
+      console.warn('[STORAGE CLEANUP WORKER] Failed to record retry state: claim token mismatch.', { id: job.id });
+      return false;
+    }
+    return true;
   }
 
-  private async inspectBacklogWakeDelay(): Promise<StorageBacklogStatus> {
+  public async inspectBacklogWakeDelay(): Promise<StorageBacklogStatus> {
     const res = await appPool.query(
       `WITH next_jobs AS (
          (
