@@ -59,8 +59,9 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
             { table_name: 'business_expenses' },
             { table_name: 'business_expense_events' },
             { table_name: 'app_outbox_events' },
+            { table_name: 'storage_cleanup_jobs' },
           ],
-          rowCount: 29,
+          rowCount: 30,
         } as any;
       }
       if (sqlText.includes('FROM schema_migrations')) {
@@ -105,8 +106,14 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
           {
             version: '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
           },
+          {
+            version: '030_storage_cleanup_jobs.sql',
+          },
+          {
+            version: '031_outbox_worker_search_indexes.sql',
+          },
           ],
-          rowCount: 29,
+          rowCount: 31,
         } as any;
       }
       return { rows: [], rowCount: 0 } as any;

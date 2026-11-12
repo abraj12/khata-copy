@@ -13,6 +13,7 @@ import {
   SUPPLIER_PAYMENT_RECEIPT_NUMBERING_CONFIG,
 } from '../billing/numbering.js';
 import { storageService } from '../../services/storage.service.js';
+import { storageCleanupService } from '../../services/storageCleanup.service.js';
 import {
   acquireIdempotencyLock,
   checkIdempotencyRecord,
@@ -2153,7 +2154,11 @@ export class SuppliersService {
     }
 
     if (previousKey && previousKey !== attachment.objectKey) {
-      await storageService.deleteObject(previousKey);
+      await storageCleanupService.attemptDeleteOrEnqueue({
+        objectKey: previousKey,
+        objectKind: 'supplier_bill',
+        reason: 'supplier_attachment_replace',
+      });
     }
 
     return this.getPurchaseBillById(billId);
@@ -2182,7 +2187,11 @@ export class SuppliersService {
     );
 
     if (previousKey) {
-      await storageService.deleteObject(previousKey);
+      await storageCleanupService.attemptDeleteOrEnqueue({
+        objectKey: previousKey,
+        objectKind: 'supplier_bill',
+        reason: 'supplier_attachment_remove',
+      });
     }
     return this.getPurchaseBillById(billId);
   }

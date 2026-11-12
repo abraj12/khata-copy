@@ -14,6 +14,55 @@ export interface OutboxWorkerOptions {
   dashboardRefreshMinIntervalMs?: number;
 }
 
+export interface OutboxBacklogStatus {
+  hasBacklog: boolean;
+  nextDelayMs: number | null;
+  deadLetterCount?: number;
+}
+
+export function clampOutboxWakeDelayMs(
+  rawDelayMs: number,
+  options: { minDelayMs?: number; maxBackoffMs: number }
+): number {
+  const minDelayMs = options.minDelayMs ?? 500;
+  if (!Number.isFinite(rawDelayMs)) {
+    return Math.min(options.maxBackoffMs, minDelayMs);
+  }
+  return Math.min(options.maxBackoffMs, Math.max(minDelayMs, Math.ceil(rawDelayMs)));
+}
+
+export function computeOutboxBacklogWakeStatus(
+  nextWakeAt: Date | string | null | undefined,
+  referenceNow: Date | string | number,
+  options: { minDelayMs?: number; maxBackoffMs: number }
+): OutboxBacklogStatus {
+  if (nextWakeAt === null || nextWakeAt === undefined) {
+    return { hasBacklog: false, nextDelayMs: null };
+  }
+
+  const wakeMs =
+    nextWakeAt instanceof Date ? nextWakeAt.getTime() : Date.parse(String(nextWakeAt));
+  const nowMs =
+    typeof referenceNow === 'number'
+      ? referenceNow
+      : referenceNow instanceof Date
+      ? referenceNow.getTime()
+      : Date.parse(String(referenceNow));
+
+  if (!Number.isFinite(wakeMs) || !Number.isFinite(nowMs)) {
+    return {
+      hasBacklog: true,
+      nextDelayMs: clampOutboxWakeDelayMs(options.minDelayMs ?? 500, options),
+    };
+  }
+
+  const diffMs = Math.max(0, wakeMs - nowMs);
+  return {
+    hasBacklog: true,
+    nextDelayMs: clampOutboxWakeDelayMs(diffMs, options),
+  };
+}
+
 export class ReadModelOutboxWorker {
   private readonly batchSize: number;
   private readonly leaseDurationMs: number;
@@ -264,17 +313,25 @@ export class ReadModelOutboxWorker {
   }
 
   /**
-   * Refreshes the in-memory dead-letter metric without enabling any idle polling loop.
+   * Refreshes the in-memory dead-letter metric using targeted dead-letter / exhausted counts
+   * without recalculating on every routine drain iteration or enabling idle polling.
    */
   public async refreshDeadLetterIndicator(): Promise<number> {
-    const status = await this.inspectRetryableBacklogDelay();
-    readModelsQueryService.setOutboxDeadLetterCount(status.deadLetterCount);
-    return status.deadLetterCount;
+    const res = await appPool.query(
+      `SELECT
+         (
+           (SELECT COUNT(*)::int FROM app_outbox_events WHERE status = 'dead_letter')
+           + (SELECT COUNT(*)::int FROM app_outbox_events WHERE status = 'failed' AND attempt_count >= max_attempts)
+         ) AS dead_letter_count`
+    );
+    const deadLetterCount = Number(res.rows[0]?.dead_letter_count || 0);
+    readModelsQueryService.setOutboxDeadLetterCount(deadLetterCount);
+    return deadLetterCount;
   }
 
   /**
-   * Startup catch-up: seeds an initial MongoDB snapshot if absent, then drains any
-   * uncommitted/missed outbox events left behind before restart.
+   * Startup catch-up: refreshes dead-letter metrics, seeds an initial MongoDB snapshot if absent,
+   * then drains any uncommitted/missed outbox events left behind before restart.
    */
   public async catchUpOnStartup(): Promise<void> {
     if (this.stopped || !isMongoEnabled() || !isMongoReady()) {
@@ -282,6 +339,7 @@ export class ReadModelOutboxWorker {
     }
 
     try {
+      await this.refreshDeadLetterIndicator();
       const existingSnapshot = await DashboardSnapshotModel.findOne({ snapshotKey: '__global__' })
         .select({ _id: 1 })
         .lean();
@@ -416,7 +474,9 @@ export class ReadModelOutboxWorker {
 
         if (!this.stopped) {
           const retryStatus = await this.inspectRetryableBacklogDelay();
-          readModelsQueryService.setOutboxDeadLetterCount(retryStatus.deadLetterCount);
+          if (typeof retryStatus.deadLetterCount === 'number') {
+            readModelsQueryService.setOutboxDeadLetterCount(retryStatus.deadLetterCount);
+          }
 
           if (retryStatus.hasBacklog) {
             readModelsQueryService.markOutboxBacklogPending(true);
@@ -612,62 +672,54 @@ export class ReadModelOutboxWorker {
       console.error('[OUTBOX WORKER] Outbox event(s) transitioned to dead_letter after max_attempts.', {
         errorMessage,
       });
+      await this.refreshDeadLetterIndicator().catch((refreshErr) => {
+        console.warn('[OUTBOX WORKER] Dead-letter count refresh warning:', {
+          message: (refreshErr as Error)?.message,
+        });
+      });
     }
 
     return minDelayMs;
   }
 
-  private async inspectRetryableBacklogDelay(): Promise<{
-    hasBacklog: boolean;
-    nextDelayMs: number | null;
-    deadLetterCount: number;
-  }> {
+  private async inspectRetryableBacklogDelay(): Promise<OutboxBacklogStatus> {
     const res = await appPool.query(
-      `SELECT
-         COUNT(*) FILTER (
-           WHERE status IN ('pending', 'processing')
-              OR (status = 'failed' AND attempt_count < max_attempts)
-         )::int AS pending_count,
-         COUNT(*) FILTER (
-           WHERE status = 'dead_letter'
-              OR (status = 'failed' AND attempt_count >= max_attempts)
-         )::int AS dead_letter_count,
-         MIN(
-           GREATEST(
-             0,
-             EXTRACT(
-               EPOCH FROM (
-                 (
-                   CASE
-                     WHEN status = 'processing'
-                       THEN COALESCE(lease_expires_at, NOW() - INTERVAL '1 millisecond')
-                     ELSE next_attempt_at
-                   END
-                 ) - NOW()
-               )
-             ) * 1000
-           )
-         ) FILTER (
-           WHERE status IN ('pending', 'processing')
-              OR (status = 'failed' AND attempt_count < max_attempts)
-         ) AS next_delay_ms
-       FROM app_outbox_events`
+      `WITH next_events AS (
+         (
+           SELECT next_attempt_at AS wake_at
+           FROM app_outbox_events
+           WHERE status = 'pending'
+           ORDER BY next_attempt_at ASC, id ASC
+           LIMIT 1
+         )
+         UNION ALL
+         (
+           SELECT next_attempt_at AS wake_at
+           FROM app_outbox_events
+           WHERE status = 'failed' AND attempt_count < max_attempts
+           ORDER BY next_attempt_at ASC, id ASC
+           LIMIT 1
+         )
+         UNION ALL
+         (
+           SELECT COALESCE(lease_expires_at, NOW() - INTERVAL '1 millisecond') AS wake_at
+           FROM app_outbox_events
+           WHERE status = 'processing'
+           ORDER BY lease_expires_at ASC NULLS FIRST, id ASC
+           LIMIT 1
+         )
+       )
+       SELECT
+         MIN(wake_at) AS next_wake_at,
+         NOW() AS server_now
+       FROM next_events`
     );
     const row = res.rows[0] || {};
-    const pendingCount = Number(row.pending_count || 0);
-    const deadLetterCount = Number(row.dead_letter_count || 0);
-    if (pendingCount <= 0) {
-      return { hasBacklog: false, nextDelayMs: null, deadLetterCount };
-    }
-    const rawDelay =
-      row.next_delay_ms !== null && row.next_delay_ms !== undefined
-        ? Math.ceil(Number(row.next_delay_ms))
-        : this.leaseDurationMs;
-    return {
-      hasBacklog: true,
-      nextDelayMs: Math.min(this.maxBackoffMs, Math.max(500, rawDelay)),
-      deadLetterCount,
-    };
+    return computeOutboxBacklogWakeStatus(
+      row.next_wake_at ?? null,
+      row.server_now ?? Date.now(),
+      { maxBackoffMs: this.maxBackoffMs, minDelayMs: 500 }
+    );
   }
 }
 

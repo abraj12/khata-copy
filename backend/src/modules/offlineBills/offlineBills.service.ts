@@ -3,6 +3,7 @@ import { AppError } from '../../utils/errors.js';
 import { escapeLike } from '../../utils/validation.js';
 import { khataService } from '../khata/khata.service.js';
 import { storageService } from '../../services/storage.service.js';
+import { storageCleanupService } from '../../services/storageCleanup.service.js';
 import crypto from 'crypto';
 
 export interface OfflineBillRecord {
@@ -130,7 +131,12 @@ export class OfflineBillsService {
     } catch (dbErr: any) {
       // Do not delete shared key on unique key replay; clean up freshly orphaned uploads on other DB errors.
       if (dbErr?.code !== '23505') {
-        await storageService.deleteObject(data.imageObjectKey).catch(() => {});
+        await storageCleanupService.attemptDeleteOrEnqueue({
+          objectKey: data.imageObjectKey,
+          objectKind: 'offline_bill',
+          reason: 'offline_bill_create_rollback',
+          isRollbackNewUpload: true,
+        });
       }
       throw dbErr;
     }
@@ -242,7 +248,11 @@ export class OfflineBillsService {
     );
 
     if ((result.rowCount ?? 0) > 0 && bill.image_object_key) {
-      await storageService.deleteObject(bill.image_object_key);
+      await storageCleanupService.attemptDeleteOrEnqueue({
+        objectKey: bill.image_object_key,
+        objectKind: 'offline_bill',
+        reason: 'offline_bill_delete',
+      });
       return true;
     }
 

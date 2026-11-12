@@ -12,6 +12,7 @@ import {
 import { appDataService } from '../appData/appData.service.js';
 import { validateMoneyInput } from '../../utils/validation.js';
 import { storageService } from '../../services/storage.service.js';
+import { storageCleanupService } from '../../services/storageCleanup.service.js';
 
 // Multer: memory storage, 5 MB limit for product images
 const upload = multer({
@@ -404,8 +405,12 @@ router.post(
       try {
         updated = await productsService.attachProductImage(id, objectKey);
       } catch (attachErr) {
-        // Safe cleanup: best-effort delete of orphaned R2 object if DB attachment fails
-        await storageService.deleteObject(objectKey).catch(() => {});
+        await storageCleanupService.attemptDeleteOrEnqueue({
+          objectKey,
+          objectKind: 'product_image',
+          reason: 'product_image_upload_attach_rollback',
+          isRollbackNewUpload: true,
+        });
         throw attachErr;
       }
 
