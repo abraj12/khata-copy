@@ -588,13 +588,16 @@ export class StorageService {
    * cleanup retry queues can enqueue retries.
    */
   public async deleteObject(objectKey: string): Promise<void> {
-    if (!this.isConfigured() || !objectKey) return;
+    if (!objectKey || !objectKey.trim()) {
+      throw new AppError('Storage object key is required.', 400, 'INVALID_OBJECT_KEY');
+    }
+    this.assertConfigured();
 
     try {
       await this.s3Client!.send(
         new DeleteObjectCommand({
           Bucket: env.R2_BUCKET_NAME!,
-          Key: objectKey,
+          Key: objectKey.trim(),
         })
       );
     } catch (err) {

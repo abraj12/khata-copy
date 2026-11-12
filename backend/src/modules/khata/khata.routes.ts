@@ -2,7 +2,6 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { khataService } from './khata.service.js';
-import { isMongoEnabled } from '../../config/mongodb.js';
 import {
   InvalidPaginationCursorError,
   readModelsQueryService,
@@ -97,30 +96,28 @@ function handleStructuredKhataError(err: unknown, res: Response, next: NextFunct
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = customerSearchQuerySchema.safeParse(req.query);
-    const options = parsed.success ? parsed.data : { limit: 50, offset: 0 };
-    if (isMongoEnabled()) {
-      const result = await readModelsQueryService.listCustomersFromMongo(options);
-      res.json({
-        success: true,
-        customers: result.customers,
-        pagination: {
-          total: result.total,
-          totalIsExact: result.totalIsExact ?? (result.total !== null),
-          limit: result.limit,
-          offset: result.offset,
-          hasMore: result.hasMore,
-          nextOffset: result.nextOffset,
-          nextCursor: result.nextCursor ?? null,
-        },
-        syncStatus: result.syncStatus,
+    if (!parsed.success) {
+      res.status(400).json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        message: parsed.error.errors[0]?.message || 'Invalid customer search parameters.',
       });
       return;
     }
-    const { customers, pagination } = await khataService.listCustomers(options);
+    const result = await readModelsQueryService.listCustomersFromMongo(parsed.data);
     res.json({
       success: true,
-      customers,
-      pagination: { ...pagination, totalIsExact: false },
+      customers: result.customers,
+      pagination: {
+        total: result.total,
+        totalIsExact: result.totalIsExact ?? (result.total !== null),
+        limit: result.limit,
+        offset: result.offset,
+        hasMore: result.hasMore,
+        nextOffset: result.nextOffset,
+        nextCursor: result.nextCursor ?? null,
+      },
+      syncStatus: result.syncStatus,
     });
   } catch (err) {
     if (err instanceof InvalidPaginationCursorError) {
@@ -140,13 +137,8 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
  */
 router.get('/summary', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    if (isMongoEnabled()) {
-      const summary = await readModelsQueryService.getKhataSummaryFromMongo();
-      res.status(200).json({ success: true, summary, data: summary, syncStatus: summary.syncStatus });
-      return;
-    }
-    const summary = await khataService.getSummary();
-    res.json({ success: true, summary });
+    const summary = await readModelsQueryService.getKhataSummaryFromMongo();
+    res.status(200).json({ success: true, summary, data: summary, syncStatus: summary.syncStatus });
   } catch (err) {
     if (err instanceof ReadModelUnavailableError) {
       res.status(503).json({ success: false, code: err.code, message: err.message });
@@ -171,41 +163,31 @@ router.get('/customers', async (req: Request, res: Response, next: NextFunction)
       return;
     }
 
-    if (isMongoEnabled()) {
-      const startedAt = Date.now();
-      const result = await readModelsQueryService.listCustomersFromMongo(parsed.data);
-      if (parsed.data.search && parsed.data.search.trim()) {
-        const searchCategory = appDataService.classifyCustomerSearchQuery(parsed.data.search);
-        void appDataService.recordSearchAnalytics({
-          module: 'customers',
-          query: searchCategory,
-          resultCount: result.customers.length,
-          source: 'mongodb',
-          durationMs: Date.now() - startedAt,
-        });
-      }
-      res.json({
-        success: true,
-        customers: result.customers,
-        pagination: {
-          total: result.total,
-          totalIsExact: result.totalIsExact ?? (result.total !== null),
-          limit: result.limit,
-          offset: result.offset,
-          hasMore: result.hasMore,
-          nextOffset: result.nextOffset,
-          nextCursor: result.nextCursor ?? null,
-        },
-        syncStatus: result.syncStatus,
+    const startedAt = Date.now();
+    const result = await readModelsQueryService.listCustomersFromMongo(parsed.data);
+    if (parsed.data.search && parsed.data.search.trim()) {
+      const searchCategory = appDataService.classifyCustomerSearchQuery(parsed.data.search);
+      void appDataService.recordSearchAnalytics({
+        module: 'customers',
+        query: searchCategory,
+        resultCount: result.customers.length,
+        source: 'mongodb',
+        durationMs: Date.now() - startedAt,
       });
-      return;
     }
-
-    const { customers, pagination } = await khataService.listCustomers(parsed.data);
     res.json({
       success: true,
-      customers,
-      pagination: { ...pagination, totalIsExact: false },
+      customers: result.customers,
+      pagination: {
+        total: result.total,
+        totalIsExact: result.totalIsExact ?? (result.total !== null),
+        limit: result.limit,
+        offset: result.offset,
+        hasMore: result.hasMore,
+        nextOffset: result.nextOffset,
+        nextCursor: result.nextCursor ?? null,
+      },
+      syncStatus: result.syncStatus,
     });
   } catch (err) {
     if (err instanceof InvalidPaginationCursorError) {

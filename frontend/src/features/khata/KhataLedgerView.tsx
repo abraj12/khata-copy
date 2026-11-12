@@ -168,6 +168,7 @@ export const KhataLedgerView: React.FC = () => {
   });
   const [isLoadingCustomers, setIsLoadingCustomers] = useState(true);
   const [isLoadingMoreCustomers, setIsLoadingMoreCustomers] = useState(false);
+  const [isServiceUnavailable, setIsServiceUnavailable] = useState(false);
   const [search, setSearchState] = useState('');
   const debouncedSearch = useDebouncedValue(search, 280);
   const [searchFetchNonce, setSearchFetchNonce] = useState(0);
@@ -354,6 +355,7 @@ export const KhataLedgerView: React.FC = () => {
         totalIsExact: false,
       };
 
+      setIsServiceUnavailable(false);
       if (append) {
         setCustomers((prev) => mergeUniqueById(prev, items));
       } else {
@@ -371,6 +373,14 @@ export const KhataLedgerView: React.FC = () => {
     } catch (err) {
       if (controller.signal.aborted || currentReqId !== fetchCustomersRequestIdRef.current) return;
       if ((err as Error).name === 'AbortError' || (err as { code?: string }).code === 'ABORTED') return;
+      const isUnavailable =
+        (err as any)?.status === 503 ||
+        (err as any)?.code === 'MANDATORY_SERVICE_UNAVAILABLE' ||
+        (err as any)?.code === 'READ_MODEL_UNAVAILABLE' ||
+        (err as any)?.code === 'SERVICE_UNAVAILABLE';
+      if (isUnavailable) {
+        setIsServiceUnavailable(true);
+      }
       showNotification('error', (err as Error).message || 'Failed to load customers.');
     } finally {
       if (fetchCustomersAbortRef.current === controller) {
@@ -1133,6 +1143,31 @@ export const KhataLedgerView: React.FC = () => {
           className="neu-input neu-input-with-leading-icon w-full text-sm font-medium"
         />
       </div>
+
+      {/* Service Unavailable Outage Banner */}
+      {isServiceUnavailable && (
+        <div
+          role="alert"
+          className="p-3 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 text-xs flex flex-col sm:flex-row items-center justify-between gap-2"
+        >
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+            <span>
+              MongoDB read service is temporarily unavailable. Khata customer ledger and balances will resume once connection is restored.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              void fetchSummary();
+              void fetchCustomers(debouncedSearch, 0, false, null);
+            }}
+            className="neu-btn-secondary text-xs px-3 py-1 font-semibold whitespace-nowrap"
+          >
+            Retry Connection
+          </button>
+        </div>
+      )}
 
       {/* Customer List Card */}
       <div className="neu-card overflow-hidden">

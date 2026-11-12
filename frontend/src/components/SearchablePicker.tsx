@@ -78,6 +78,7 @@ export function SearchablePicker<T>({
     isLoading,
     isLoadingMore,
     isError,
+    isServiceUnavailable,
     errorMessage,
     hasMore,
     loadMore,
@@ -453,16 +454,27 @@ export function SearchablePicker<T>({
     if (isError) {
       return (
         <div className="p-4 text-center space-y-2">
-          <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-[var(--khata-danger)]">
+          <div
+            role="alert"
+            className={`flex items-center justify-center gap-1.5 text-xs font-semibold ${
+              isServiceUnavailable
+                ? 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 p-2.5 rounded-lg border border-amber-200 dark:border-amber-800'
+                : 'text-[var(--khata-danger)]'
+            }`}
+          >
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            <span>{errorMessage || 'Failed to search.'}</span>
+            <span>
+              {isServiceUnavailable
+                ? 'MongoDB read service is currently unavailable. Search will resume once service reconnects.'
+                : errorMessage || 'Failed to search.'}
+            </span>
           </div>
           <button
             type="button"
             onClick={retry}
             className="neu-btn-secondary text-xs px-3 py-1 font-semibold"
           >
-            Retry
+            {isServiceUnavailable ? 'Retry Connection' : 'Retry'}
           </button>
         </div>
       );

@@ -32,14 +32,14 @@ npm ci
 # 2. Compile both backend and frontend workspaces
 npm run build
 
-# 3. Execute automated unit test suites (342 backend + 153 frontend tests)
+# 3. Execute automated unit test suites (376 backend + 157 frontend tests)
 npm test
 
 # 4. Execute real PostgreSQL + MongoDB integration suite (requires TEST_DATABASE_URL / TEST_MONGODB_URI)
 npm run test:integration
 
 # 5. Execute reproducible 1k-100k performance & EXPLAIN benchmark suite
-npm run benchmark:release030
+npm run benchmark:release031
 
 # 6. Validate Digital Asset Links configuration for TWA
 node frontend/scripts/validate-assetlinks.js
@@ -183,6 +183,10 @@ Because the application is a Trusted Web Activity, ordinary frontend updates dep
 | [docs/MONGODB_ARCHITECTURE.md](docs/MONGODB_ARCHITECTURE.md) | MongoDB read-model synchronization, outbox worker, cursor pagination, and indexing architecture |
 | [docs/ANDROID_RELEASE.md](docs/ANDROID_RELEASE.md) | TWA build guide, keystore signing configuration, and Digital Asset Links verification |
 | [docs/ACCESSIBILITY_AND_THEMES.md](docs/ACCESSIBILITY_AND_THEMES.md) | 9 tactile neumorphic appearance presets, CSS gradient rendering, and keyboard accessibility |
+| [docs/RELEASE_031_REMEDIATION_REPORT.md](docs/RELEASE_031_REMEDIATION_REPORT.md) | Release #031 remediation findings, mandatory MongoDB architecture, storage lifecycle & verification report |
+| [docs/RELEASE_031_PERFORMANCE_BENCHMARKS.md](docs/RELEASE_031_PERFORMANCE_BENCHMARKS.md) | Reproducible 1k–100k outbox claim, backlog probe, cleanup & MongoDB read model benchmarks |
+| [docs/RELEASE_031_STORAGE_LIFECYCLE.md](docs/RELEASE_031_STORAGE_LIFECYCLE.md) | Cloudflare R2 transactional cleanup, distributed advisory locks & reference safety |
+| [docs/RELEASE_031_MONGODB_AVAILABILITY.md](docs/RELEASE_031_MONGODB_AVAILABILITY.md) | Mandatory MongoDB architecture, connection supervisor, state machine & fail-closed read models |
 | [docs/RELEASE_030_REMEDIATION_REPORT.md](docs/RELEASE_030_REMEDIATION_REPORT.md) | Release #030 remediation findings, verification matrix, and 22-section engineering report |
 | [docs/RELEASE_030_PERFORMANCE_BENCHMARKS.md](docs/RELEASE_030_PERFORMANCE_BENCHMARKS.md) | Reproducible `1k`–`100k` PostgreSQL 18.6 (`EXPLAIN`) & MongoDB 8.2.4 benchmarks |
 | [docs/RELEASE_029_REMEDIATION_REPORT.md](docs/RELEASE_029_REMEDIATION_REPORT.md) | Prior Release #029 remediation findings and verification report |

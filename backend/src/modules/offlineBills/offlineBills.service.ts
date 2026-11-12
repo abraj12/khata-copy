@@ -4,6 +4,7 @@ import { escapeLike } from '../../utils/validation.js';
 import { khataService } from '../khata/khata.service.js';
 import { storageService } from '../../services/storage.service.js';
 import { storageCleanupService } from '../../services/storageCleanup.service.js';
+import { acquireObjectLocksInTransaction } from '../../services/storageObjectLock.js';
 import crypto from 'crypto';
 
 export interface OfflineBillRecord {
@@ -237,26 +238,48 @@ export class OfflineBillsService {
    * Deletes an offline bill record and cleans up its R2 object
    */
   public async deleteOfflineBill(id: number): Promise<boolean> {
-    const bill = await this.getOfflineBillById(id);
-    if (!bill) {
-      throw new AppError('Offline bill record not found.', 404, 'NOT_FOUND');
+    const client = await appPool.connect();
+    let committed = false;
+
+    try {
+      await client.query('BEGIN');
+      const res = await client.query(
+        `SELECT id, image_object_key FROM offline_bill_records WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (res.rows.length === 0) {
+        throw new AppError('Offline bill record not found.', 404, 'NOT_FOUND');
+      }
+      const imageObjectKey = res.rows[0].image_object_key as string | null;
+
+      if (imageObjectKey) {
+        await acquireObjectLocksInTransaction(client, [imageObjectKey]);
+      }
+
+      const result = await client.query(
+        `DELETE FROM offline_bill_records WHERE id = $1`,
+        [id]
+      );
+
+      if ((result.rowCount ?? 0) > 0 && imageObjectKey) {
+        await storageCleanupService.enqueueCleanupJobInTransaction(client, {
+          objectKey: imageObjectKey,
+          objectKind: 'offline_bill',
+          reason: 'offline_bill_delete',
+        });
+      }
+
+      await client.query('COMMIT');
+      committed = true;
+      return (result.rowCount ?? 0) > 0;
+    } catch (err) {
+      if (!committed) {
+        await client.query('ROLLBACK').catch(() => {});
+      }
+      throw err;
+    } finally {
+      client.release();
     }
-
-    const result = await appPool.query(
-      `DELETE FROM offline_bill_records WHERE id = $1`,
-      [id]
-    );
-
-    if ((result.rowCount ?? 0) > 0 && bill.image_object_key) {
-      await storageCleanupService.attemptDeleteOrEnqueue({
-        objectKey: bill.image_object_key,
-        objectKind: 'offline_bill',
-        reason: 'offline_bill_delete',
-      });
-      return true;
-    }
-
-    return false;
   }
 }
 

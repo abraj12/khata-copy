@@ -6,9 +6,10 @@ import type session from 'express-session';
 import { env } from './config/env.js';
 import { createSessionMiddleware } from './config/session.js';
 import { checkDatabaseReadiness } from './config/database.js';
-import { checkMongoReadiness } from './config/mongodb.js';
+import { checkMongoReadiness, getMongoAvailabilityState } from './config/mongodb.js';
 import { csrfProtection, isAllowedOrigin } from './middleware/csrf.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { requireMandatoryServices } from './middleware/requireMandatoryServices.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
 import { productsRoutes } from './modules/products/products.routes.js';
 import { khataRoutes } from './modules/khata/khata.routes.js';
@@ -71,12 +72,12 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean; customStor
   app.use(express.urlencoded({ extended: true, limit: '250kb' }));
   app.use(cookieParser());
 
-  // 5. Public Health & Readiness Probes
-  // Registered BEFORE session and CSRF middleware so probes never touch PostgreSQL session store or set cookies
+  // 5. Public Health & Readiness Probes (zero queries on liveness; explicit readiness checks)
   app.get('/api/v1/health/live', (_req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.status(200).json({
       status: 'alive',
+      process: 'healthy',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
     });
@@ -89,18 +90,31 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean; customStor
       checkMongoReadiness(),
     ]);
 
-    if (!dbStatus.isReady || (mongoStatus.enabled && !mongoStatus.isReady)) {
+    const isPostgresReady = dbStatus.isReady;
+    const isMongoOverallReady = !mongoStatus.enabled || mongoStatus.isReady;
+
+    if (!isPostgresReady || !isMongoOverallReady) {
       console.warn('[SERVICE READINESS UNREADY]', {
-        postgresReady: dbStatus.isReady,
+        postgresReady: isPostgresReady,
         postgresLatencyMs: dbStatus.latencyMs,
-        postgresChecks: dbStatus.checks,
         mongodbEnabled: mongoStatus.enabled,
         mongodbReady: mongoStatus.isReady,
+        mongodbState: mongoStatus.state,
         mongodbLatencyMs: mongoStatus.latencyMs,
       });
+
+      const reason = !isPostgresReady
+        ? 'POSTGRES_UNAVAILABLE'
+        : 'MANDATORY_MONGODB_UNAVAILABLE';
+
       res.status(503).json({
         status: 'unready',
-        message: 'Database or read-model service is unready.',
+        ready: false,
+        services: {
+          postgres: isPostgresReady ? 'ready' : 'unavailable',
+          mongodb: mongoStatus.state,
+        },
+        reason,
         timestamp: new Date().toISOString(),
       });
       return;
@@ -108,6 +122,7 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean; customStor
 
     res.status(200).json({
       status: 'ready',
+      ready: true,
       services: {
         postgres: 'ready',
         mongodb: mongoStatus.enabled ? 'ready' : 'disabled',
@@ -120,18 +135,22 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean; customStor
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.status(200).json({
       status: 'healthy',
+      process: 'healthy',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
     });
   });
 
-  // 6. Session Middleware (PostgreSQL store with 30-day rolling TTL)
+  // 6. Global Mandatory Dependencies Gate (blocks all business routes with 503 if MongoDB is down)
+  app.use(requireMandatoryServices);
+
+  // 7. Session Middleware (PostgreSQL store with 30-day rolling TTL)
   app.use(createSessionMiddleware(options));
 
-  // 7. CSRF and Origin Protection
+  // 8. CSRF and Origin Protection
   app.use(csrfProtection);
 
-  // 8. Application Routes
+  // 9. Application Routes
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/products', productsRoutes);
   app.use('/api/v1/khata', khataRoutes);
@@ -146,7 +165,7 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean; customStor
   app.use('/api/v1/read-model-sync', readModelSyncRouter);
   app.use('/api/v1', appDataRouter);
 
-  // 9. Centralized Error Handler
+  // 10. Centralized Error Handler
   app.use(errorHandler);
 
   return app;

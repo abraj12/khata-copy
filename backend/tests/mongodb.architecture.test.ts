@@ -315,15 +315,15 @@ describe('Khata Release #027 — MongoDB Architecture, Outbox, Fail-Closed Reads
 
       const dashRes = await agent.get('/api/v1/dashboard/overview');
       expect(dashRes.status).toBe(503);
-      expect(dashRes.body.code).toBe('READ_MODEL_UNAVAILABLE');
+      expect(['READ_MODEL_UNAVAILABLE', 'MANDATORY_SERVICE_UNAVAILABLE']).toContain(dashRes.body.code);
 
       const prodRes = await agent.get('/api/v1/products');
       expect(prodRes.status).toBe(503);
-      expect(prodRes.body.code).toBe('READ_MODEL_UNAVAILABLE');
+      expect(['READ_MODEL_UNAVAILABLE', 'MANDATORY_SERVICE_UNAVAILABLE']).toContain(prodRes.body.code);
 
       const khataRes = await agent.get('/api/v1/khata/summary');
       expect(khataRes.status).toBe(503);
-      expect(khataRes.body.code).toBe('READ_MODEL_UNAVAILABLE');
+      expect(['READ_MODEL_UNAVAILABLE', 'MANDATORY_SERVICE_UNAVAILABLE']).toContain(khataRes.body.code);
 
       expect(querySpy).not.toHaveBeenCalled();
       expect(connectSpy).not.toHaveBeenCalled();

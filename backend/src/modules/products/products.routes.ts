@@ -3,7 +3,6 @@ import multer from 'multer';
 import { z } from 'zod';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { productsService } from './products.service.js';
-import { isMongoEnabled } from '../../config/mongodb.js';
 import {
   InvalidPaginationCursorError,
   readModelsQueryService,
@@ -38,22 +37,12 @@ router.get('/:id/image', async (req: Request, res: Response, next: NextFunction)
       return;
     }
 
-    let imageObjectKey: string | null = null;
-    if (isMongoEnabled()) {
-      const meta = await readModelsQueryService.getProductImageMetaFromMongo(id);
-      if (!meta || !meta.imageObjectKey || meta.isArchived) {
-        res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product image not found or archived.' });
-        return;
-      }
-      imageObjectKey = meta.imageObjectKey;
-    } else {
-      const product = await productsService.getProductById(id);
-      if (!product || !product.image_object_key || product.archived_at) {
-        res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product image not found or archived.' });
-        return;
-      }
-      imageObjectKey = product.image_object_key;
+    const meta = await readModelsQueryService.getProductImageMetaFromMongo(id);
+    if (!meta || !meta.imageObjectKey || meta.isArchived) {
+      res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product image not found or archived.' });
+      return;
     }
+    const imageObjectKey = meta.imageObjectKey;
 
     const { stream, contentType, contentLength } = await storageService.getObjectStream(imageObjectKey);
 
@@ -136,9 +125,7 @@ router.get('/barcode/:barcode', async (req: Request, res: Response, next: NextFu
       return;
     }
 
-    const product = isMongoEnabled()
-      ? await readModelsQueryService.findProductByBarcodeFromMongo(rawBarcode)
-      : await productsService.findByBarcode(rawBarcode);
+    const product = await readModelsQueryService.findProductByBarcodeFromMongo(rawBarcode);
     if (!product) {
       res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product not found with this barcode.' });
       return;
@@ -209,40 +196,30 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       return;
     }
 
-    if (isMongoEnabled()) {
-      const startedAt = Date.now();
-      const result = await readModelsQueryService.searchProductsFromMongo(parsed.data);
-      if (parsed.data.search && parsed.data.search.trim()) {
-        void appDataService.recordSearchAnalytics({
-          module: 'products',
-          query: parsed.data.search,
-          resultCount: result.products.length,
-          source: 'mongodb',
-          durationMs: Date.now() - startedAt,
-        });
-      }
-      res.json({
-        success: true,
-        data: result.products,
-        pagination: {
-          total: result.total,
-          totalIsExact: result.totalIsExact ?? (result.total !== null),
-          limit: result.limit,
-          offset: result.offset,
-          hasMore: result.hasMore,
-          nextOffset: result.nextOffset,
-          nextCursor: result.nextCursor ?? null,
-        },
-        syncStatus: result.syncStatus,
+    const startedAt = Date.now();
+    const result = await readModelsQueryService.searchProductsFromMongo(parsed.data);
+    if (parsed.data.search && parsed.data.search.trim()) {
+      void appDataService.recordSearchAnalytics({
+        module: 'products',
+        query: parsed.data.search,
+        resultCount: result.products.length,
+        source: 'mongodb',
+        durationMs: Date.now() - startedAt,
       });
-      return;
     }
-
-    const { products, pagination } = await productsService.listActiveProducts(parsed.data);
     res.json({
       success: true,
-      data: products,
-      pagination: { ...pagination, totalIsExact: false },
+      data: result.products,
+      pagination: {
+        total: result.total,
+        totalIsExact: result.totalIsExact ?? (result.total !== null),
+        limit: result.limit,
+        offset: result.offset,
+        hasMore: result.hasMore,
+        nextOffset: result.nextOffset,
+        nextCursor: result.nextCursor ?? null,
+      },
+      syncStatus: result.syncStatus,
     });
   } catch (err) {
     if (err instanceof InvalidPaginationCursorError) {
@@ -501,23 +478,18 @@ router.get('/:id/image-url', async (req: Request, res: Response, next: NextFunct
       return;
     }
 
-    if (isMongoEnabled()) {
-      const meta = await readModelsQueryService.getProductImageMetaFromMongo(id);
-      if (!meta || meta.isArchived) {
-        res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product not found or archived.' });
-        return;
-      }
-      const imageUrl = meta.imageObjectKey && storageService.isConfigured()
-        ? `/api/v1/products/${id}/image`
-        : null;
-      res.json({
-        success: true,
-        data: { imageUrl, expiresIn: imageUrl ? 86400 : 0 },
-      });
+    const meta = await readModelsQueryService.getProductImageMetaFromMongo(id);
+    if (!meta || meta.isArchived) {
+      res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product not found or archived.' });
       return;
     }
-    const data = await productsService.getProductImageUrl(id);
-    res.json({ success: true, data });
+    const imageUrl = meta.imageObjectKey && storageService.isConfigured()
+      ? `/api/v1/products/${id}/image`
+      : null;
+    res.json({
+      success: true,
+      data: { imageUrl, expiresIn: imageUrl ? 86400 : 0 },
+    });
   } catch (err) {
     next(err);
   }

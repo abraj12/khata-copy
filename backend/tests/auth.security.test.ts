@@ -253,6 +253,18 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
     expect(meRes.body.authenticated).toBe(true);
     expect(meRes.body.owner.role).toBe('OWNER');
 
+    const { readModelsQueryService } = await import('../src/modules/readModels/readModelsQuery.service.js');
+    vi.spyOn(readModelsQueryService, 'searchProductsFromMongo').mockResolvedValueOnce({
+      products: [],
+      pagination: { total: 0, hasMore: false, nextOffset: null, limit: 25, offset: 0, totalIsExact: true },
+      syncStatus: { source: 'mongodb', isStale: false, syncedAt: null, ageMs: null },
+    } as any);
+    vi.spyOn(readModelsQueryService, 'listCustomersFromMongo').mockResolvedValueOnce({
+      customers: [],
+      pagination: { total: 0, hasMore: false, nextOffset: null, limit: 25, offset: 0, totalIsExact: true },
+      syncStatus: { source: 'mongodb', isStale: false, syncedAt: null, ageMs: null },
+    } as any);
+
     // 3. Access protected products
     const prodRes = await request(app)
       .get('/api/v1/products')

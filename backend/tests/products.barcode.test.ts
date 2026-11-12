@@ -208,6 +208,9 @@ describe('Product Barcode Feature Test Suite', () => {
       image_object_key: null,
     };
 
+    const { readModelsQueryService } = await import('../src/modules/readModels/readModelsQuery.service.js');
+    vi.spyOn(readModelsQueryService, 'findProductByBarcodeFromMongo').mockResolvedValueOnce(mockProduct as any);
+
     vi.spyOn(appPool, 'query').mockImplementation(async (sql: any, params?: any) => {
       const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
       if (sqlText.includes('FROM products') && sqlText.includes('barcode = $1')) {
@@ -229,6 +232,8 @@ describe('Product Barcode Feature Test Suite', () => {
   });
 
   it('6. Returns 404 when barcode does not match any active product', async () => {
+    const { readModelsQueryService } = await import('../src/modules/readModels/readModelsQuery.service.js');
+    vi.spyOn(readModelsQueryService, 'findProductByBarcodeFromMongo').mockResolvedValueOnce(null);
     vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
       const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
       if (sqlText.includes('FROM products') && sqlText.includes('barcode = $1')) {

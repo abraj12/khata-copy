@@ -218,6 +218,10 @@ describe('Product Images API Test Suite', () => {
   describe('3. Remove Image Without Deleting Product', () => {
     it('clears product image references from DB and removes R2 object while keeping product intact', async () => {
       let deletedKey = '';
+      const { storageCleanupService } = await import('../src/services/storageCleanup.service.js');
+      vi.spyOn(storageCleanupService, 'enqueueCleanupJobInTransaction').mockImplementation(async (_client: any, input: any) => {
+        deletedKey = input.objectKey;
+      });
       vi.spyOn(storageService, 'deleteObject').mockImplementation(async (key: string) => {
         deletedKey = key;
       });
@@ -363,6 +367,8 @@ describe('Product Images API Test Suite', () => {
     });
 
     it('returns 404 when product has no image attached', async () => {
+      const { readModelsQueryService } = await import('../src/modules/readModels/readModelsQuery.service.js');
+      vi.spyOn(readModelsQueryService, 'getProductImageMetaFromMongo').mockResolvedValueOnce(null);
       vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
         const sqlText = typeof sql === 'string' ? sql : sql?.text || '';
         if (sqlText.includes('information_schema.tables')) {
@@ -386,6 +392,12 @@ describe('Product Images API Test Suite', () => {
     });
 
     it('streams image with private Cache-Control and Cross-Origin-Resource-Policy', async () => {
+      const { readModelsQueryService } = await import('../src/modules/readModels/readModelsQuery.service.js');
+      vi.spyOn(readModelsQueryService, 'getProductImageMetaFromMongo').mockResolvedValueOnce({
+        id: 10,
+        imageObjectKey: 'products/10/pic.jpg',
+        isArchived: false,
+      } as any);
       const { Readable } = require('stream');
       const fakeStream = new Readable();
       fakeStream.push(Buffer.from([0xff, 0xd8, 0xff]));

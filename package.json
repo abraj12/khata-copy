@@ -23,7 +23,8 @@
     "preflight:legacy": "npm run preflight:legacy --workspace=backend",
     "rebuild:read-models": "npm run rebuild:read-models --workspace=backend --",
     "benchmark:release030": "npm run benchmark:release030 --workspace=backend --",
-    "test:frontend": "vitest run --config vitest.frontend.config.ts"
+    "test:frontend": "vitest run --config vitest.frontend.config.ts",
+    "benchmark:release031": "npm run benchmark:release031 --workspace=backend --"
   },
   "keywords": [
     "khata",

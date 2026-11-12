@@ -3,6 +3,32 @@ import { env } from './env.js';
 import { READ_MODEL_MODELS } from '../modules/readModels/models.js';
 import { APP_DATA_MODELS } from '../modules/appData/models.js';
 
+export type MongoAvailabilityState =
+  | 'disabled'
+  | 'connecting'
+  | 'initializing'
+  | 'ready'
+  | 'degraded'
+  | 'disconnected';
+
+let mongoConnectionReady = false;
+let mongoInitializationReady = false;
+let mongoAvailabilityState: MongoAvailabilityState = 'disconnected';
+let forceMongoReadyInTests = false;
+
+export function setForceMongoReadyInTests(value: boolean): void {
+  forceMongoReadyInTests = value;
+  if (value) {
+    mongoAvailabilityState = 'ready';
+    mongoConnectionReady = true;
+    mongoInitializationReady = true;
+  } else {
+    mongoAvailabilityState = 'disconnected';
+    mongoConnectionReady = false;
+    mongoInitializationReady = false;
+  }
+}
+
 let listenersAttached = false;
 
 /**
@@ -25,16 +51,55 @@ export function isMongoEnabled(): boolean {
 }
 
 /**
- * Mongoose readyState 1 === connected.
+ * Mongoose connection is ready ONLY when enabled, connected, and initialization/indexes succeeded.
  */
 export function isMongoReady(): boolean {
-  return isMongoEnabled() && mongoose.connection.readyState === 1;
+  if (forceMongoReadyInTests) {
+    return true;
+  }
+  return (
+    isMongoEnabled() &&
+    mongoConnectionReady &&
+    mongoInitializationReady &&
+    mongoose.connection.readyState === 1
+  );
+}
+
+export function getMongoAvailabilityState(): MongoAvailabilityState {
+  if (!isMongoEnabled()) return 'disabled';
+  if (forceMongoReadyInTests) return 'ready';
+  return mongoAvailabilityState;
+}
+
+export function setMongoAvailabilityState(
+  state: MongoAvailabilityState,
+  options?: { connectionReady?: boolean; initializationReady?: boolean }
+): void {
+  mongoAvailabilityState = state;
+  forceMongoReadyInTests = state === 'ready';
+  if (options?.connectionReady !== undefined) {
+    mongoConnectionReady = options.connectionReady;
+  } else if (state === 'ready') {
+    mongoConnectionReady = true;
+  } else if (state === 'disconnected') {
+    mongoConnectionReady = false;
+  }
+  if (options?.initializationReady !== undefined) {
+    mongoInitializationReady = options.initializationReady;
+  } else if (state === 'ready') {
+    mongoInitializationReady = true;
+  } else if (state === 'disconnected') {
+    mongoInitializationReady = false;
+  }
 }
 
 export function getMongoConnectionState(): {
   enabled: boolean;
   readyState: number;
   readyStateLabel: 'disconnected' | 'connected' | 'connecting' | 'disconnecting';
+  availabilityState: MongoAvailabilityState;
+  connectionReady: boolean;
+  initializationReady: boolean;
   databaseName: string | null;
 } {
   const stateMap: Record<number, 'disconnected' | 'connected' | 'connecting' | 'disconnecting'> = {
@@ -48,6 +113,9 @@ export function getMongoConnectionState(): {
     enabled: isMongoEnabled(),
     readyState,
     readyStateLabel: stateMap[readyState] ?? 'disconnected',
+    availabilityState: getMongoAvailabilityState(),
+    connectionReady: mongoConnectionReady,
+    initializationReady: mongoInitializationReady,
     databaseName: readyState === 1 ? mongoose.connection.name || env.MONGODB_DATABASE : null,
   };
 }
@@ -57,10 +125,14 @@ function attachConnectionListeners(): void {
   listenersAttached = true;
 
   mongoose.connection.on('connected', () => {
+    mongoConnectionReady = true;
     console.log(`[MONGODB] Connected to database '${mongoose.connection.name || env.MONGODB_DATABASE}'`);
   });
 
   mongoose.connection.on('disconnected', () => {
+    mongoConnectionReady = false;
+    mongoInitializationReady = false;
+    mongoAvailabilityState = 'disconnected';
     console.warn('[MONGODB] Connection disconnected');
   });
 
@@ -126,13 +198,33 @@ export async function migrateNotificationDedupeIndex(): Promise<{
  * Explicitly builds controlled indexes across all read-model and app collections.
  * Uses createIndexes() intentionally instead of blind syncIndexes() to avoid dropping
  * custom indexes unintentionally during rolling deployments.
+ * Updates initialization state appropriately.
  */
-export async function ensureMongoIndexes(): Promise<void> {
-  if (mongoose.connection.readyState !== 1) return;
-  await migrateNotificationDedupeIndex();
-  const allModels = [...READ_MODEL_MODELS, ...APP_DATA_MODELS];
-  for (const model of allModels) {
-    await model.createIndexes();
+export async function ensureMongoIndexes(): Promise<{ success: boolean; error?: string }> {
+  if (mongoose.connection.readyState !== 1) {
+    mongoConnectionReady = false;
+    mongoInitializationReady = false;
+    mongoAvailabilityState = 'disconnected';
+    return { success: false, error: 'MongoDB connection is not established' };
+  }
+
+  try {
+    mongoConnectionReady = true;
+    mongoAvailabilityState = 'initializing';
+    await migrateNotificationDedupeIndex();
+    const allModels = [...READ_MODEL_MODELS, ...APP_DATA_MODELS];
+    for (const model of allModels) {
+      await model.createIndexes();
+    }
+    mongoInitializationReady = true;
+    mongoAvailabilityState = 'ready';
+    return { success: true };
+  } catch (err) {
+    const errorMsg = (err as Error)?.message || 'Failed to initialize MongoDB indexes';
+    console.error('[MONGODB ERROR] Index initialization failed:', errorMsg);
+    mongoInitializationReady = false;
+    mongoAvailabilityState = 'degraded';
+    return { success: false, error: errorMsg };
   }
 }
 
@@ -144,28 +236,35 @@ export interface ConnectMongoOptions {
 
 /**
  * Connects to MongoDB with bounded connection pool and server selection timeouts.
- * Returns cleanly when MONGODB_ENABLED=false in dev/test; fails closed in production if unreachable.
+ * Initializes indexes and sets readiness states on success.
  */
 export async function connectMongo(options: ConnectMongoOptions = {}): Promise<{
   connected: boolean;
   reason?: string;
 }> {
   if (!isMongoEnabled() && !options.uri) {
+    mongoAvailabilityState = 'disabled';
     return { connected: false, reason: 'MONGODB_ENABLED=false' };
   }
 
   const targetUri = options.uri || env.MONGODB_URI;
   const targetDb = options.dbName || env.MONGODB_DATABASE;
   if (!targetUri) {
+    mongoAvailabilityState = 'disconnected';
     throw new Error('[MONGODB] Connection requested without MONGODB_URI.');
   }
 
+  mongoAvailabilityState = 'connecting';
+  attachConnectionListeners();
+
   if (mongoose.connection.readyState === 1) {
-    await ensureMongoIndexes();
+    mongoConnectionReady = true;
+    const indexRes = await ensureMongoIndexes();
+    if (!indexRes.success) {
+      throw new Error(`[MONGODB] Index creation failed: ${indexRes.error}`);
+    }
     return { connected: true };
   }
-
-  attachConnectionListeners();
 
   const maxAttempts = Math.max(1, options.maxRetries ?? 3);
   let lastError: unknown;
@@ -181,10 +280,17 @@ export async function connectMongo(options: ConnectMongoOptions = {}): Promise<{
         autoIndex: false,
         autoCreate: false,
       });
-      await ensureMongoIndexes();
+      mongoConnectionReady = true;
+      const indexRes = await ensureMongoIndexes();
+      if (!indexRes.success) {
+        throw new Error(`[MONGODB] Index creation failed: ${indexRes.error}`);
+      }
       return { connected: true };
     } catch (err) {
       lastError = err;
+      mongoConnectionReady = false;
+      mongoInitializationReady = false;
+      mongoAvailabilityState = attempt === maxAttempts ? 'disconnected' : 'connecting';
       console.warn(
         `[MONGODB CONNECT RETRY] attempt=${attempt}/${maxAttempts} target=${redactMongoUri(targetUri)} error=${(err as Error).message}`
       );
@@ -203,6 +309,9 @@ export async function connectMongo(options: ConnectMongoOptions = {}): Promise<{
  * Closes Mongoose connections gracefully on shutdown or integration test teardown.
  */
 export async function disconnectMongo(): Promise<void> {
+  mongoConnectionReady = false;
+  mongoInitializationReady = false;
+  mongoAvailabilityState = 'disconnected';
   if (mongoose.connection.readyState !== 0) {
     await mongoose.disconnect();
   }
@@ -211,25 +320,28 @@ export async function disconnectMongo(): Promise<void> {
 /**
  * Performs an explicit admin ping ONLY for readiness checks (/api/v1/health/ready).
  * Never invoked on /api/v1/health/live or background keepalives.
+ * Verifies both connection and initialization readiness.
  */
 export async function checkMongoReadiness(): Promise<{
   enabled: boolean;
   isReady: boolean;
+  state: MongoAvailabilityState;
   latencyMs: number;
   error?: string;
 }> {
   if (!isMongoEnabled()) {
-    return { enabled: false, isReady: true, latencyMs: 0 };
+    return { enabled: false, isReady: true, state: 'disabled', latencyMs: 0 };
   }
 
   const start = Date.now();
   try {
-    if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) {
+    if (!isMongoReady() || !mongoose.connection.db) {
       return {
         enabled: true,
         isReady: false,
+        state: getMongoAvailabilityState(),
         latencyMs: Date.now() - start,
-        error: 'MongoDB client is not connected',
+        error: `MongoDB is not ready (state=${getMongoAvailabilityState()}, readyState=${mongoose.connection.readyState})`,
       };
     }
 
@@ -237,12 +349,14 @@ export async function checkMongoReadiness(): Promise<{
     return {
       enabled: true,
       isReady: true,
+      state: 'ready',
       latencyMs: Date.now() - start,
     };
   } catch (err) {
     return {
       enabled: true,
       isReady: false,
+      state: getMongoAvailabilityState(),
       latencyMs: Date.now() - start,
       error: (err as Error).message,
     };

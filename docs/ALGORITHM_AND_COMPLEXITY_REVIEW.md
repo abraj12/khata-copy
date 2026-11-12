@@ -1,4 +1,4 @@
-# Khata ERP — Algorithm, Data Structure & Complexity Review (Release #030)
+# Khata ERP — Algorithm, Data Structure & Complexity Review (Release #031)
 
 **Release:** `#030`  
 **Owner:** ALGIONS AI LABS PRIVATE LIMITED  
@@ -66,7 +66,7 @@
 - **`mergeUniqueByKey` / `mergeUniqueById`:** Uses a `Set<string | number>` to filter duplicates in `O(prev + next)` linear time when appending pages across `useRemoteSearch`, `SearchablePicker`, `useBillingCatalogueSearch`, `ProductsView`, and `KhataLedgerView`.
 - **Ref-Stabilized Hook Callbacks + `AbortController` + Monotonic `requestIdRef`:** `useRemoteSearch` (`fetcherRef`, `getItemKeyRef`) and `useBillingCatalogueSearch` (`fetchPageRef`) decouple effect lifecycles from unstable parent inline closures, eliminating render-loop cascades, while `controller.signal.aborted`, `activeSearchRef`, and synchronous `isLoadingMoreRef` prevent stale cursor pagination appends.
 
-### 2.6 Theoretical Complexity vs Observed Database Plans (Release #030 Empirical Note)
+### 2.6 Theoretical Complexity vs Observed Database Plans (Release #031 Empirical Note)
 
 Asymmetric planner selectivity and SQL expression wrappers create observable differences between theoretical index notation and actual database execution plans at `N = 100,000` (see [`RELEASE_030_PERFORMANCE_BENCHMARKS.md`](RELEASE_030_PERFORMANCE_BENCHMARKS.md)):
 - **Outbox Wakeup Matches Theory:** PostgreSQL executes `Merge Append` over three partial `Index Only Scan` branches (`6–9` shared hit blocks, `0.054–0.085 ms` PG execution) instead of scanning `100,000` processed rows (`2,041` shared blocks).
