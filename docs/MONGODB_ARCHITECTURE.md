@@ -1,8 +1,8 @@
 # Khata ERP — MongoDB Read-Optimized Architecture & Outbox Synchronization
 
-- **Release:** `#028`
+- **Release:** `#029`
 - **Owner / Maintainer:** ALGIONS AI LABS PRIVATE LIMITED
-- **Primary System of Record:** Neon PostgreSQL (`postgresql`, migrations `001`–`028`)
+- **Primary System of Record:** Neon PostgreSQL (`postgresql`, migrations `001`–`029`)
 - **Read-Optimized Projection & App-Data Store:** MongoDB (`mongoose`, controlled indexes + partial unique filters + TTL collections)
 
 ---
@@ -121,12 +121,12 @@ PostgreSQL COMMIT
 
 - **Zero Idle Polling:** `ReadModelOutboxWorker` (`backend/src/modules/readModels/readModelOutbox.worker.ts`) uses an in-process `EventEmitter` listener on committed writes and **never runs an idle `setInterval` poller**. *(Tradeoff: Render free-tier web instances run as a single Node process; horizontal multi-instance scaling would require an external pub/sub or low-frequency wake mechanism across workers.)*
 - **Lease Renewal & Exhaustion Protection:** Long-running batches renew their lock via `renewBatchLease()` every `leaseHeartbeatIntervalMs`. When PostgreSQL or MongoDB throws during batch failure recording, `markEventsFailedWithBackoff()` propagates errors to `handleDrainFailure()`, activating bounded exponential-backoff retries (`scheduleOneShotRetry()`) and marking `outboxDegraded: true`.
-- **Dead-Letter Transition & Owner Recovery:** Exhausted events (`attempt_count >= max_attempts`) deterministically transition to `status = 'dead_letter'` with `dead_letter_at = NOW()` (`028_outbox_dead_letter.sql`), surfaced via `GET /api/v1/read-model-sync/status` and retryable on demand via `POST /api/v1/read-model-sync/outbox/:id/retry` (`backend/src/modules/readModels/readModelSync.routes.ts`).
-- **Coalesced Snapshot Refreshes:** Burst domain writes update `product_search`, `customer_summaries`, `daily_analytics`, and `recent_activity` immediately while throttling full PostgreSQL global `dashboard_snapshots` queries via `READ_MODEL_DASHBOARD_REFRESH_MIN_INTERVAL_MS` (`15000 ms` default) with a single trailing flush (`flushDashboardRefresh()`).
+- **Dead-Letter Transition & Owner Recovery:** Exhausted events (`attempt_count >= max_attempts`) deterministically transition to `status = 'dead_letter'` with `dead_letter_at = NOW()` (`028_outbox_dead_letter.sql`, backfilling legacy exhausted rows and adding partial outbox/trigram indexes in `029_outbox_legacy_dead_letter_and_perf_indexes.sql`), surfaced via `GET /api/v1/read-model-sync/status` and retryable on demand via `POST /api/v1/read-model-sync/outbox/:id/retry` (`backend/src/modules/readModels/readModelSync.routes.ts`).
+- **Coalesced Snapshot Refreshes:** Burst domain writes update `product_search`, `customer_summaries`, `daily_analytics`, and `recent_activity` immediately via deduplicated outbox aggregation and batched `bulkWrite` syncs while throttling full PostgreSQL global `dashboard_snapshots` queries via `READ_MODEL_DASHBOARD_REFRESH_MIN_INTERVAL_MS` (`15000 ms` default) with a single trailing flush (`flushDashboardRefresh()`).
 
 ### 3.3 Separation of Schema Migrations vs Read-Model Rebuilds
 
-- **Schema Migrations Only:** `backend/scripts/migrate.ts` (`npm run migrate`) executes strictly ordered SQL migrations (`001`–`028`) without triggering full MongoDB rebuilds.
+- **Schema Migrations Only:** `backend/scripts/migrate.ts` (`npm run migrate`) executes strictly ordered SQL migrations (`001`–`029`) without triggering full MongoDB rebuilds.
 - **Explicit Rebuild CLI:** `backend/scripts/rebuild-read-models.ts` (`npm run rebuild:read-models -- --confirm`) requires `--confirm` / `--yes` and fails closed otherwise, invoking `ReadModelSyncService.rebuildAllReadModels({ confirm: true })` in bounded batches.
 
 ---
@@ -135,8 +135,8 @@ PostgreSQL COMMIT
 
 When `MONGODB_ENABLED=true`:
 - `GET /api/v1/dashboard/overview` -> `readModelsQueryService.getDashboardOverviewFromMongo(...)`
-- `GET /api/v1/products`, `GET /api/v1/products/barcode/:barcode`, `GET /api/v1/products/:id/image` (metadata) -> `readModelsQueryService` (supports keyset `cursor` over `{ normalizedName, productId }` and returns original `created_at`)
-- `GET /api/v1/khata`, `GET /api/v1/khata/summary`, `GET /api/v1/khata/customers` -> `readModelsQueryService` (supports keyset `cursor` over `{ outstandingPaise, lastActivityAt, customerId }`)
+- `GET /api/v1/products`, `GET /api/v1/products/barcode/:barcode`, `GET /api/v1/products/:id/image` (metadata) -> `readModelsQueryService` (bounded lexicographic interval prefix matching with `$elemMatch` for tokens `> 12` chars, conditional exact-count skipping `total: null` / `totalIsExact: false` on broad queries, keyset `cursor` over `{ normalizedName, productId }`, and original `created_at`)
+- `GET /api/v1/khata`, `GET /api/v1/khata/summary`, `GET /api/v1/khata/customers` -> `readModelsQueryService` (bounded prefix interval matching with `$elemMatch` for phone variants `> 15` chars and keyset `cursor` over `{ outstandingPaise, lastActivityAt, customerId }`)
 - `GET / PUT /api/v1/preferences`, `GET / POST / PATCH /api/v1/notifications*`, `POST /api/v1/telemetry` -> `appDataService` (MongoDB only; invalid ObjectIds return HTTP `400 INVALID_NOTIFICATION_ID`)
 - **PostgreSQL Queries Executed on All Above Read Paths:** `0`
 

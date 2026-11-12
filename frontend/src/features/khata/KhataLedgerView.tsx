@@ -26,6 +26,11 @@ import { formatCurrency, formatQuantity, safeDecimal, parseStrictDecimal } from 
 import { SearchablePicker } from '../../components/SearchablePicker.js';
 import { OfflineBillModal } from '../offlineBills/OfflineBillModal.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
+import {
+  buildPaginatedSearchParams,
+  CursorPaginationMeta,
+  mergeUniqueById,
+} from '../../types/pagination.js';
 import { resolveImageUrl } from '../products/productsApi.js';
 import { INDIAN_STATES, getStateByCode } from '../../lib/indianStates.js';
 
@@ -152,12 +157,15 @@ export const KhataLedgerView: React.FC = () => {
     totalReceived: '0.00',
   });
   const [customers, setCustomers] = useState<CustomerListItem[]>([]);
-  const [customerPagination, setCustomerPagination] = useState<{
-    limit: number;
-    offset: number;
-    hasMore: boolean;
-    nextOffset: number | null;
-  }>({ limit: 25, offset: 0, hasMore: false, nextOffset: null });
+  const [customerPagination, setCustomerPagination] = useState<CursorPaginationMeta>({
+    limit: 25,
+    offset: 0,
+    hasMore: false,
+    nextOffset: null,
+    nextCursor: null,
+    total: null,
+    totalIsExact: false,
+  });
   const [isLoadingCustomers, setIsLoadingCustomers] = useState(true);
   const [isLoadingMoreCustomers, setIsLoadingMoreCustomers] = useState(false);
   const [search, setSearch] = useState('');
@@ -252,7 +260,12 @@ export const KhataLedgerView: React.FC = () => {
     };
   }, []);
 
-  const fetchCustomers = async (queryText: string, offset: number = 0, append: boolean = false) => {
+  const fetchCustomers = async (
+    queryText: string,
+    offset: number = 0,
+    append: boolean = false,
+    cursor: string | null = null
+  ) => {
     if (fetchCustomersAbortRef.current) {
       fetchCustomersAbortRef.current.abort();
     }
@@ -270,32 +283,46 @@ export const KhataLedgerView: React.FC = () => {
         }
       }
 
+      const qs = buildPaginatedSearchParams({
+        search: queryText,
+        limit: 25,
+        offset,
+        cursor,
+      });
       const res = await apiClient<{
         success: boolean;
         customers?: CustomerListItem[];
         data?: CustomerListItem[];
-        pagination?: { limit: number; offset: number; hasMore: boolean; nextOffset: number | null };
-      }>(
-        `/api/v1/khata/customers?search=${encodeURIComponent(queryText)}&limit=25&offset=${offset}`,
-        { signal: controller.signal }
-      );
+        pagination?: CursorPaginationMeta;
+      }>(`/api/v1/khata/customers?${qs.toString()}`, { signal: controller.signal });
 
       if (currentReqId !== fetchCustomersRequestIdRef.current) return;
 
       const items = res.data.customers || res.data.data || [];
-      const pagination = res.data.pagination || {
+      const pagination: CursorPaginationMeta = res.data.pagination || {
         limit: 25,
         offset,
         hasMore: false,
         nextOffset: null,
+        nextCursor: null,
+        total: null,
+        totalIsExact: false,
       };
 
       if (append) {
-        setCustomers((prev) => [...prev, ...items]);
+        setCustomers((prev) => mergeUniqueById(prev, items));
       } else {
         setCustomers(items);
       }
-      setCustomerPagination(pagination);
+      setCustomerPagination({
+        limit: pagination.limit ?? 25,
+        offset: pagination.offset ?? 0,
+        hasMore: Boolean(pagination.hasMore),
+        nextOffset: pagination.hasMore ? (pagination.nextOffset ?? null) : null,
+        nextCursor: pagination.hasMore ? (pagination.nextCursor ?? null) : null,
+        total: pagination.total ?? null,
+        totalIsExact: pagination.totalIsExact,
+      });
     } catch (err) {
       if (currentReqId !== fetchCustomersRequestIdRef.current) return;
       if ((err as Error).name === 'AbortError') return;
@@ -313,50 +340,95 @@ export const KhataLedgerView: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    fetchCustomers(debouncedSearch, 0, false);
+    fetchCustomers(debouncedSearch, 0, false, null);
   }, [debouncedSearch]);
 
   const handleLoadMoreCustomers = () => {
-    if (customerPagination.hasMore && customerPagination.nextOffset !== null && !isLoadingMoreCustomers) {
-      fetchCustomers(debouncedSearch, customerPagination.nextOffset, true);
-    }
+    if (!customerPagination.hasMore || isLoadingMoreCustomers) return;
+    const useCursor =
+      typeof customerPagination.nextCursor === 'string' && customerPagination.nextCursor.length > 0;
+    if (!useCursor && customerPagination.nextOffset === null) return;
+    fetchCustomers(
+      debouncedSearch,
+      customerPagination.nextOffset ?? 0,
+      true,
+      useCursor ? customerPagination.nextCursor : null
+    );
   };
 
-  // Search fetchers for SearchablePicker components
+  // Search fetchers for SearchablePicker components (cursor-first with offset fallback)
   const handleSearchCustomerPicker = useCallback(
-    async (queryText: string, offset: number, limit: number, signal: AbortSignal) => {
+    async (
+      queryText: string,
+      offset: number,
+      limit: number,
+      signal: AbortSignal,
+      cursor: string | null = null
+    ) => {
+      const qs = buildPaginatedSearchParams({
+        search: queryText,
+        limit,
+        offset,
+        cursor,
+      });
       const res = await apiClient<{
         success: boolean;
         customers?: CustomerListItem[];
         data?: CustomerListItem[];
-        pagination?: { limit: number; offset: number; hasMore: boolean; nextOffset: number | null };
-      }>(
-        `/api/v1/khata/customers?search=${encodeURIComponent(queryText)}&limit=${limit}&offset=${offset}`,
-        { signal }
-      );
+        pagination?: CursorPaginationMeta;
+      }>(`/api/v1/khata/customers?${qs.toString()}`, { signal });
       const items = res.data.customers || res.data.data || [];
       const hasMore = Boolean(res.data.pagination?.hasMore);
-      const nextOffset = res.data.pagination?.nextOffset ?? (hasMore ? offset + items.length : null);
-      return { items, hasMore, nextOffset };
+      const nextCursor = hasMore ? (res.data.pagination?.nextCursor ?? null) : null;
+      const nextOffset = hasMore
+        ? (res.data.pagination?.nextOffset ?? (!nextCursor ? offset + items.length : null))
+        : null;
+      return {
+        items,
+        hasMore,
+        nextOffset,
+        nextCursor,
+        total: res.data.pagination?.total ?? null,
+        totalIsExact: res.data.pagination?.totalIsExact,
+      };
     },
     []
   );
 
   const handleSearchProductPicker = useCallback(
-    async (queryText: string, offset: number, limit: number, signal: AbortSignal) => {
+    async (
+      queryText: string,
+      offset: number,
+      limit: number,
+      signal: AbortSignal,
+      cursor: string | null = null
+    ) => {
+      const qs = buildPaginatedSearchParams({
+        search: queryText,
+        limit,
+        offset,
+        cursor,
+      });
       const res = await apiClient<{
         success: boolean;
         products?: ProductReference[];
         data?: ProductReference[];
-        pagination?: { limit: number; offset: number; hasMore: boolean; nextOffset: number | null };
-      }>(
-        `/api/v1/products?search=${encodeURIComponent(queryText)}&limit=${limit}&offset=${offset}`,
-        { signal }
-      );
+        pagination?: CursorPaginationMeta;
+      }>(`/api/v1/products?${qs.toString()}`, { signal });
       const items = res.data.products || res.data.data || [];
       const hasMore = Boolean(res.data.pagination?.hasMore);
-      const nextOffset = res.data.pagination?.nextOffset ?? (hasMore ? offset + items.length : null);
-      return { items, hasMore, nextOffset };
+      const nextCursor = hasMore ? (res.data.pagination?.nextCursor ?? null) : null;
+      const nextOffset = hasMore
+        ? (res.data.pagination?.nextOffset ?? (!nextCursor ? offset + items.length : null))
+        : null;
+      return {
+        items,
+        hasMore,
+        nextOffset,
+        nextCursor,
+        total: res.data.pagination?.total ?? null,
+        totalIsExact: res.data.pagination?.totalIsExact,
+      };
     },
     []
   );

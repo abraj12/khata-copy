@@ -11,7 +11,7 @@ import { env } from '../../src/config/env.js';
 import { assertSafeTestDatabaseUrl } from '../../src/config/testDbGuard.js';
 import { appPool, closeDatabasePools } from '../../src/config/database.js';
 import { connectMongo, disconnectMongo, ensureMongoIndexes, isMongoReady } from '../../src/config/mongodb.js';
-import { ProductSearchModel, READ_MODEL_MODELS, RecentActivityModel } from '../../src/modules/readModels/models.js';
+import { CustomerSummaryModel, DashboardSnapshotModel, ProductSearchModel, READ_MODEL_MODELS, RecentActivityModel } from '../../src/modules/readModels/models.js';
 import { APP_DATA_MODELS, NotificationModel, SearchAnalyticsModel } from '../../src/modules/appData/models.js';
 import { ReadModelOutboxWorker, readModelOutboxWorker } from '../../src/modules/readModels/readModelOutbox.worker.js';
 import { readModelSyncService, upsertProjectionWithTimestampGuard } from '../../src/modules/readModels/readModelSync.service.js';
@@ -142,6 +142,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '026_company_jurisdiction.sql',
         '027_outbox_events.sql',
         '028_outbox_dead_letter.sql',
+        '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
       ];
 
       await client.query(`
@@ -177,7 +178,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
   });
 
   // 1. Migration tracking & Core Tables Verification
-  it('1. All migrations 001-028 are tracked and all core tables exist in PostgreSQL schema', async () => {
+  it('1. All migrations 001-029 are tracked and all core tables exist in PostgreSQL schema', async () => {
     const migRes = await pool.query('SELECT version FROM schema_migrations ORDER BY version ASC');
     expect(migRes.rows.map((r) => r.version)).toEqual([
       '001_auth_tables.sql',
@@ -208,6 +209,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '026_company_jurisdiction.sql',
       '027_outbox_events.sql',
       '028_outbox_dead_letter.sql',
+      '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
     ]);
 
     const expectedTables = [
@@ -4007,6 +4009,347 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       env.OWNER_PHONE = prevPhone;
       env.OWNER_PASSWORD_HASH = prevHash;
       env.SESSION_COOKIE_SECURE = prevCookieSecure;
+    }
+  });
+
+  it('36. Release #029 Real PG + Mongo: Legacy dead-letter backfill, NULL lease reclaim, Hindi/Punjabi search, keyset ties, freshness separation & IXSCAN', async () => {
+    const targetMongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/khata_integration_test';
+    if (process.env.MONGODB_ENABLED === 'false') {
+      return;
+    }
+
+    const prevMongoEnabled = env.MONGODB_ENABLED;
+    const prevMongoUri = env.MONGODB_URI;
+    const prevMongoDb = env.MONGODB_DATABASE;
+    const prevPhone = env.OWNER_PHONE;
+    const prevHash = env.OWNER_PASSWORD_HASH;
+    const prevCookieSecure = env.SESSION_COOKIE_SECURE;
+
+    const TEST_PHONE = '9876543210';
+    const TEST_PASSWORD = 'KhataOwner@2026!';
+    const TEST_HASH =
+      '$argon2id$v=19$m=65536,t=3,p=4$r8d9IIf2qq2yux48fjyp5g$NguetCKE39Yg87iMcaXXeobM8JnU+B4/BKokFoI5yR4';
+
+    env.OWNER_PHONE = TEST_PHONE;
+    env.OWNER_PASSWORD_HASH = TEST_HASH;
+    env.SESSION_COOKIE_SECURE = false;
+    env.MONGODB_ENABLED = true;
+    env.MONGODB_URI = targetMongoUri;
+    env.MONGODB_DATABASE = 'khata_integration_test';
+
+    const app = createApp({ useMemoryStoreInTest: true });
+    let worker: ReadModelOutboxWorker | null = null;
+
+    try {
+      await readModelOutboxWorker.stop();
+      worker = new ReadModelOutboxWorker({ batchSize: 10, dashboardRefreshMinIntervalMs: 1000 });
+      await connectMongo({ uri: targetMongoUri, dbName: 'khata_integration_test' });
+      expect(isMongoReady()).toBe(true);
+
+      vi.spyOn(appPool, 'connect').mockImplementation(() => pool.connect());
+      vi.spyOn(appPool, 'query').mockImplementation((...args: any[]) => (pool.query as any)(...args));
+
+      for (const Model of [...READ_MODEL_MODELS, ...APP_DATA_MODELS]) {
+        await Model.deleteMany({});
+      }
+
+      // 1. Verify Migration 029 unresolved partial index exists in real PostgreSQL
+      const unresolvedIdxCheck = await pool.query(
+        `SELECT indexname FROM pg_indexes
+         WHERE tablename = 'app_outbox_events' AND indexname = 'idx_app_outbox_unresolved_created'`
+      );
+      expect(unresolvedIdxCheck.rows).toHaveLength(1);
+
+      // Simulate legacy exhausted failed event (attempt_count = max_attempts, dead_letter_at = NULL)
+      // and run Migration 029 backfill statement to confirm transition
+      const legacyInsert = await pool.query(
+        `INSERT INTO app_outbox_events (aggregate_type, aggregate_id, event_type, payload, status, attempt_count, max_attempts, dead_letter_at)
+         VALUES ('product', '999999', 'product.updated', '{}'::jsonb, 'failed', 5, 5, NULL)
+         RETURNING id`
+      );
+      const legacyId = Number(legacyInsert.rows[0].id);
+
+      const migration029Sql = fs.readFileSync(
+        path.join(process.cwd(), 'migrations', '029_outbox_legacy_dead_letter_and_perf_indexes.sql'),
+        'utf8'
+      );
+      await pool.query(migration029Sql);
+
+      const backfilledRow = await pool.query(
+        `SELECT status, dead_letter_at FROM app_outbox_events WHERE id = $1`,
+        [legacyId]
+      );
+      expect(backfilledRow.rows[0].status).toBe('dead_letter');
+      expect(backfilledRow.rows[0].dead_letter_at).not.toBeNull();
+
+      // 2. Create Indic Hindi & Punjabi products and customers in PostgreSQL
+      const hindiProd = await productsService.createProduct(
+        '\u0906\u0936\u0940\u0930\u094d\u0935\u093e\u0926 \u091a\u0915\u094d\u0915\u0940 \u0906\u091f\u093e 5\u0915\u093f\u0932\u094b',
+        '245.00',
+        '11010000',
+        '000991122'
+      );
+      const punjabiProd = await productsService.createProduct(
+        '\u0a30\u0a3e\u0a1c\u0a27\u0a3e\u0a28\u0a40 \u0a2c\u0a47\u0a38\u0a28 \u0a26\u0a3e\u0a32',
+        '140.00',
+        '0713',
+        '000991133'
+      );
+      const multiPageProdA = await productsService.createProduct('CursorProbe Item Alpha', '110.00', '1001', null);
+      const multiPageProdB = await productsService.createProduct('CursorProbe Item Beta', '120.00', '1002', null);
+
+      const hindiCust = await khataService.createCustomer({
+        name: '\u0930\u093e\u091c\u0947\u0936\u094d\u0935\u0930\u0940 \u0936\u0930\u094d\u092e\u093e',
+        phone: '+91 98112-23344',
+      });
+      const punjabiCust = await khataService.createCustomer({
+        name: '\u0a39\u0a30\u0a2a\u0a4d\u0a30\u0a40\u0a24 \u0a38\u0a3f\u0a70\u0a18',
+        phone: '09876543210',
+      });
+      const tieCustA = await khataService.createCustomer({
+        name: 'Equal Null Activity A',
+        phone: '9833300001',
+      });
+      const tieCustB = await khataService.createCustomer({
+        name: 'Equal Null Activity B',
+        phone: '9833300002',
+      });
+
+      // Insert an orphan processing row with NULL lease_expires_at -> worker must reclaim & process it
+      const orphanRes = await pool.query(
+        `INSERT INTO app_outbox_events (aggregate_type, aggregate_id, event_type, payload, status, attempt_count, max_attempts, lease_expires_at, next_attempt_at)
+         VALUES ('product', $1, 'product.updated', '{}'::jsonb, 'processing', 1, 5, NULL, NOW())
+         RETURNING id`,
+        [String(hindiProd.id)]
+      );
+      const orphanId = Number(orphanRes.rows[0].id);
+
+      while ((await worker.drainNow()).processedCount > 0) {
+        // Drain all outbox events into real MongoDB
+      }
+
+      const orphanAfter = await pool.query(`SELECT status, lease_expires_at FROM app_outbox_events WHERE id = $1`, [orphanId]);
+      expect(orphanAfter.rows[0].status).toBe('processed');
+      expect(orphanAfter.rows[0].lease_expires_at).toBeNull();
+
+      const agent = request.agent(app);
+      const preLoginCsrf = (await agent.get('/api/v1/auth/csrf-token').expect(200)).body.csrfToken;
+      await agent
+        .post('/api/v1/auth/login')
+        .set('X-CSRF-Token', preLoginCsrf)
+        .send({ phone: TEST_PHONE, password: TEST_PASSWORD })
+        .expect(200);
+
+      // 3. Indic Unicode Product Search (Devanagari + Gurmukhi) & Exact Barcode Preservation
+      const hindiSearchRes = await agent
+        .get('/api/v1/products?search=' + encodeURIComponent('\u0906\u091f\u093e'))
+        .expect(200);
+      expect(hindiSearchRes.body.data.some((p: any) => p.id === hindiProd.id)).toBe(true);
+      expect(hindiSearchRes.body.pagination.totalIsExact).toBe(true);
+
+      const punjabiSearchRes = await agent
+        .get('/api/v1/products?search=' + encodeURIComponent('\u0a26\u0a3e\u0a32'))
+        .expect(200);
+      expect(punjabiSearchRes.body.data.some((p: any) => p.id === punjabiProd.id)).toBe(true);
+
+      // Token >12 chars (exercises Mongoose SchemaArray $elemMatch range filter without CastError)
+      const noMatchLongTokenRes = await agent
+        .get('/api/v1/products?search=zzzznomatch999abc')
+        .expect(200);
+      expect(noMatchLongTokenRes.body.data).toHaveLength(0);
+
+      // Zero PG fallback check on exact leading-zero barcode lookup
+      const barcodeRes = await agent.get('/api/v1/products/barcode/000991122').expect(200);
+      expect(barcodeRes.body.data.id).toBe(hindiProd.id);
+      expect(barcodeRes.body.data.barcode).toBe('000991122');
+
+      // Unfiltered browse serves exact snapshot count in O(1); multi-page search skips redundant countDocuments
+      const unfilteredBounded = await agent.get('/api/v1/products?limit=1').expect(200);
+      expect(unfilteredBounded.body.pagination.hasMore).toBe(true);
+      expect(typeof unfilteredBounded.body.pagination.total).toBe('number');
+      expect(unfilteredBounded.body.pagination.totalIsExact).toBe(true);
+
+      const boundedSearchPage1 = await agent.get('/api/v1/products?search=CursorProbe&limit=1').expect(200);
+      expect(boundedSearchPage1.body.pagination.hasMore).toBe(true);
+      expect(boundedSearchPage1.body.pagination.total).toBeNull();
+      expect(boundedSearchPage1.body.pagination.totalIsExact).toBe(false);
+      expect(typeof boundedSearchPage1.body.pagination.nextCursor).toBe('string');
+
+      const boundedSearchPage2 = await agent
+        .get(
+          '/api/v1/products?search=CursorProbe&limit=1&cursor=' +
+            encodeURIComponent(boundedSearchPage1.body.pagination.nextCursor)
+        )
+        .expect(200);
+      expect(boundedSearchPage1.body.data.map((p: any) => p.id)).toContain(multiPageProdA.id);
+      expect(boundedSearchPage2.body.data.map((p: any) => p.id)).toContain(multiPageProdB.id);
+
+      // Real MongoDB executionStats confirms IXSCAN (never COLLSCAN) for prefix range query
+      const explainPlan = await ProductSearchModel.collection
+        .find({ normalizedName: { $gte: 'r', $lt: 's' }, isArchived: false })
+        .sort({ normalizedName: 1, productId: 1 })
+        .limit(26)
+        .explain('executionStats');
+      expect(JSON.stringify(explainPlan)).toContain('IXSCAN');
+      expect(JSON.stringify(explainPlan)).not.toContain('COLLSCAN');
+
+      // 4. Unicode Customer Search (+91 / 0 phone variants + Hindi/Punjabi) & Tie-Broken Deep Keyset Pagination
+      const hindiCustRes = await agent
+        .get('/api/v1/khata/customers?search=' + encodeURIComponent('\u0930\u093e\u091c\u0947\u0936\u094d\u0935\u0930\u0940'))
+        .expect(200);
+      expect(hindiCustRes.body.customers.some((c: any) => c.id === hindiCust.id)).toBe(true);
+
+      const punjabiCustRes = await agent
+        .get('/api/v1/khata/customers?search=' + encodeURIComponent('\u0a39\u0a30\u0a2a\u0a4d\u0a30\u0a40\u0a24'))
+        .expect(200);
+      expect(punjabiCustRes.body.customers.some((c: any) => c.id === punjabiCust.id)).toBe(true);
+
+      const phoneSearchRes = await agent.get('/api/v1/khata/customers?search=9811223344').expect(200);
+      expect(phoneSearchRes.body.customers.some((c: any) => c.id === hindiCust.id)).toBe(true);
+
+      // Traverse ALL customers with limit=1 (including equal 0.00 balance & null lastActivityAt ties)
+      const collectedIds: number[] = [];
+      let nextCursor: string | null = null;
+      let guardLoop = 0;
+      while (guardLoop < 20) {
+        guardLoop += 1;
+        const url = nextCursor
+          ? `/api/v1/khata/customers?limit=1&cursor=${encodeURIComponent(nextCursor)}`
+          : '/api/v1/khata/customers?limit=1';
+        const page = await agent.get(url).expect(200);
+        for (const c of page.body.customers) {
+          collectedIds.push(c.id);
+        }
+        if (!page.body.pagination.hasMore) break;
+        nextCursor = page.body.pagination.nextCursor;
+      }
+      expect(new Set(collectedIds).size).toBe(collectedIds.length);
+      expect(collectedIds).toContain(hindiCust.id);
+      expect(collectedIds).toContain(punjabiCust.id);
+      expect(collectedIds).toContain(tieCustA.id);
+      expect(collectedIds).toContain(tieCustB.id);
+
+      // Replaying an empty-search cursor on a search filter query must return HTTP 400
+      const page1ForReplay = await agent.get('/api/v1/khata/customers?limit=1').expect(200);
+      if (page1ForReplay.body.pagination.nextCursor) {
+        await agent
+          .get(
+            '/api/v1/khata/customers?search=different&limit=1&cursor=' +
+              encodeURIComponent(page1ForReplay.body.pagination.nextCursor)
+          )
+          .expect(400);
+      }
+
+      // 5. Projection vs Dashboard Freshness Timestamp Separation in Real MongoDB
+      const pastDashTs = new Date(Date.now() - 10 * 60_000);
+      await DashboardSnapshotModel.updateOne(
+        { snapshotKey: '__global__' },
+        { $set: { lastDashboardRefreshAt: pastDashTs, lastProjectionSyncAt: pastDashTs } }
+      );
+      const updProd = await pool.query(
+        `UPDATE products SET buying_price = '250.00', updated_at = NOW() WHERE id = $1 RETURNING id`,
+        [hindiProd.id]
+      );
+      expect(updProd.rows).toHaveLength(1);
+      await readModelSyncService.applyOutboxBatch(
+        [
+          {
+            id: orphanId + 1000,
+            event_id: 'evt-proj-fresh',
+            aggregate_type: 'product',
+            aggregate_id: String(hindiProd.id),
+            event_type: 'product.updated',
+            payload: {},
+            created_at: new Date(),
+          },
+        ],
+        { skipDashboardSnapshot: true }
+      );
+      const snapAfter = await DashboardSnapshotModel.findOne({ snapshotKey: '__global__' }).lean();
+      expect(new Date(snapAfter!.lastProjectionSyncAt!).getTime()).toBeGreaterThan(pastDashTs.getTime());
+      expect(new Date(snapAfter!.lastDashboardRefreshAt!).getTime()).toBe(pastDashTs.getTime());
+    } finally {
+      vi.restoreAllMocks();
+      await worker?.stop().catch(() => {});
+      await readModelOutboxWorker.stop().catch(() => {});
+      await disconnectMongo().catch(() => {});
+      env.MONGODB_ENABLED = prevMongoEnabled;
+      env.MONGODB_URI = prevMongoUri;
+      env.MONGODB_DATABASE = prevMongoDb;
+      env.OWNER_PHONE = prevPhone;
+      env.OWNER_PASSWORD_HASH = prevHash;
+      env.SESSION_COOKIE_SECURE = prevCookieSecure;
+    }
+  });
+
+  it('37. Release #029 Concurrency: Simultaneous Payment Allocations & Udhar Creations Preserve Exact Balance Under Row Locks', async () => {
+    vi.spyOn(appPool, 'connect').mockImplementation(() => pool.connect());
+    vi.spyOn(appPool, 'query').mockImplementation((...args: any[]) => (pool.query as any)(...args));
+
+    try {
+      const prod = await productsService.createProduct('Concurrent Rice Bag', '90.00', '1006', null);
+      const cust = await khataService.createCustomer({
+        name: 'Concurrent Payment Customer',
+        phone: '9855500011',
+      });
+
+      await khataService.createTransaction({
+        customer: { id: cust.id, name: cust.name, phone: cust.phone },
+        items: [{ productId: prod.id, quantity: '5', sellingPrice: '100.00' }],
+        initialPayment: '0.00',
+        note: 'Concurrency baseline \u20b9500',
+      });
+
+      // Fire two simultaneous \u20b9400.00 payments against a \u20b9500.00 balance -> strictly ONE must succeed!
+      const [p1, p2] = await Promise.allSettled([
+        khataService.recordPayment(cust.id, '400.00', 'Race payment A'),
+        khataService.recordPayment(cust.id, '400.00', 'Race payment B'),
+      ]);
+
+      const fulfilledCount = [p1, p2].filter((r) => r.status === 'fulfilled').length;
+      const rejectedCount = [p1, p2].filter((r) => r.status === 'rejected').length;
+      expect(fulfilledCount).toBe(1);
+      expect(rejectedCount).toBe(1);
+
+      const balanceRes = await pool.query(
+        `SELECT
+           COALESCE((SELECT SUM(total_amount) FROM udhar_transactions WHERE customer_id = $1), 0)::numeric(14,2) AS total_udhar,
+           COALESCE((SELECT SUM(amount) FROM payments WHERE customer_id = $1), 0)::numeric(14,2) AS total_paid,
+           COALESCE((SELECT SUM(amount) FROM payment_allocations WHERE customer_id = $1), 0)::numeric(14,2) AS total_alloc`,
+        [cust.id]
+      );
+      expect(Number(balanceRes.rows[0].total_udhar)).toBe(500);
+      expect(Number(balanceRes.rows[0].total_paid)).toBe(400);
+      expect(Number(balanceRes.rows[0].total_alloc)).toBe(400);
+
+      // Simultaneous Udhar creations for the same customer must both persist with exact sum
+      const [tx1, tx2] = await Promise.all([
+        khataService.createTransaction({
+          customer: { id: cust.id, name: cust.name, phone: cust.phone },
+          items: [{ productId: prod.id, quantity: '1.50', sellingPrice: '100.00' }],
+          initialPayment: '50.00',
+          note: 'Concurrent tx 1',
+        }),
+        khataService.createTransaction({
+          customer: { id: cust.id, name: cust.name, phone: cust.phone },
+          items: [{ productId: prod.id, quantity: '2.50', sellingPrice: '100.00' }],
+          initialPayment: '100.00',
+          note: 'Concurrent tx 2',
+        }),
+      ]);
+      expect(tx1).toBeTruthy();
+      expect(tx2).toBeTruthy();
+
+      const postTxRes = await pool.query(
+        `SELECT
+           COALESCE((SELECT SUM(total_amount) FROM udhar_transactions WHERE customer_id = $1), 0)::numeric(14,2) AS total_udhar,
+           COALESCE((SELECT SUM(amount) FROM payments WHERE customer_id = $1), 0)::numeric(14,2) AS total_paid`,
+        [cust.id]
+      );
+      expect(Number(postTxRes.rows[0].total_udhar)).toBe(900); // 500 + 150 + 250
+      expect(Number(postTxRes.rows[0].total_paid)).toBe(550);  // 400 + 50 + 100
+    } finally {
+      vi.restoreAllMocks();
     }
   });
 });

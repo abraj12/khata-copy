@@ -9,7 +9,13 @@ export interface SearchablePickerProps<T> {
   placeholder: string;
   searchPlaceholder: string;
   pageSize?: number;
-  onSearch: (query: string, offset: number, limit: number, signal: AbortSignal) => Promise<RemoteSearchResult<T>>;
+  onSearch: (
+    query: string,
+    offset: number,
+    limit: number,
+    signal: AbortSignal,
+    cursor?: string | null
+  ) => Promise<RemoteSearchResult<T>>;
   onSelect: (item: T) => void;
   onClear?: () => void;
   getOptionKey: (item: T) => string | number;
@@ -82,6 +88,7 @@ export function SearchablePicker<T>({
     enabled: isOpen,
     pageSize,
     debounceMs: 280,
+    getItemKey: getOptionKey,
   });
 
   // Focus trap for mobile bottom sheet modal

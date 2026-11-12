@@ -102,8 +102,11 @@ describe('Khata Owner Authentication & Application Security Test Suite', () => {
           {
             version: '028_outbox_dead_letter.sql',
           },
+          {
+            version: '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
+          },
           ],
-          rowCount: 28,
+          rowCount: 29,
         } as any;
       }
       return { rows: [], rowCount: 0 } as any;

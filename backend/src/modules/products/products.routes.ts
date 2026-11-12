@@ -91,7 +91,7 @@ const productSearchQuerySchema = z.object({
   search: z.string().max(100).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(25),
   offset: z.coerce.number().int().min(0).default(0),
-  cursor: z.string().max(256).optional(),
+  cursor: z.string().max(512).optional(),
 });
 
 const createProductSchema = z.object({
@@ -225,6 +225,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         data: result.products,
         pagination: {
           total: result.total,
+          totalIsExact: result.totalIsExact ?? (result.total !== null),
           limit: result.limit,
           offset: result.offset,
           hasMore: result.hasMore,
@@ -237,7 +238,11 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     }
 
     const { products, pagination } = await productsService.listActiveProducts(parsed.data);
-    res.json({ success: true, data: products, pagination });
+    res.json({
+      success: true,
+      data: products,
+      pagination: { ...pagination, totalIsExact: false },
+    });
   } catch (err) {
     if (err instanceof InvalidPaginationCursorError) {
       res.status(400).json({ success: false, code: err.code, message: err.message });
@@ -399,8 +404,8 @@ router.post(
       try {
         updated = await productsService.attachProductImage(id, objectKey);
       } catch (attachErr) {
-        // Safe cleanup: delete orphaned R2 object if DB attachment fails
-        await storageService.deleteObject(objectKey);
+        // Safe cleanup: best-effort delete of orphaned R2 object if DB attachment fails
+        await storageService.deleteObject(objectKey).catch(() => {});
         throw attachErr;
       }
 

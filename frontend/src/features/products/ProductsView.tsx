@@ -19,6 +19,11 @@ import {
 import { formatCurrency, safeDecimal, parseStrictDecimal } from '../../lib/formatters.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import {
+  buildPaginatedSearchParams,
+  CursorPaginationMeta,
+  mergeUniqueById,
+} from '../../types/pagination.js';
+import {
   uploadAndAttachProductImage,
   removeProductImage,
   resolveImageUrl,
@@ -43,16 +48,14 @@ interface Product {
 
 export const ProductsView: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
-  const [pagination, setPagination] = useState<{
-    limit: number;
-    offset: number;
-    hasMore: boolean;
-    nextOffset: number | null;
-  }>({
+  const [pagination, setPagination] = useState<CursorPaginationMeta>({
     limit: 25,
     offset: 0,
     hasMore: false,
     nextOffset: null,
+    nextCursor: null,
+    total: null,
+    totalIsExact: false,
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -149,7 +152,12 @@ export const ProductsView: React.FC = () => {
     };
   }, []);
 
-  const fetchProducts = async (searchQuery: string = '', offset: number = 0, append: boolean = false) => {
+  const fetchProducts = async (
+    searchQuery: string = '',
+    offset: number = 0,
+    append: boolean = false,
+    cursor: string | null = null
+  ) => {
     if (fetchProductsAbortRef.current) {
       fetchProductsAbortRef.current.abort();
     }
@@ -166,26 +174,45 @@ export const ProductsView: React.FC = () => {
           setProducts([]);
         }
       }
+      const qs = buildPaginatedSearchParams({
+        search: searchQuery,
+        limit: 25,
+        offset,
+        cursor,
+      });
       const res = await apiClient<{
         success: boolean;
         products?: Product[];
         data?: Product[];
-        pagination?: { limit: number; offset: number; hasMore: boolean; nextOffset: number | null };
-      }>(
-        `/api/v1/products?search=${encodeURIComponent(searchQuery)}&limit=25&offset=${offset}`,
-        { signal: controller.signal }
-      );
+        pagination?: CursorPaginationMeta;
+      }>(`/api/v1/products?${qs.toString()}`, { signal: controller.signal });
 
       if (currentReqId !== fetchProductsRequestIdRef.current) return;
 
       const items = res.data.products || res.data.data || [];
-      const pag = res.data.pagination || { limit: 25, offset, hasMore: false, nextOffset: null };
+      const pag: CursorPaginationMeta = res.data.pagination || {
+        limit: 25,
+        offset,
+        hasMore: false,
+        nextOffset: null,
+        nextCursor: null,
+        total: null,
+        totalIsExact: false,
+      };
       if (append) {
-        setProducts((prev) => [...prev, ...items]);
+        setProducts((prev) => mergeUniqueById(prev, items));
       } else {
         setProducts(items);
       }
-      setPagination(pag);
+      setPagination({
+        limit: pag.limit ?? 25,
+        offset: pag.offset ?? 0,
+        hasMore: Boolean(pag.hasMore),
+        nextOffset: pag.hasMore ? (pag.nextOffset ?? null) : null,
+        nextCursor: pag.hasMore ? (pag.nextCursor ?? null) : null,
+        total: pag.total ?? null,
+        totalIsExact: pag.totalIsExact,
+      });
     } catch (err) {
       if (currentReqId !== fetchProductsRequestIdRef.current) return;
       if ((err as Error).name === 'AbortError') return;
@@ -199,13 +226,19 @@ export const ProductsView: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchProducts(debouncedSearch, 0, false);
+    fetchProducts(debouncedSearch, 0, false, null);
   }, [debouncedSearch]);
 
   const handleLoadMore = () => {
-    if (pagination.hasMore && pagination.nextOffset !== null && !isLoadingMore) {
-      fetchProducts(debouncedSearch, pagination.nextOffset, true);
-    }
+    if (!pagination.hasMore || isLoadingMore) return;
+    const useCursor = typeof pagination.nextCursor === 'string' && pagination.nextCursor.length > 0;
+    if (!useCursor && pagination.nextOffset === null) return;
+    fetchProducts(
+      debouncedSearch,
+      pagination.nextOffset ?? 0,
+      true,
+      useCursor ? pagination.nextCursor : null
+    );
   };
 
   const validatePrice = (priceStr: string): boolean => {

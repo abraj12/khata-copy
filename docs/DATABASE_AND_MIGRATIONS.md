@@ -1,9 +1,9 @@
 # Khata — Database Schema & Migrations Guide
 
 **Document Status:** Canonical & Implemented  
-**Last Verified:** 2026-11-01  
-**Database Engine:** PostgreSQL 16 (Neon Serverless)  
-**Schema Version:** 009  
+**Last Verified:** 2026-11-12  
+**Database Engine:** PostgreSQL 16–18 (Neon Serverless)  
+**Schema Version:** 029  
 
 ---
 
@@ -27,6 +27,21 @@ Migrations are executed sequentially via `backend/scripts/migrate.ts` using dire
 | **012** | `012_normal_bills.sql` | Creates `normal_bills` and `normal_bill_items` tables for non-GST standard retail billing. |
 | **013** | `013_customer_address.sql` | Adds nullable `address` column to `customers` table for billing and invoice autofill. |
 | **014** | `014_billing_quantity_and_sequences.sql` | Standardizes billing item quantities to 2-decimal scale unconstrained `NUMERIC` and synchronizes sequence counters atomically. |
+| **015** | `015_product_barcode.sql` | Adds nullable `barcode` column to `products`, active partial unique index (`idx_products_barcode_active`), and barcode lookup index. |
+| **016** | `016_quotations.sql` | Creates `quotation_number_seq`, `quotation_settings`, `quotations`, and `quotation_items` with indexes for status/date filtering. |
+| **017** | `017_quotation_conversion_financial_fields.sql` | Adds quotation discount/conversion financial snapshot columns on `normal_bills` and `gst_invoices`. |
+| **018** | `018_numbering_and_legacy_data_integrity.sql` | Synchronizes quotation numbering sequences and tightens legacy numeric/data invariants. |
+| **019** | `019_customer_tax_integrity_and_idempotency.sql` | Adds nullable customer `state`/`state_code`, bill tax snapshot hardening, and 24-hour `idempotency_keys` expiration. |
+| **020** | `020_supplier_management.sql` | Creates `suppliers` (partial unique normalized name/phone/GSTIN indexes) and `supplier_purchase_bills` schemas. |
+| **021** | `021_supplier_financial_integrity.sql` | Adds `supplier_payments`, `supplier_payment_reversals`, `supplier_payment_allocations`, and `supplier_payment_allocation_reversals`. |
+| **022** | `022_supplier_operational_hardening.sql` | Adds `supplier_purchase_bill_cancellations` and append-only audit mutation triggers on reversal/cancellation tables. |
+| **023** | `023_supplier_audit_truncate_guard.sql` | Adds statement-level `BEFORE TRUNCATE` triggers preventing accidental erasure of supplier financial audit logs. |
+| **024** | `024_home_dashboard_profitability.sql` | Snapshots item-level buying cost onto bill items and creates `business_expenses` ledger with active/date index. |
+| **025** | `025_performance_reporting_hardening.sql` | Adds timestamp/date reporting indexes across `customers`, `payments`, `udhar_transactions`, and supplier audit tables. |
+| **026** | `026_company_jurisdiction.sql` | Adds configurable `jurisdiction` text column on `quotation_settings` for PDF headers/footers. |
+| **027** | `027_outbox_events.sql` | Creates transactional `app_outbox_events` table and partial ready/processing-lease/aggregate indexes (`idx_app_outbox_*`). |
+| **028** | `028_outbox_dead_letter.sql` | Adds `dead_letter_at`, expands status CHECK constraint to `'dead_letter'`, and adds `idx_app_outbox_dead_letter`. |
+| **029** | `029_outbox_legacy_dead_letter_and_perf_indexes.sql` | Backfills legacy exhausted `'failed'` events (`attempt_count >= max_attempts`) into `'dead_letter'`, adds `idx_app_outbox_unresolved_created` partial index for `O(log N)` backlog probes, and conditionally creates `pg_trgm` GIN indexes (`idx_products_active_name_trgm`, `idx_customers_active_name_trgm`) when role privileges allow. |
 
 ---
 

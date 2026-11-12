@@ -40,23 +40,65 @@ export function normalizeSearchText(value: string | null | undefined): string {
   return value.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-export function buildSearchTokens(parts: Array<string | null | undefined>): string[] {
-  const tokens = new Set<string>();
+/**
+ * Splits normalized Unicode text into searchable words while keeping combining marks
+ * (Unicode \p{M}, e.g. Devanagari/Gurmukhi matras and halants) attached to base letters.
+ */
+export function tokenizeSearchText(value: string | null | undefined): string[] {
+  const clean = normalizeSearchText(value);
+  if (!clean) return [];
+  return clean.split(/[^\p{L}\p{M}\p{N}]+/u).filter(Boolean);
+}
+
+function addTokenPrefixes(
+  tokens: Set<string>,
+  parts: Array<string | null | undefined>,
+  maxTokens = 96
+): void {
   for (const part of parts) {
+    if (tokens.size >= maxTokens) return;
     const clean = normalizeSearchText(part);
     if (!clean) continue;
-    tokens.add(clean);
-    for (const word of clean.split(/[^a-z0-9]+/)) {
-      if (!word) continue;
+    if (tokens.size < maxTokens) {
+      tokens.add(clean);
+    }
+    for (const word of tokenizeSearchText(clean)) {
+      if (tokens.size >= maxTokens) return;
       tokens.add(word);
       // Bounded prefix tokens (min 2 chars, max 12 chars) for fast indexed autocomplete
       const maxLen = Math.min(word.length, 12);
       for (let len = 2; len <= maxLen; len++) {
+        if (tokens.size >= maxTokens) return;
         tokens.add(word.slice(0, len));
       }
     }
   }
-  return Array.from(tokens).slice(0, 96);
+}
+
+export function buildSearchTokens(
+  parts: Array<string | null | undefined>,
+  maxTokens = 96
+): string[] {
+  const tokens = new Set<string>();
+  addTokenPrefixes(tokens, parts, maxTokens);
+  return Array.from(tokens);
+}
+
+/**
+ * Builds product search tokens prioritizing product name BEFORE HSN/barcode so
+ * long numeric identifiers cannot crowd name prefixes out of the token budget.
+ */
+export function buildProductSearchTokens(
+  input: {
+    name?: string | null;
+    hsnCode?: string | null;
+    barcode?: string | null;
+  },
+  maxTokens = 96
+): string[] {
+  const tokens = new Set<string>();
+  addTokenPrefixes(tokens, [input.name, input.hsnCode, input.barcode], maxTokens);
+  return Array.from(tokens);
 }
 
 export function buildCustomerSearchTokens(
@@ -65,22 +107,36 @@ export function buildCustomerSearchTokens(
   normalizedPhone: string | null | undefined
 ): string[] {
   const tokens = new Set<string>();
-  const digits = String(normalizedPhone || phone || '').replace(/\D/g, '');
-  if (digits.length > 0) {
+  // Reserve primary budget for normalized customer name tokens (English, Hindi, Punjabi, etc.)
+  addTokenPrefixes(tokens, [name], 68);
+
+  const phoneVariants = new Set<string>();
+  for (const rawSource of [normalizedPhone, phone]) {
+    const digits = String(rawSource || '').replace(/\D/g, '');
+    if (!digits) continue;
+    phoneVariants.add(digits);
+    if (digits.startsWith('91') && digits.length === 12) {
+      phoneVariants.add(digits.slice(2));
+    } else if (digits.startsWith('0') && digits.length === 11) {
+      phoneVariants.add(digits.slice(1));
+    }
+  }
+
+  for (const digits of phoneVariants) {
+    if (tokens.size >= 96) break;
     tokens.add(digits);
     const maxPref = Math.min(digits.length, 15);
     for (let len = 2; len <= maxPref; len++) {
+      if (tokens.size >= 96) break;
       tokens.add(digits.slice(0, len));
     }
     const maxSuf = Math.min(digits.length, 10);
     for (let len = 3; len <= maxSuf; len++) {
+      if (tokens.size >= 96) break;
       tokens.add(digits.slice(-len));
     }
   }
-  for (const tok of buildSearchTokens([name, phone, normalizedPhone])) {
-    tokens.add(tok);
-    if (tokens.size >= 96) break;
-  }
+
   return Array.from(tokens);
 }
 
@@ -231,6 +287,7 @@ export interface OutboxBatchEventRow {
 
 export class ReadModelSyncService {
   private dashboardSnapshotQueue: Promise<void> = Promise.resolve();
+  private pendingProjectionSyncAt: Date | null = null;
   /**
    * Projects a single product from PostgreSQL into MongoDB product_search.
    * Deliberately excludes any stock/inventory/quantity fields.
@@ -276,7 +333,11 @@ export class ReadModelSyncService {
         productId: pid,
         name: String(row.name),
         normalizedName: normalizeSearchText(row.name),
-        searchTokens: buildSearchTokens([row.hsn_code, row.barcode, row.name]),
+        searchTokens: buildProductSearchTokens({
+          name: String(row.name),
+          hsnCode: row.hsn_code ? String(row.hsn_code) : null,
+          barcode: row.barcode ? String(row.barcode) : null,
+        }),
         buyingPrice: toFixedMoney(row.buying_price),
         hsnCode: row.hsn_code ? String(row.hsn_code) : null,
         normalizedHsnCode: row.hsn_code ? normalizeSearchText(row.hsn_code) : null,
@@ -1085,18 +1146,20 @@ export class ReadModelSyncService {
    */
   public syncDashboardSnapshot(
     client: PoolClient,
-    lastOutboxEventId: number | null = null
+    lastOutboxEventId: number | null = null,
+    options: { updateProjectionSyncAt?: boolean | Date } = {}
   ): Promise<void> {
     const run = this.dashboardSnapshotQueue
       .catch(() => {})
-      .then(() => this.executeSyncDashboardSnapshot(client, lastOutboxEventId));
+      .then(() => this.executeSyncDashboardSnapshot(client, lastOutboxEventId, options));
     this.dashboardSnapshotQueue = run;
     return run;
   }
 
   private async executeSyncDashboardSnapshot(
     client: PoolClient,
-    lastOutboxEventId: number | null = null
+    lastOutboxEventId: number | null = null,
+    options: { updateProjectionSyncAt?: boolean | Date } = {}
   ): Promise<void> {
     const custPosRes = await client.query(`
         WITH customer_udhar AS (
@@ -1273,23 +1336,34 @@ export class ReadModelSyncService {
     const { readModelsQueryService } = await import('./readModelsQuery.service.js');
     const allTimeOverview = await readModelsQueryService.buildOverviewFromAnalytics(globals, {});
     const now = new Date();
+    const explicitProjectionDate =
+      options.updateProjectionSyncAt instanceof Date
+        ? options.updateProjectionSyncAt
+        : options.updateProjectionSyncAt === true
+          ? now
+          : this.pendingProjectionSyncAt;
+
+    const updateDoc: Record<string, unknown> = {
+      $set: {
+        snapshotKey: '__global__',
+        globals,
+        allTimeOverview: allTimeOverview as unknown as Record<string, unknown>,
+        lastOutboxEventId: effectiveOutboxId,
+        lastSyncedAt: now,
+        lastDashboardRefreshAt: now,
+        projectionUpdatedAt: now,
+      },
+    };
+    if (explicitProjectionDate) {
+      updateDoc.$max = {
+        lastProjectionSyncAt: explicitProjectionDate,
+      };
+      this.pendingProjectionSyncAt = null;
+    }
 
     await DashboardSnapshotModel.updateOne(
       { snapshotKey: '__global__' },
-      {
-        $set: {
-          snapshotKey: '__global__',
-          globals,
-          allTimeOverview: allTimeOverview as unknown as Record<string, unknown>,
-          lastOutboxEventId: effectiveOutboxId,
-          lastSyncedAt: now,
-          lastDashboardRefreshAt: now,
-          projectionUpdatedAt: now,
-        },
-        $max: {
-          lastProjectionSyncAt: now,
-        },
-      },
+      updateDoc,
       { upsert: true }
     );
   }
@@ -1383,13 +1457,20 @@ export class ReadModelSyncService {
         if (maxOutboxId > 0) {
           maxFields.lastOutboxEventId = maxOutboxId;
         }
-        await DashboardSnapshotModel.updateOne(
+        const updateRes = await DashboardSnapshotModel.updateOne(
           { snapshotKey: '__global__' },
           { $max: maxFields },
           { upsert: false }
         );
+        if (!updateRes || Number((updateRes as any).matchedCount || 0) === 0) {
+          this.pendingProjectionSyncAt = projectionNow;
+        } else {
+          this.pendingProjectionSyncAt = null;
+        }
       } else {
-        await this.syncDashboardSnapshot(client, maxOutboxId > 0 ? maxOutboxId : null);
+        await this.syncDashboardSnapshot(client, maxOutboxId > 0 ? maxOutboxId : null, {
+          updateProjectionSyncAt: true,
+        });
       }
     } finally {
       client.release();
@@ -1491,7 +1572,7 @@ export class ReadModelSyncService {
 
       // 4. Sync recent activity and global dashboard snapshot
       await this.syncRecentActivities(client, 40);
-      await this.syncDashboardSnapshot(client, null);
+      await this.syncDashboardSnapshot(client, null, { updateProjectionSyncAt: true });
     } finally {
       client.release();
     }

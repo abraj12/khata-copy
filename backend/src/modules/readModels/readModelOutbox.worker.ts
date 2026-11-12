@@ -216,6 +216,7 @@ export class ReadModelOutboxWorker {
   public async flushDashboardRefresh(): Promise<void> {
     if (this.stopped || !isMongoEnabled() || !isMongoReady()) return;
     if (this.activeDashboardRefreshPromise) {
+      this.dashboardRefreshDirty = true;
       await this.activeDashboardRefreshPromise;
       return;
     }
@@ -231,6 +232,11 @@ export class ReadModelOutboxWorker {
         throw err;
       } finally {
         this.activeDashboardRefreshPromise = null;
+        if (!this.stopped && this.dashboardRefreshDirty && !this.dashboardRefreshTimer) {
+          const elapsed = Date.now() - this.lastDashboardRefreshAt;
+          const remainingMs = Math.max(25, this.dashboardRefreshMinIntervalMs - elapsed);
+          this.scheduleCoalescedDashboardRefreshTimer(remainingMs);
+        }
       }
     })();
 
@@ -461,15 +467,14 @@ export class ReadModelOutboxWorker {
     try {
       await client.query('BEGIN');
 
-      // Reclaim leases held by crashed workers first
+      // Reclaim expired or missing leases held by crashed workers first
       await client.query(
         `UPDATE app_outbox_events
          SET status = 'pending',
              lease_expires_at = NULL,
              updated_at = NOW()
          WHERE status = 'processing'
-           AND lease_expires_at IS NOT NULL
-           AND lease_expires_at < NOW()`
+           AND (lease_expires_at IS NULL OR lease_expires_at < NOW())`
       );
 
       const res = await client.query(
@@ -628,9 +633,22 @@ export class ReadModelOutboxWorker {
               OR (status = 'failed' AND attempt_count >= max_attempts)
          )::int AS dead_letter_count,
          MIN(
-           GREATEST(0, EXTRACT(EPOCH FROM (next_attempt_at - NOW())) * 1000)
+           GREATEST(
+             0,
+             EXTRACT(
+               EPOCH FROM (
+                 (
+                   CASE
+                     WHEN status = 'processing'
+                       THEN COALESCE(lease_expires_at, NOW() - INTERVAL '1 millisecond')
+                     ELSE next_attempt_at
+                   END
+                 ) - NOW()
+               )
+             ) * 1000
+           )
          ) FILTER (
-           WHERE status = 'pending'
+           WHERE status IN ('pending', 'processing')
               OR (status = 'failed' AND attempt_count < max_attempts)
          ) AS next_delay_ms
        FROM app_outbox_events`
@@ -644,7 +662,7 @@ export class ReadModelOutboxWorker {
     const rawDelay =
       row.next_delay_ms !== null && row.next_delay_ms !== undefined
         ? Math.ceil(Number(row.next_delay_ms))
-        : 1000;
+        : this.leaseDurationMs;
     return {
       hasBacklog: true,
       nextDelayMs: Math.min(this.maxBackoffMs, Math.max(500, rawDelay)),

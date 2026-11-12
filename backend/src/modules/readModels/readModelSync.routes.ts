@@ -7,6 +7,12 @@ import { notifyOutboxCommitted } from './outbox.service.js';
 import { readModelOutboxWorker } from './readModelOutbox.worker.js';
 import { readModelsQueryService } from './readModelsQuery.service.js';
 
+function toIsoOrNull(value: unknown): string | null {
+  if (!value) return null;
+  const parsed = new Date(value as string | number | Date);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
 const router = Router();
 
 router.use(requireOwnerSession);
@@ -47,7 +53,8 @@ router.get('/status', async (_req: Request, res: Response, next: NextFunction) =
           updated_at
         FROM app_outbox_events
         WHERE status = 'dead_letter'
-        ORDER BY dead_letter_at DESC NULLS LAST, id DESC
+           OR (status = 'failed' AND attempt_count >= max_attempts)
+        ORDER BY COALESCE(dead_letter_at, updated_at, created_at) DESC, id DESC
         LIMIT 20
       `),
     ]);
@@ -102,9 +109,9 @@ router.get('/status', async (_req: Request, res: Response, next: NextFunction) =
             attemptCount: Number(row.attempt_count),
             maxAttempts: Number(row.max_attempts),
             lastError: row.last_error ? String(row.last_error) : null,
-            deadLetterAt: row.dead_letter_at ? new Date(row.dead_letter_at).toISOString() : null,
-            createdAt: new Date(row.created_at).toISOString(),
-            updatedAt: new Date(row.updated_at).toISOString(),
+            deadLetterAt: toIsoOrNull(row.dead_letter_at),
+            createdAt: toIsoOrNull(row.created_at),
+            updatedAt: toIsoOrNull(row.updated_at),
           })),
         },
         snapshot: snapshot

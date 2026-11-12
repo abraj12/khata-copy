@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import Decimal from 'decimal.js';
 import { env } from '../../config/env.js';
 import { isMongoReady } from '../../config/mongodb.js';
@@ -12,7 +13,7 @@ import {
   type DailyAnalyticsDoc,
   type DashboardSnapshotGlobals,
 } from './models.js';
-import { normalizeSearchText } from './readModelSync.service.js';
+import { normalizeSearchText, tokenizeSearchText } from './readModelSync.service.js';
 import type {
   DashboardActivityItem,
   DashboardExpenseCategoryTotal,
@@ -70,48 +71,150 @@ export class ReadModelUnavailableError extends Error {
   }
 }
 
-function encodeCursor(payload: Record<string, unknown>): string {
-  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+const MAX_CURSOR_ENCODED_LEN = 512;
+
+function hashCursorQuery(normalizedQuery: string): string {
+  if (!normalizedQuery) return '';
+  return crypto.createHash('sha256').update(normalizedQuery, 'utf8').digest('base64url').slice(0, 12);
 }
 
-function decodeProductCursor(rawCursor: string): { n: string; id: number } {
+function computeCursorSignature(bodyB64: string): string {
+  const secret = env.SESSION_SECRET || 'khata-cursor-fallback-secret-key-min-32';
+  return crypto.createHmac('sha256', secret).update(bodyB64, 'utf8').digest('base64url').slice(0, 16);
+}
+
+function encodeCursor(payload: Record<string, unknown>, normalizedQuery = ''): string {
+  const fullPayload = { ...payload, v: 1, q: hashCursorQuery(normalizedQuery) };
+  const bodyB64 = Buffer.from(JSON.stringify(fullPayload), 'utf8').toString('base64url');
+  const sig = computeCursorSignature(bodyB64);
+  return `${bodyB64}.${sig}`;
+}
+
+function decodeVerifiedCursorPayload(rawCursor: string, expectedQuery = ''): Record<string, unknown> {
+  if (!rawCursor || rawCursor.length > MAX_CURSOR_ENCODED_LEN) {
+    throw new InvalidPaginationCursorError();
+  }
+  const dotIdx = rawCursor.indexOf('.');
+  if (dotIdx <= 0 || dotIdx !== rawCursor.lastIndexOf('.')) {
+    throw new InvalidPaginationCursorError();
+  }
+  const bodyB64 = rawCursor.slice(0, dotIdx);
+  const sig = rawCursor.slice(dotIdx + 1);
+  if (!bodyB64 || !sig) {
+    throw new InvalidPaginationCursorError();
+  }
+  const expectedSig = computeCursorSignature(bodyB64);
+  const sigBuf = Buffer.from(sig, 'utf8');
+  const expBuf = Buffer.from(expectedSig, 'utf8');
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    throw new InvalidPaginationCursorError();
+  }
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(Buffer.from(rawCursor, 'base64url').toString('utf8'));
-    if (
-      !parsed ||
-      typeof parsed !== 'object' ||
-      typeof parsed.n !== 'string' ||
-      typeof parsed.id !== 'number' ||
-      !Number.isSafeInteger(parsed.id) ||
-      parsed.id <= 0
-    ) {
-      throw new InvalidPaginationCursorError();
-    }
-    return { n: parsed.n, id: parsed.id };
+    parsed = JSON.parse(Buffer.from(bodyB64, 'base64url').toString('utf8'));
   } catch {
     throw new InvalidPaginationCursorError();
   }
-}
-
-function decodeCustomerCursor(rawCursor: string): { o: number; l: number | null; id: number } {
-  try {
-    const parsed = JSON.parse(Buffer.from(rawCursor, 'base64url').toString('utf8'));
-    if (
-      !parsed ||
-      typeof parsed !== 'object' ||
-      typeof parsed.o !== 'number' ||
-      !Number.isFinite(parsed.o) ||
-      (parsed.l !== null && (typeof parsed.l !== 'number' || !Number.isFinite(parsed.l))) ||
-      typeof parsed.id !== 'number' ||
-      !Number.isSafeInteger(parsed.id) ||
-      parsed.id <= 0
-    ) {
-      throw new InvalidPaginationCursorError();
-    }
-    return { o: parsed.o, l: parsed.l, id: parsed.id };
-  } catch {
+  if (!parsed || typeof parsed !== 'object' || (parsed as Record<string, unknown>).v !== 1) {
     throw new InvalidPaginationCursorError();
   }
+  const rec = parsed as Record<string, unknown>;
+  if (rec.q !== hashCursorQuery(expectedQuery)) {
+    throw new InvalidPaginationCursorError('Pagination cursor does not match the active search query.');
+  }
+  return rec;
+}
+
+function decodeProductCursor(
+  rawCursor: string,
+  expectedQuery = ''
+): { n: string; id: number } {
+  const parsed = decodeVerifiedCursorPayload(rawCursor, expectedQuery);
+  if (
+    parsed.t !== 'p' ||
+    typeof parsed.n !== 'string' ||
+    typeof parsed.id !== 'number' ||
+    !Number.isSafeInteger(parsed.id) ||
+    parsed.id <= 0
+  ) {
+    throw new InvalidPaginationCursorError();
+  }
+  return { n: parsed.n, id: parsed.id };
+}
+
+function decodeCustomerCursor(
+  rawCursor: string,
+  expectedQuery = ''
+): { o: number; l: number | null; id: number } {
+  const parsed = decodeVerifiedCursorPayload(rawCursor, expectedQuery);
+  if (
+    parsed.t !== 'c' ||
+    typeof parsed.o !== 'number' ||
+    !Number.isFinite(parsed.o) ||
+    (parsed.l !== null && (typeof parsed.l !== 'number' || !Number.isFinite(parsed.l))) ||
+    typeof parsed.id !== 'number' ||
+    !Number.isSafeInteger(parsed.id) ||
+    parsed.id <= 0
+  ) {
+    throw new InvalidPaginationCursorError();
+  }
+  return { o: parsed.o, l: parsed.l, id: parsed.id };
+}
+
+/**
+ * Builds an indexed B-tree lexicographic half-open interval [prefix, upperBound)
+ * so prefix queries execute as pure IXSCAN bounds without regex scanning.
+ * Falls back safely to an anchored regex only when the final code unit is a UTF-16 surrogate or 0xFFFF.
+ */
+function buildLexicographicPrefixFilter(prefix: string): Record<string, unknown> {
+  if (!prefix) return { $gte: '' };
+  const lastCode = prefix.charCodeAt(prefix.length - 1);
+  if (lastCode >= 0xd800 && lastCode <= 0xdfff) {
+    return { $regex: `^${escapeRegex(prefix)}` };
+  }
+  if (lastCode < 0xffff) {
+    const upperBound = prefix.slice(0, -1) + String.fromCharCode(lastCode + 1);
+    return { $gte: prefix, $lt: upperBound };
+  }
+  return { $regex: `^${escapeRegex(prefix)}` };
+}
+
+function buildSearchTokenFilter(rawTokens: string[]): Record<string, unknown> | null {
+  const longTokens = Array.from(new Set(rawTokens.filter((t) => t.length >= 2)));
+  if (longTokens.length === 0) return null;
+  // Sort longest (most selective) tokens first so Mongo intersects narrowest index key lists first
+  longTokens.sort((a, b) => b.length - a.length);
+  const exactTokens: string[] = [];
+  const longRangeClauses: Record<string, unknown>[] = [];
+  for (const tok of longTokens) {
+    if (tok.length <= 12) {
+      exactTokens.push(tok);
+    } else {
+      exactTokens.push(tok.slice(0, 12));
+      longRangeClauses.push({ searchTokens: { $elemMatch: buildLexicographicPrefixFilter(tok) } });
+    }
+  }
+  const uniqueExact = Array.from(new Set(exactTokens));
+  const exactClause: Record<string, unknown> =
+    uniqueExact.length === 1
+      ? { searchTokens: uniqueExact[0] }
+      : { searchTokens: { $all: uniqueExact } };
+  if (longRangeClauses.length === 0) {
+    return exactClause;
+  }
+  return { $and: [exactClause, ...longRangeClauses] };
+}
+
+function normalizePhoneSearchVariants(trimmedSearch: string): string[] {
+  const digits = trimmedSearch.replace(/\D/g, '');
+  if (!digits) return [];
+  const variants = new Set<string>([digits]);
+  if (digits.startsWith('91') && digits.length === 12) {
+    variants.add(digits.slice(2));
+  } else if (digits.startsWith('0') && digits.length === 11) {
+    variants.add(digits.slice(1));
+  }
+  return Array.from(variants);
 }
 
 function toFixedMoney(value: Decimal.Value): string {
@@ -273,9 +376,11 @@ export class ReadModelsQueryService {
         ? { lastSyncedAt: snapshotOrDate }
         : snapshotOrDate;
 
+    const hasSeparatedFields =
+      input.lastProjectionSyncAt !== undefined || input.lastDashboardRefreshAt !== undefined;
     const dashboardMeta = this.parseTimestamp(input.lastDashboardRefreshAt ?? input.lastSyncedAt);
     const projectionMeta = this.parseTimestamp(
-      input.lastProjectionSyncAt ?? input.lastSyncedAt ?? input.lastDashboardRefreshAt
+      hasSeparatedFields ? input.lastProjectionSyncAt : input.lastSyncedAt
     );
 
     const primaryMeta = scope === 'projection' ? projectionMeta : dashboardMeta;
@@ -283,7 +388,8 @@ export class ReadModelsQueryService {
       !primaryMeta.valid ||
       (primaryMeta.ageMs !== null && primaryMeta.ageMs > staleThresholdMs) ||
       this.outboxBacklogPending ||
-      this.deadLetterCount > 0;
+      this.deadLetterCount > 0 ||
+      this.lastWorkerError !== null;
 
     return {
       source: 'mongodb',
@@ -827,46 +933,39 @@ export class ReadModelsQueryService {
       created_at: string;
       updated_at: string;
     }>;
-    total: number;
+    total: number | null;
+    totalIsExact?: boolean;
     limit: number;
     offset: number;
     hasMore: boolean;
     nextOffset: number | null;
-    nextCursor: string | null;
+    nextCursor?: string | null;
     syncStatus: ReadModelSyncStatus;
   }> {
     this.assertMongoReady();
 
     const limit = Math.min(Math.max(1, Math.trunc(params.limit ?? 25)), 200);
-    const trimmedCursor = params.cursor?.trim();
-    const decodedCursor = trimmedCursor ? decodeProductCursor(trimmedCursor) : null;
-    const offset = decodedCursor ? 0 : Math.max(0, Math.trunc(params.offset ?? 0));
     const trimmedSearch = (params.search ?? '').trim();
+    const normalizedSearch = trimmedSearch.length > 0 ? normalizeSearchText(trimmedSearch) : '';
+    const trimmedCursor = params.cursor?.trim();
+    const decodedCursor = trimmedCursor ? decodeProductCursor(trimmedCursor, normalizedSearch) : null;
+    const offset = decodedCursor ? 0 : Math.max(0, Math.trunc(params.offset ?? 0));
 
     const baseFilter: Record<string, unknown> = { isArchived: false };
     if (trimmedSearch.length > 0) {
-      const normalized = normalizeSearchText(trimmedSearch);
-      const escapedNormalized = escapeRegex(normalized);
-      const tokens = normalized.split(/[^a-z0-9]+/).filter(Boolean).slice(0, 8);
+      const tokens = tokenizeSearchText(normalizedSearch).slice(0, 8);
 
       const orClauses: Record<string, unknown>[] = [
-        { normalizedName: { $regex: `^${escapedNormalized}` } },
+        { normalizedName: buildLexicographicPrefixFilter(normalizedSearch) },
         { barcode: trimmedSearch },
-        { normalizedHsnCode: { $regex: `^${escapeRegex(normalized)}` } },
+        { normalizedHsnCode: buildLexicographicPrefixFilter(normalizedSearch) },
       ];
       if (trimmedSearch.length === 1) {
-        orClauses.push({ barcode: { $regex: `^${escapeRegex(trimmedSearch)}` } });
+        orClauses.push({ barcode: buildLexicographicPrefixFilter(trimmedSearch) });
       }
-      if (tokens.length > 0) {
-        const longTokens = tokens.filter((t) => t.length >= 2);
-        const tokenMatchers = (longTokens.length > 0 ? longTokens : tokens).map((tok) =>
-          tok.length >= 2 && tok.length <= 12 ? tok : new RegExp(`^${escapeRegex(tok)}`)
-        );
-        if (longTokens.length > 0) {
-          orClauses.push({
-            searchTokens: tokenMatchers.length === 1 ? tokenMatchers[0] : { $all: tokenMatchers },
-          });
-        }
+      const tokenFilter = buildSearchTokenFilter(tokens);
+      if (tokenFilter) {
+        orClauses.push(tokenFilter);
       }
       baseFilter.$or = orClauses;
     }
@@ -892,7 +991,7 @@ export class ReadModelsQueryService {
       findQuery.skip(offset).limit(limit + 1);
     }
 
-    const [rawDocs, snapshot, filteredCount] = await Promise.all([
+    const [rawDocs, snapshot] = await Promise.all([
       findQuery.lean(),
       DashboardSnapshotModel.findOne({ snapshotKey: '__global__' })
         .select({
@@ -902,20 +1001,26 @@ export class ReadModelsQueryService {
           'globals.activeProducts': 1,
         })
         .lean(),
-      trimmedSearch.length > 0
-        ? ProductSearchModel.countDocuments(baseFilter)
-        : Promise.resolve(null),
     ]);
 
     const hasMore = rawDocs.length > limit;
     const docs = hasMore ? rawDocs.slice(0, limit) : rawDocs;
 
-    const total =
-      filteredCount !== null
-        ? filteredCount
-        : typeof snapshot?.globals?.activeProducts === 'number'
-          ? snapshot.globals.activeProducts
-          : await ProductSearchModel.countDocuments(baseFilter);
+    let total: number | null = null;
+    let totalIsExact = false;
+    if (trimmedSearch.length === 0) {
+      if (typeof snapshot?.globals?.activeProducts === 'number') {
+        total = snapshot.globals.activeProducts;
+        totalIsExact = true;
+      } else {
+        total = await ProductSearchModel.countDocuments({ isArchived: false });
+        totalIsExact = true;
+      }
+    } else if (!decodedCursor && offset === 0 && !hasMore) {
+      // Single-page search match gives exact total with zero extra countDocuments round-trip
+      total = docs.length;
+      totalIsExact = true;
+    }
 
     const r2Enabled = isR2Configured();
     const products = docs.map((doc) => ({
@@ -936,12 +1041,13 @@ export class ReadModelsQueryService {
     const lastDoc = docs.length > 0 ? docs[docs.length - 1] : null;
     const nextCursor =
       hasMore && lastDoc
-        ? encodeCursor({ n: lastDoc.normalizedName, id: lastDoc.productId })
+        ? encodeCursor({ t: 'p', n: lastDoc.normalizedName, id: lastDoc.productId }, normalizedSearch)
         : null;
 
     return {
       products,
       total,
+      totalIsExact,
       limit,
       offset,
       hasMore,
@@ -1059,53 +1165,47 @@ export class ReadModelsQueryService {
       outstanding: string;
       created_at: string;
     }>;
-    total: number;
+    total: number | null;
+    totalIsExact?: boolean;
     limit: number;
     offset: number;
     hasMore: boolean;
     nextOffset: number | null;
-    nextCursor: string | null;
+    nextCursor?: string | null;
     syncStatus: ReadModelSyncStatus;
   }> {
     this.assertMongoReady();
 
     const limit = Math.min(Math.max(1, Math.trunc(params.limit ?? 25)), 200);
-    const trimmedCursor = params.cursor?.trim();
-    const decodedCursor = trimmedCursor ? decodeCustomerCursor(trimmedCursor) : null;
-    const offset = decodedCursor ? 0 : Math.max(0, Math.trunc(params.offset ?? 0));
     const trimmedSearch = (params.search ?? '').trim();
+    const normalizedSearch = trimmedSearch.length > 0 ? normalizeSearchText(trimmedSearch) : '';
+    const trimmedCursor = params.cursor?.trim();
+    const decodedCursor = trimmedCursor ? decodeCustomerCursor(trimmedCursor, normalizedSearch) : null;
+    const offset = decodedCursor ? 0 : Math.max(0, Math.trunc(params.offset ?? 0));
 
     const baseFilter: Record<string, unknown> = { isArchived: false };
     if (trimmedSearch.length > 0) {
-      const normalized = normalizeSearchText(trimmedSearch);
-      const digitsOnly = trimmedSearch.replace(/\D/g, '');
-      const escapedNormalized = escapeRegex(normalized);
-      const tokens = normalized.split(/[^a-z0-9]+/).filter(Boolean).slice(0, 8);
+      const phoneVariants = normalizePhoneSearchVariants(trimmedSearch);
+      const tokens = tokenizeSearchText(normalizedSearch).slice(0, 8);
+      const nonPurePhoneTokens = tokens.filter((t) => !/^\d+$/.test(t) || phoneVariants.length === 0);
 
       const orClauses: Record<string, unknown>[] = [
-        { normalizedName: { $regex: `^${escapedNormalized}` } },
+        { normalizedName: buildLexicographicPrefixFilter(normalizedSearch) },
       ];
-      if (digitsOnly.length > 0) {
-        orClauses.push({ normalizedPhone: { $regex: `^${escapeRegex(digitsOnly)}` } });
-        if (digitsOnly.length >= 3) {
+      for (const variant of phoneVariants) {
+        orClauses.push({ normalizedPhone: buildLexicographicPrefixFilter(variant) });
+        if (variant.length >= 3) {
           orClauses.push({
             searchTokens:
-              digitsOnly.length <= 15
-                ? digitsOnly
-                : new RegExp(`^${escapeRegex(digitsOnly)}`),
+              variant.length <= 15
+                ? variant
+                : { $elemMatch: buildLexicographicPrefixFilter(variant) },
           });
         }
       }
-      if (tokens.length > 0) {
-        const longTokens = tokens.filter((t) => t.length >= 2);
-        if (longTokens.length > 0) {
-          const matchers = longTokens.map((tok) =>
-            tok.length <= 12 ? tok : new RegExp(`^${escapeRegex(tok)}`)
-          );
-          orClauses.push({
-            searchTokens: matchers.length === 1 ? matchers[0] : { $all: matchers },
-          });
-        }
+      const tokenFilter = buildSearchTokenFilter(nonPurePhoneTokens.length > 0 ? nonPurePhoneTokens : tokens);
+      if (tokenFilter) {
+        orClauses.push(tokenFilter);
       }
       baseFilter.$or = orClauses;
     }
@@ -1149,7 +1249,7 @@ export class ReadModelsQueryService {
       findQuery.skip(offset).limit(limit + 1);
     }
 
-    const [rawDocs, snapshot, filteredCount] = await Promise.all([
+    const [rawDocs, snapshot] = await Promise.all([
       findQuery.lean(),
       DashboardSnapshotModel.findOne({ snapshotKey: '__global__' })
         .select({
@@ -1159,20 +1259,25 @@ export class ReadModelsQueryService {
           'globals.activeCustomers': 1,
         })
         .lean(),
-      trimmedSearch.length > 0
-        ? CustomerSummaryModel.countDocuments(baseFilter)
-        : Promise.resolve(null),
     ]);
 
     const hasMore = rawDocs.length > limit;
     const docs = hasMore ? rawDocs.slice(0, limit) : rawDocs;
 
-    const total =
-      filteredCount !== null
-        ? filteredCount
-        : typeof snapshot?.globals?.activeCustomers === 'number'
-          ? snapshot.globals.activeCustomers
-          : await CustomerSummaryModel.countDocuments(baseFilter);
+    let total: number | null = null;
+    let totalIsExact = false;
+    if (trimmedSearch.length === 0) {
+      if (typeof snapshot?.globals?.activeCustomers === 'number') {
+        total = snapshot.globals.activeCustomers;
+        totalIsExact = true;
+      } else {
+        total = await CustomerSummaryModel.countDocuments({ isArchived: false });
+        totalIsExact = true;
+      }
+    } else if (!decodedCursor && offset === 0 && !hasMore) {
+      total = docs.length;
+      totalIsExact = true;
+    }
 
     const customers = docs.map((doc) => ({
       id: doc.customerId,
@@ -1190,16 +1295,21 @@ export class ReadModelsQueryService {
     const lastDoc = docs.length > 0 ? docs[docs.length - 1] : null;
     const nextCursor =
       hasMore && lastDoc
-        ? encodeCursor({
-            o: Number(lastDoc.outstandingPaise || 0),
-            l: lastDoc.lastActivityAt ? new Date(lastDoc.lastActivityAt).getTime() : null,
-            id: lastDoc.customerId,
-          })
+        ? encodeCursor(
+            {
+              t: 'c',
+              o: Number(lastDoc.outstandingPaise || 0),
+              l: lastDoc.lastActivityAt ? new Date(lastDoc.lastActivityAt).getTime() : null,
+              id: lastDoc.customerId,
+            },
+            normalizedSearch
+          )
         : null;
 
     return {
       customers,
       total,
+      totalIsExact,
       limit,
       offset,
       hasMore,
