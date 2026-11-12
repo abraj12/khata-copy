@@ -6,7 +6,7 @@ The application operates as a unified multi-platform system:
 - **Web Interface:** Responsive Progressive Web App (PWA) served from Vercel (`https://erp.algions.in`).
 - **Android App:** Native Android Trusted Web Activity (TWA) pointing directly to the production website (`in.algions.khata`). Updates deployed to the web interface reflect immediately in the Android application without requiring an APK rebuild.
 - **Backend API:** Express REST API running on Node.js 22 LTS on Render (`https://erp-api.algions.in`).
-- **Database:** PostgreSQL 16 on Neon Serverless with strict ACID constraints and connection pooling.
+- **Database:** PostgreSQL (Neon Serverless / PostgreSQL 16–18) with strict ACID constraints and connection pooling, paired with MongoDB read-model projections (`product_search`, `customer_summaries`, `dashboard_snapshots`, `daily_analytics`, `recent_activity`) and app-data stores.
 
 ---
 
@@ -32,7 +32,7 @@ npm ci
 # 2. Compile both backend and frontend workspaces
 npm run build
 
-# 3. Execute automated test suites (251 tests across backend and frontend)
+# 3. Execute automated unit test suites (328 backend + 146 frontend tests)
 npm test
 
 # 4. Validate Digital Asset Links configuration for TWA
@@ -92,6 +92,19 @@ Migrations list:
 14. `014_billing_quantity_and_sequences.sql`: Safe database sequences for invoice numbers and billing quantity constraints.
 15. `015_product_barcode.sql`: Optional product barcode support with partial unique index on active products (`idx_products_barcode_active`).
 16. `016_quotations.sql`: Corporate quotation management, quotation items, sequential numbering (`QT-001`), and configurable company settings.
+17. `017_quotation_conversion_financial_fields.sql`: Quotation-to-bill discount and conversion financial tracking columns on normal bills and GST invoices.
+18. `018_numbering_and_legacy_data_integrity.sql`: Quotation numbering sequence backfill and legacy data integrity hardening.
+19. `019_customer_tax_integrity_and_idempotency.sql`: Customer state/tax metadata constraints, bill tax snapshot hardening, and idempotency key TTL expiry.
+20. `020_supplier_management.sql`: Suppliers catalog (`uq_suppliers_active_*`), purchase bills, and supplier purchase item schemas.
+21. `021_supplier_financial_integrity.sql`: Supplier payments, FIFO bill allocations, payment reversals, and allocation reversal ledger.
+22. `022_supplier_operational_hardening.sql`: Supplier bill cancellation ledger and append-only audit mutation triggers.
+23. `023_supplier_audit_truncate_guard.sql`: Statement-level `TRUNCATE` protection on append-only supplier audit tables.
+24. `024_home_dashboard_profitability.sql`: Cost-of-goods snapshots on bill lines and `business_expenses` ledger.
+25. `025_performance_reporting_hardening.sql`: Reporting date/timestamp indexes across customers, payments, transactions, and supplier audit tables.
+26. `026_company_jurisdiction.sql`: Configurable company jurisdiction text on `quotation_settings`.
+27. `027_outbox_events.sql`: Transactional `app_outbox_events` table and partial ready/lease/aggregate indexes for MongoDB synchronization.
+28. `028_outbox_dead_letter.sql`: `dead_letter` status constraint, `dead_letter_at` timestamp, and dead-letter audit index.
+29. `029_outbox_legacy_dead_letter_and_perf_indexes.sql`: Legacy exhausted outbox row backfill into `dead_letter`, selective unresolved index (`idx_app_outbox_unresolved_created`), and optional `pg_trgm` GIN search fallback indexes (`idx_products_active_name_trgm`, `idx_customers_active_name_trgm`).
 
 ### 3.3 Running Workspaces Locally
 
@@ -158,8 +171,12 @@ Because the application is a Trusted Web Activity, ordinary frontend updates dep
 | Document | Purpose & Contents |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | High-level topology, single-shopkeeper data flow, TWA architecture, and security design |
-| [docs/DATABASE_AND_MIGRATIONS.md](docs/DATABASE_AND_MIGRATIONS.md) | Schema specification (all 16 migrations), FIFO payment allocation, and composite foreign keys |
+| [docs/DATABASE_AND_MIGRATIONS.md](docs/DATABASE_AND_MIGRATIONS.md) | Schema specification (all 29 migrations), FIFO payment allocation, and composite foreign keys |
+| [docs/MONGODB_ARCHITECTURE.md](docs/MONGODB_ARCHITECTURE.md) | MongoDB read-model synchronization, outbox worker, cursor pagination, and indexing architecture |
 | [docs/ANDROID_RELEASE.md](docs/ANDROID_RELEASE.md) | TWA build guide, keystore signing configuration, and Digital Asset Links verification |
 | [docs/ACCESSIBILITY_AND_THEMES.md](docs/ACCESSIBILITY_AND_THEMES.md) | 9 tactile neumorphic appearance presets, CSS gradient rendering, and keyboard accessibility |
-| [docs/REMEDIATION_REPORT.md](docs/REMEDIATION_REPORT.md) | Verification and audit reconciliation report with full test evidence |
+| [docs/RELEASE_029_REMEDIATION_REPORT.md](docs/RELEASE_029_REMEDIATION_REPORT.md) | Release #029 remediation findings, verification matrix, and production hardening report |
+| [docs/RELEASE_029_PERFORMANCE_BENCHMARKS.md](docs/RELEASE_029_PERFORMANCE_BENCHMARKS.md) | Reproducible local MongoDB (`1k`–`100k`) & PostgreSQL outbox/EXPLAIN benchmarks |
+| [docs/ALGORITHM_AND_COMPLEXITY_REVIEW.md](docs/ALGORITHM_AND_COMPLEXITY_REVIEW.md) | Search tokenization, keyset pagination, outbox coalescing, and Big-O complexity review |
+| [docs/REMEDIATION_REPORT.md](docs/REMEDIATION_REPORT.md) | Earlier baseline audit reconciliation report with verification evidence |
 | [docs/REMEDIATION_BASELINE.md](docs/REMEDIATION_BASELINE.md) | Audit trail from baseline commit to current implementation |

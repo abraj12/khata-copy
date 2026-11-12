@@ -158,7 +158,7 @@ export class OfflineBillsService {
     if (opts.search && opts.search.trim()) {
       const cleanSearch = escapeLike(opts.search.trim());
       params.push(`%${cleanSearch}%`);
-      sql += ` WHERE (customer_name ILIKE $${params.length} OR customer_phone ILIKE $${params.length} OR normalized_customer_phone ILIKE $${params.length})`;
+      sql += ` WHERE (customer_name ILIKE $${params.length} ESCAPE '\\' OR customer_phone ILIKE $${params.length} ESCAPE '\\' OR normalized_customer_phone ILIKE $${params.length} ESCAPE '\\')`;
     }
 
     sql += ` ORDER BY created_at DESC, id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;

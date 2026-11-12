@@ -619,7 +619,7 @@ describe('Khata Release #028 — Reliability, Consistency, Neon Optimization & P
             rowCount: 1,
           } as any;
         }
-        if (text.includes('dead_letter_at DESC')) {
+        if (text.includes('ORDER BY') && text.includes('dead_letter_at')) {
           return { rows: [], rowCount: 0 } as any;
         }
         if (text.includes('UPDATE app_outbox_events')) {

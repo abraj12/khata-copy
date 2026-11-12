@@ -22,7 +22,7 @@ import {
 import { resolveProductCostSnapshots } from '../billing/costSnapshot.js';
 import { StorageService } from '../../services/storage.service.js';
 import { AppError } from '../../utils/errors.js';
-import { validateMoneyInput, validateDecimalQuantityInput, resolveValidatedDiscount } from '../../utils/validation.js';
+import { validateMoneyInput, validateDecimalQuantityInput, resolveValidatedDiscount, escapeLike } from '../../utils/validation.js';
 import {
   generateTaxInvoicePdf,
   GstInvoicePdfCompany,
@@ -718,10 +718,10 @@ export class NormalBillsService {
 
     if (query.search?.trim()) {
       conditions.push(`(
-        b.bill_number ILIKE $${pIdx} OR
-        b.customer_name ILIKE $${pIdx}
+        b.bill_number ILIKE $${pIdx} ESCAPE '\\' OR
+        b.customer_name ILIKE $${pIdx} ESCAPE '\\'
       )`);
-      params.push(`%${query.search.trim()}%`);
+      params.push(`%${escapeLike(query.search.trim())}%`);
       pIdx++;
     }
 

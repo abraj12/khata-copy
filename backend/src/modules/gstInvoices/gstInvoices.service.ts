@@ -27,6 +27,7 @@ import {
   validateDecimalQuantityInput,
   resolveValidatedDiscount,
   calculateGstBreakdown,
+  escapeLike,
 } from '../../utils/validation.js';
 import {
   generateTaxInvoicePdf,
@@ -592,8 +593,8 @@ export class GstInvoicesService {
     const params: any[] = [];
 
     if (paramsIn.search && paramsIn.search.trim()) {
-      params.push(`%${paramsIn.search.trim()}%`);
-      conditions.push(`(i.invoice_number ILIKE $${params.length} OR i.customer_name ILIKE $${params.length})`);
+      params.push(`%${escapeLike(paramsIn.search.trim())}%`);
+      conditions.push(`(i.invoice_number ILIKE $${params.length} ESCAPE '\\' OR i.customer_name ILIKE $${params.length} ESCAPE '\\')`);
     }
 
     if (paramsIn.dateFrom) {

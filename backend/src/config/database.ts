@@ -7,6 +7,39 @@ const { Pool } = pg;
 // Parse PostgreSQL 64-bit integers (BIGINT / BIGSERIAL, OID 20) as JavaScript numbers
 pg.types.setTypeParser(20, (val: string) => (val === null ? null : parseInt(val, 10)));
 
+export class TestDatabaseUnavailableError extends Error {
+  public readonly code = 'TEST_DB_UNAVAILABLE';
+
+  constructor(
+    message = 'Unit test attempted real PostgreSQL access without TEST_DATABASE_URL or query/connect spy mock.'
+  ) {
+    super(message);
+    this.name = 'TestDatabaseUnavailableError';
+  }
+}
+
+class UnavailableTestPool {
+  public totalCount = 0;
+  public idleCount = 0;
+  public waitingCount = 0;
+
+  public async query(): Promise<never> {
+    throw new TestDatabaseUnavailableError();
+  }
+
+  public async connect(): Promise<never> {
+    throw new TestDatabaseUnavailableError();
+  }
+
+  public async end(): Promise<void> {
+    return;
+  }
+
+  public on(): this {
+    return this;
+  }
+}
+
 export function resolveDatabasePoolTargets(
   rawEnv: Record<string, string | undefined> = process.env,
   runtimeEnv: {
@@ -18,6 +51,7 @@ export function resolveDatabasePoolTargets(
   pooledConnectionString: string;
   directConnectionString: string;
   isTestDbActive: boolean;
+  isUnitTestUnavailable: boolean;
   ssl: boolean;
 } {
   const { isTestDbActive, testDbUrl } = resolveValidatedTestPoolUrls(rawEnv);
@@ -26,6 +60,17 @@ export function resolveDatabasePoolTargets(
       pooledConnectionString: testDbUrl,
       directConnectionString: testDbUrl,
       isTestDbActive: true,
+      isUnitTestUnavailable: false,
+      ssl: false,
+    };
+  }
+
+  if ((rawEnv.NODE_ENV ?? runtimeEnv.NODE_ENV) === 'test') {
+    return {
+      pooledConnectionString: '',
+      directConnectionString: '',
+      isTestDbActive: false,
+      isUnitTestUnavailable: true,
       ssl: false,
     };
   }
@@ -34,31 +79,36 @@ export function resolveDatabasePoolTargets(
     pooledConnectionString: runtimeEnv.DATABASE_URL_POOLED,
     directConnectionString: runtimeEnv.DATABASE_URL,
     isTestDbActive: false,
-    ssl: runtimeEnv.NODE_ENV === 'test' ? false : true,
+    isUnitTestUnavailable: false,
+    ssl: true,
   };
 }
 
 const resolvedPoolTargets = resolveDatabasePoolTargets();
 
-// Reusable single application connection pool (against Neon pooled endpoint, or validated TEST_DATABASE_URL in tests)
-export const appPool = new Pool({
-  connectionString: resolvedPoolTargets.pooledConnectionString,
-  ssl: resolvedPoolTargets.ssl, // Enforce TLS verification without disabling certificate checks
-  max: env.DB_POOL_MAX,
-  idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT_MS,
-  connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT_MS,
-  query_timeout: env.DB_QUERY_TIMEOUT_MS,
-  keepAlive: true,
-});
+// Reusable single application connection pool (against Neon pooled endpoint, validated TEST_DATABASE_URL, or safe test adapter)
+export const appPool: pg.Pool = resolvedPoolTargets.isUnitTestUnavailable
+  ? (new UnavailableTestPool() as unknown as pg.Pool)
+  : new Pool({
+      connectionString: resolvedPoolTargets.pooledConnectionString,
+      ssl: resolvedPoolTargets.ssl, // Enforce TLS verification without disabling certificate checks
+      max: env.DB_POOL_MAX,
+      idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT_MS,
+      connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT_MS,
+      query_timeout: env.DB_QUERY_TIMEOUT_MS,
+      keepAlive: true,
+    });
 
-// Admin / migration pool (direct endpoint, or validated TEST_DATABASE_URL in tests)
-export const directPool = new Pool({
-  connectionString: resolvedPoolTargets.directConnectionString,
-  ssl: resolvedPoolTargets.ssl,
-  max: env.DB_DIRECT_POOL_MAX,
-  connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT_MS,
-  keepAlive: true,
-});
+// Admin / migration pool (direct endpoint, validated TEST_DATABASE_URL, or safe test adapter)
+export const directPool: pg.Pool = resolvedPoolTargets.isUnitTestUnavailable
+  ? (new UnavailableTestPool() as unknown as pg.Pool)
+  : new Pool({
+      connectionString: resolvedPoolTargets.directConnectionString,
+      ssl: resolvedPoolTargets.ssl,
+      max: env.DB_DIRECT_POOL_MAX,
+      connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT_MS,
+      keepAlive: true,
+    });
 
 export interface DatabasePoolStats {
   totalCount: number;
@@ -134,6 +184,7 @@ export const EXPECTED_MIGRATIONS = [
   '026_company_jurisdiction.sql',
   '027_outbox_events.sql',
   '028_outbox_dead_letter.sql',
+  '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [
