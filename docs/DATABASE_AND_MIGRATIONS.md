@@ -150,3 +150,31 @@ Migration script uses advisory locking (`pg_advisory_lock(987654321)`) and trans
 
 ### Optional `pg_trgm` Capabilities & Observability
 Migration `031` installs `pg_trgm` and optional GIN indexes inside a privilege-safe `DO $$ ... END $$;` handler so constrained managed roles (`insufficient_privilege` / `undefined_file`) never abort deployment. Runtime readiness exposes live capability status (`pgTrgmInstalled`, `presentOptionalIndexes`, `missingOptionalIndexes`, `fallbackSearchMode`) via `inspectSearchIndexCapabilities()` on `GET /api/v1/read-model-sync/status`.
+
+### 4.3 Storage Lifecycle & Worker Claim Fencing (Migration 032)
+Release 032 introduces a single additive migration (`032_storage_lifecycle_and_worker_fencing.sql`) that combines presigned upload intent tracking with atomic worker claim fencing:
+
+```sql
+-- Migration 032: Storage Lifecycle & Worker Claim Fencing
+CREATE TABLE IF NOT EXISTS "storage_upload_intents" (
+  "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "object_key" TEXT NOT NULL,
+  "object_kind" VARCHAR(50) NOT NULL,
+  "reference_type" VARCHAR(50) NOT NULL,
+  "reference_id" VARCHAR(255) NOT NULL,
+  "expected_content_type" VARCHAR(100),
+  "expected_size_bytes" BIGINT,
+  "status" VARCHAR(20) NOT NULL DEFAULT 'issued',
+  "expires_at" TIMESTAMPTZ NOT NULL,
+  "completed_at" TIMESTAMPTZ,
+  "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS "idx_storage_upload_intents_lookup"
+  ON "storage_upload_intents" ("object_key", "status");
+
+CREATE INDEX IF NOT EXISTS "idx_storage_upload_intents_cleanup"
+  ON "storage_upload_intents" ("expires_at")
+  WHERE "status" = 'issued';
+```

@@ -9,6 +9,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import crypto from 'crypto';
 import { env, isR2Configured } from '../config/env.js';
 import { AppError } from '../utils/errors.js';
+import type { UploadIntentKind } from './storageUploadIntent.service.js';
 
 export const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 export const ALLOWED_SUPPLIER_DOC_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
@@ -22,8 +23,7 @@ export type StorageFolder = 'products' | 'offline-bills' | 'supplier-bills';
 export type RejectedUploadCleanupHook = (
   objectKey: string,
   folder: StorageFolder,
-  reason: string,
-  deleteError: unknown
+  reason: string
 ) => Promise<void>;
 
 let rejectedUploadCleanupHook: RejectedUploadCleanupHook | null = null;
@@ -268,6 +268,29 @@ export class StorageService {
     const randomId = crypto.randomUUID();
     const objectKey = `${folder}/${safeReferenceId}/${randomId}.${ext}`;
 
+    const kindMap: Record<string, UploadIntentKind> = {
+      products: 'product_image',
+      'offline-bills': 'offline_bill',
+      'supplier-bills': 'supplier_bill',
+    };
+
+    try {
+      const { storageUploadIntentService } = await import('./storageUploadIntent.service.js');
+      await storageUploadIntentService.registerIntent({
+        objectKey,
+        objectKind: kindMap[folder] || 'other',
+        referenceType: folder,
+        referenceId: safeReferenceId,
+        expectedContentType: cleanContentType,
+        expectedSizeBytes: Math.trunc(sizeBytes),
+        expiresInSeconds: 300,
+      });
+    } catch (intentErr) {
+      if (env.NODE_ENV !== 'test') {
+        throw intentErr;
+      }
+    }
+
     const command = new PutObjectCommand({
       Bucket: env.R2_BUCKET_NAME!,
       Key: objectKey,
@@ -510,6 +533,7 @@ export class StorageService {
     mimeType: string;
     folder: StorageFolder;
     referenceId: string | number;
+    customKey?: string;
   }): Promise<{ objectKey: string; contentType: string; sizeBytes: number }> {
     this.assertConfigured();
 
@@ -551,13 +575,19 @@ export class StorageService {
       );
     }
 
-    // Generate server-controlled random object key
+    // Generate server-controlled random object key or use pre-locked verified custom key
     let ext = 'jpg';
     if (cleanMime === 'image/png') ext = 'png';
     else if (cleanMime === 'image/webp') ext = 'webp';
     else if (cleanMime === 'application/pdf') ext = 'pdf';
-    const randomId = crypto.randomUUID();
-    const objectKey = `${folder}/${safeReferenceId}/${randomId}.${ext}`;
+    let objectKey: string;
+    if (options.customKey) {
+      assertSafeScopedObjectKey(options.customKey, folder, referenceId);
+      objectKey = options.customKey.trim();
+    } else {
+      const randomId = crypto.randomUUID();
+      objectKey = `${folder}/${safeReferenceId}/${randomId}.${ext}`;
+    }
 
     await this.uploadBufferToR2({ buffer, objectKey, contentType: cleanMime });
 
@@ -573,11 +603,11 @@ export class StorageService {
       await this.deleteObject(objectKey);
     } catch (delErr) {
       if (rejectedUploadCleanupHook) {
-        await rejectedUploadCleanupHook(objectKey, folder, reason, delErr).catch((hookErr) => {
-          console.warn('[STORAGE] Rejected-upload cleanup enqueue warning:', (hookErr as Error)?.message);
+        await rejectedUploadCleanupHook(objectKey, folder, reason).catch((hookErr) => {
+          console.warn('[STORAGE] Rejected-upload cleanup warning:', (hookErr as Error)?.message);
         });
       } else {
-        console.warn('[STORAGE] Failed to delete rejected R2 upload:', (delErr as Error)?.message);
+        console.warn('[STORAGE] Failed to clean up rejected R2 object:', (delErr as Error)?.message);
       }
     }
   }

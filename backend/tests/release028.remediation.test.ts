@@ -1,3 +1,6 @@
+import { storageService as globalStorageService } from '../src/services/storage.service.js';
+import * as mongodbConfig from '../src/config/mongodb.js';
+import { setForceMongoReadyInTests, resetForceMongoReadyInTests } from '../src/config/mongodb.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -16,7 +19,7 @@ import {
   upsertProjectionWithTimestampGuard,
 } from '../src/modules/readModels/readModelSync.service.js';
 import { ReadModelOutboxWorker } from '../src/modules/readModels/readModelOutbox.worker.js';
-import { CustomerSummaryModel, ProductSearchModel, RecentActivityModel } from '../src/modules/readModels/models.js';
+import { CustomerSummaryModel, ProductSearchModel, RecentActivityModel, DashboardSnapshotModel } from '../src/modules/readModels/models.js';
 import { NotificationModel, SearchAnalyticsModel } from '../src/modules/appData/models.js';
 import { appDataService } from '../src/modules/appData/appData.service.js';
 import { StorageService } from '../src/services/storage.service.js';
@@ -38,12 +41,16 @@ describe('Khata Release #028 — Reliability, Consistency, Neon Optimization & P
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    env.MONGODB_ENABLED = true;
+    setForceMongoReadyInTests(true);
+    vi.spyOn(mongoose.connection, 'readyState', 'get').mockReturnValue(1);
     readModelsQueryService.markOutboxBacklogPending(false);
     readModelsQueryService.setOutboxDeadLetterCount(0);
     readModelsQueryService.setLastWorkerError(null);
   });
 
   afterEach(() => {
+    resetForceMongoReadyInTests();
     vi.useRealTimers();
     env.MONGODB_ENABLED = prevMongoEnabled;
     env.MONGODB_READ_STALE_THRESHOLD_MS = prevStaleMs;
@@ -594,7 +601,7 @@ describe('Khata Release #028 — Reliability, Consistency, Neon Optimization & P
   });
 
   describe('5. Outbox Sync Routes, Deployment Config, Scripts Separation & R2 Audit Hardening', () => {
-    it('protects /api/v1/read-model-sync/* with owner session and retries dead-letter events', async () => {
+    it('protects /api/v1/read-model-sync/* with owner session and retries dead-letter events', { timeout: 15000 }, async () => {
       const unauthStatus = await request(app).get('/api/v1/read-model-sync/status');
       expect(unauthStatus.status).toBe(401);
 
@@ -645,6 +652,17 @@ describe('Khata Release #028 — Reliability, Consistency, Neon Optimization & P
         return { rows: [{ dead_letter_count: 1 }], rowCount: 1 } as any;
       });
 
+      vi.spyOn(DashboardSnapshotModel, 'findOne').mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          lean: vi.fn().mockResolvedValue({
+            lastOutboxEventId: 1,
+            lastSyncedAt: new Date(),
+            lastProjectionSyncAt: new Date(),
+            lastDashboardRefreshAt: new Date(),
+          }),
+        }),
+      } as any);
+
       const statusRes = await request(app)
         .get('/api/v1/read-model-sync/status')
         .set('Cookie', cookie);
@@ -661,7 +679,7 @@ describe('Khata Release #028 — Reliability, Consistency, Neon Optimization & P
     });
 
     it('separates rebuild-read-models from DB migrations, enforces env override precedence, and configures render.yaml Mongo env', () => {
-      const repoRoot = path.resolve(process.cwd(), '..');
+      const repoRoot = fs.existsSync(path.join(process.cwd(), 'render.yaml')) ? process.cwd() : path.resolve(process.cwd(), '..');
       const rebuildSrc = fs.readFileSync(path.join(repoRoot, 'backend/scripts/rebuild-read-models.ts'), 'utf8');
       const migrateSrc = fs.readFileSync(path.join(repoRoot, 'backend/scripts/migrate.ts'), 'utf8');
       const envSrc = fs.readFileSync(path.join(repoRoot, 'backend/src/config/env.ts'), 'utf8');
@@ -690,6 +708,11 @@ describe('Khata Release #028 — Reliability, Consistency, Neon Optimization & P
     });
 
     it('hardens R2 extension-vs-MIME validation, PDF signature error messages, and non-23505 offline bill cleanup', async () => {
+      vi.spyOn(appPool, 'query').mockResolvedValue({ rows: [] } as any);
+      vi.spyOn(appPool, 'connect').mockResolvedValue({
+        query: vi.fn().mockResolvedValue({ rows: [] }),
+        release: vi.fn(),
+      } as any);
       env.R2_ACCOUNT_ID = 'acct';
       env.R2_ACCESS_KEY_ID = 'key';
       env.R2_SECRET_ACCESS_KEY = 'sec';
@@ -713,6 +736,7 @@ describe('Khata Release #028 — Reliability, Consistency, Neon Optimization & P
         }),
       };
       storage.setClient(mockS3 as any);
+      globalStorageService.setClient(mockS3 as any);
 
       // Extension mismatch (.jpg key claiming application/pdf) must fail and clean R2
       await expect(

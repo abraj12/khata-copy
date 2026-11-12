@@ -141,14 +141,14 @@ export function createApp(options?: { useMemoryStoreInTest?: boolean; customStor
     });
   });
 
-  // 6. Global Mandatory Dependencies Gate (blocks all business routes with 503 if MongoDB is down)
-  app.use(requireMandatoryServices);
-
-  // 7. Session Middleware (PostgreSQL store with 30-day rolling TTL)
+  // 6. Session Middleware (PostgreSQL store with 30-day rolling TTL)
   app.use(createSessionMiddleware(options));
 
-  // 8. CSRF and Origin Protection
+  // 7. CSRF and Origin Protection
   app.use(csrfProtection);
+
+  // 8. Global Mandatory Dependencies Gate (blocks all business routes with 503 if MongoDB is down, except health and logout)
+  app.use(requireMandatoryServices);
 
   // 9. Application Routes
   app.use('/api/v1/auth', authRoutes);

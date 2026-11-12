@@ -32,14 +32,14 @@ npm ci
 # 2. Compile both backend and frontend workspaces
 npm run build
 
-# 3. Execute automated unit test suites (376 backend + 157 frontend tests)
+# 3. Execute automated unit test suites (406 backend tests)
 npm test
 
 # 4. Execute real PostgreSQL + MongoDB integration suite (requires TEST_DATABASE_URL / TEST_MONGODB_URI)
 npm run test:integration
 
-# 5. Execute reproducible 1k-100k performance & EXPLAIN benchmark suite
-npm run benchmark:release031
+# 5. Execute Release 032 performance & EXPLAIN benchmark suite
+npm run benchmark:release032
 
 # 6. Validate Digital Asset Links configuration for TWA
 node frontend/scripts/validate-assetlinks.js

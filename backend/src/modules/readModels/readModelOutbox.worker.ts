@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
 import { env } from '../../config/env.js';
 import { isMongoEnabled, isMongoReady } from '../../config/mongodb.js';
@@ -7,6 +8,7 @@ import { readModelsQueryService } from './readModelsQuery.service.js';
 import { readModelSyncService, type OutboxBatchEventRow } from './readModelSync.service.js';
 
 export interface OutboxWorkerOptions {
+  workerId?: string;
   batchSize?: number;
   leaseDurationMs?: number;
   leaseHeartbeatIntervalMs?: number;
@@ -64,6 +66,10 @@ export function computeOutboxBacklogWakeStatus(
 }
 
 export class ReadModelOutboxWorker {
+  public readonly workerId: string;
+  private listenClient: PoolClient | null = null;
+  private listenReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private listenConnecting = false;
   private readonly batchSize: number;
   private readonly leaseDurationMs: number;
   private readonly leaseHeartbeatIntervalMs: number;
@@ -85,6 +91,7 @@ export class ReadModelOutboxWorker {
   private lastFailureMessage: string | null = null;
 
   constructor(options: OutboxWorkerOptions = {}) {
+    this.workerId = options.workerId ?? `outbox_worker_${process.pid}_${Math.random().toString(36).slice(2, 8)}`;
     this.batchSize = Math.min(Math.max(1, options.batchSize ?? 25), 100);
     this.leaseDurationMs = Math.max(500, options.leaseDurationMs ?? 30_000);
     this.leaseHeartbeatIntervalMs = Math.max(
@@ -189,6 +196,73 @@ export class ReadModelOutboxWorker {
       }
     }
     this.started = false;
+  }
+
+
+  private async setupListenConnection(): Promise<void> {
+    if (this.stopped || this.listenClient || this.listenConnecting) return;
+    this.listenConnecting = true;
+
+    try {
+      const client = await appPool.connect();
+      if (this.stopped) {
+        client.release();
+        return;
+      }
+
+      client.on('notification', (msg) => {
+        if (msg.channel === 'app_outbox_events') {
+          void this.triggerDrain();
+        }
+      });
+
+      client.on('error', (err) => {
+        console.warn('[OUTBOX WORKER] LISTEN client error:', err.message);
+        this.cleanupListenConnection(true);
+      });
+
+      client.on('end', () => {
+        this.cleanupListenConnection(true);
+      });
+
+      await client.query('LISTEN app_outbox_events');
+      this.listenClient = client;
+      console.log('[OUTBOX WORKER] Subscribed to PostgreSQL LISTEN app_outbox_events.');
+
+      void this.triggerDrain();
+    } catch (err) {
+      console.warn('[OUTBOX WORKER] Failed establishing LISTEN subscription:', (err as Error).message);
+      this.cleanupListenConnection(true);
+    } finally {
+      this.listenConnecting = false;
+    }
+  }
+
+  private cleanupListenConnection(scheduleReconnect = false): void {
+    if (this.listenReconnectTimer) {
+      clearTimeout(this.listenReconnectTimer);
+      this.listenReconnectTimer = null;
+    }
+
+    if (this.listenClient) {
+      const client = this.listenClient;
+      this.listenClient = null;
+      client.query('UNLISTEN app_outbox_events').catch(() => {}).finally(() => {
+        client.release();
+      });
+    }
+
+    if (scheduleReconnect && !this.stopped && this.started) {
+      this.listenReconnectTimer = setTimeout(() => {
+        this.listenReconnectTimer = null;
+        if (!this.stopped && this.started) {
+          void this.setupListenConnection();
+        }
+      }, 5000);
+      if (typeof this.listenReconnectTimer.unref === 'function') {
+        this.listenReconnectTimer.unref();
+      }
+    }
   }
 
   private clearRetryTimer(): void {
@@ -401,7 +475,7 @@ export class ReadModelOutboxWorker {
             heartbeatTimer = setTimeout(() => {
               heartbeatTimer = null;
               if (!batchActive || this.stopped) return;
-              inFlightRenewal = this.renewBatchLease(claimedIds)
+              inFlightRenewal = this.renewBatchLease(claimed)
                 .catch((renewErr) => {
                   console.warn('[OUTBOX WORKER] Lease renewal warning:', {
                     message: (renewErr as Error)?.message,
@@ -435,7 +509,7 @@ export class ReadModelOutboxWorker {
             }
 
             if (processedIds.length > 0) {
-              await this.markEventsProcessed(processedIds);
+              await this.markEventsProcessed(claimed, processedIds);
               processedCount += processedIds.length;
             }
           } catch (err) {
@@ -510,16 +584,34 @@ export class ReadModelOutboxWorker {
     return runPromise;
   }
 
-  private async renewBatchLease(ids: number[]): Promise<void> {
-    if (ids.length === 0 || this.stopped) return;
-    await appPool.query(
-      `UPDATE app_outbox_events
-       SET lease_expires_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
-           updated_at = NOW()
-       WHERE id = ANY($1::bigint[])
-         AND status = 'processing'`,
-      [ids, this.leaseDurationMs]
-    );
+  private async renewBatchLease(claimed: OutboxBatchEventRow[]): Promise<void> {
+    if (claimed.length === 0 || this.stopped) return;
+    const ids = claimed.map((c) => c.id);
+    const tokens = claimed.map((c) => c.claim_token).filter((t): t is string => Boolean(t));
+
+    if (tokens.length === claimed.length) {
+      await appPool.query(
+        `UPDATE app_outbox_events o
+         SET lease_expires_at = NOW() + ($3::bigint * INTERVAL '1 millisecond'),
+             updated_at = NOW()
+         FROM (
+           SELECT UNNEST($1::bigint[]) AS id, UNNEST($2::uuid[]) AS claim_token
+         ) batch
+         WHERE o.id = batch.id
+           AND o.status = 'processing'
+           AND o.claim_token = batch.claim_token`,
+        [ids, tokens, this.leaseDurationMs]
+      );
+    } else {
+      await appPool.query(
+        `UPDATE app_outbox_events
+         SET lease_expires_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
+             updated_at = NOW()
+         WHERE id = ANY($1::bigint[])
+           AND status = 'processing'`,
+        [ids, this.leaseDurationMs]
+      );
+    }
   }
 
   private async claimOutboxBatch(): Promise<OutboxBatchEventRow[]> {
@@ -527,11 +619,15 @@ export class ReadModelOutboxWorker {
     try {
       await client.query('BEGIN');
 
-      // Reclaim expired or missing leases held by crashed workers first
+      // Reclaim expired processing leases; transition to dead_letter if attempts exhausted
       await client.query(
         `UPDATE app_outbox_events
-         SET status = 'pending',
+         SET status = CASE WHEN attempt_count >= max_attempts THEN 'dead_letter' ELSE 'pending' END,
              lease_expires_at = NULL,
+             claim_token = NULL,
+             claimed_at = NULL,
+             claimed_by = NULL,
+             dead_letter_at = CASE WHEN attempt_count >= max_attempts THEN COALESCE(dead_letter_at, NOW()) ELSE dead_letter_at END,
              updated_at = NOW()
          WHERE status = 'processing'
            AND (lease_expires_at IS NULL OR lease_expires_at < NOW())`
@@ -555,6 +651,10 @@ export class ReadModelOutboxWorker {
            SET status = 'processing',
                lease_expires_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
                attempt_count = o.attempt_count + 1,
+               claim_generation = o.claim_generation + 1,
+               claim_token = gen_random_uuid(),
+               claimed_at = NOW(),
+               claimed_by = $3,
                updated_at = NOW()
            FROM next_batch nb
            WHERE o.id = nb.id
@@ -568,10 +668,14 @@ export class ReadModelOutboxWorker {
              o.source_version,
              o.business_date,
              o.attempt_count,
-             o.max_attempts
+             o.max_attempts,
+             o.claim_token,
+             o.claim_generation,
+             o.claimed_at,
+             o.claimed_by
          )
          SELECT * FROM claimed ORDER BY id ASC`,
-        [this.batchSize, this.leaseDurationMs]
+        [this.batchSize, this.leaseDurationMs, this.workerId]
       );
 
       await client.query('COMMIT');
@@ -584,22 +688,56 @@ export class ReadModelOutboxWorker {
     }
   }
 
-  private async markEventsProcessed(ids: number[]): Promise<void> {
-    if (ids.length === 0) return;
+  private async markEventsProcessed(
+    claimed: OutboxBatchEventRow[],
+    processedIds?: number[]
+  ): Promise<void> {
+    const toMark = processedIds
+      ? claimed.filter((c) => processedIds.includes(c.id))
+      : claimed;
+    if (toMark.length === 0) return;
+
+    const ids = toMark.map((c) => c.id);
+    const tokens = toMark.map((c) => c.claim_token).filter((t): t is string => Boolean(t));
 
     const client = await appPool.connect();
     try {
       await client.query('BEGIN');
-      await client.query(
-        `UPDATE app_outbox_events
-         SET status = 'processed',
-             processed_at = NOW(),
-             lease_expires_at = NULL,
-             last_error = NULL,
-             updated_at = NOW()
-         WHERE id = ANY($1::bigint[])`,
-        [ids]
-      );
+      if (tokens.length === toMark.length) {
+        await client.query(
+          `UPDATE app_outbox_events o
+           SET status = 'processed',
+               processed_at = NOW(),
+               lease_expires_at = NULL,
+               claim_token = NULL,
+               claimed_at = NULL,
+               claimed_by = NULL,
+               last_error = NULL,
+               updated_at = NOW()
+           FROM (
+             SELECT UNNEST($1::bigint[]) AS id, UNNEST($2::uuid[]) AS claim_token
+           ) batch
+           WHERE o.id = batch.id
+             AND o.status = 'processing'
+             AND o.claim_token = batch.claim_token`,
+          [ids, tokens]
+        );
+      } else {
+        await client.query(
+          `UPDATE app_outbox_events
+           SET status = 'processed',
+               processed_at = NOW(),
+               lease_expires_at = NULL,
+               claim_token = NULL,
+               claimed_at = NULL,
+               claimed_by = NULL,
+               last_error = NULL,
+               updated_at = NOW()
+           WHERE id = ANY($1::bigint[])`,
+          [ids]
+        );
+      }
+
       // Bounded cleanup of only processed events older than 7 days piggybacked on active work
       await client.query(
         `DELETE FROM app_outbox_events
@@ -633,31 +771,65 @@ export class ReadModelOutboxWorker {
       for (const row of claimed) {
         const attemptCount = Math.max(1, Number((row as any).attempt_count || 1));
         const maxAttempts = Math.max(1, Number((row as any).max_attempts || 8));
+        const hasToken = Boolean(row.claim_token);
+
         if (attemptCount >= maxAttempts) {
           deadLetterOccurred = true;
-          await client.query(
-            `UPDATE app_outbox_events
-             SET status = 'dead_letter',
-                 dead_letter_at = NOW(),
-                 lease_expires_at = NULL,
-                 last_error = $2,
-                 updated_at = NOW()
-             WHERE id = $1`,
-            [row.id, errorMessage]
-          );
+          const sql = hasToken
+            ? `UPDATE app_outbox_events
+               SET status = 'dead_letter',
+                   dead_letter_at = COALESCE(dead_letter_at, NOW()),
+                   lease_expires_at = NULL,
+                   claim_token = NULL,
+                   claimed_at = NULL,
+                   claimed_by = NULL,
+                   last_error = $2,
+                   updated_at = NOW()
+               WHERE id = $1
+                 AND status = 'processing'
+                 AND claim_token = $3`
+            : `UPDATE app_outbox_events
+               SET status = 'dead_letter',
+                   dead_letter_at = COALESCE(dead_letter_at, NOW()),
+                   lease_expires_at = NULL,
+                   claim_token = NULL,
+                   claimed_at = NULL,
+                   claimed_by = NULL,
+                   last_error = $2,
+                   updated_at = NOW()
+               WHERE id = $1`;
+          const params = hasToken ? [row.id, errorMessage, row.claim_token] : [row.id, errorMessage];
+          await client.query(sql, params);
         } else {
           const backoffMs = Math.min(this.maxBackoffMs, 1000 * Math.pow(2, attemptCount - 1));
           minDelayMs = minDelayMs === null ? backoffMs : Math.min(minDelayMs, backoffMs);
-          await client.query(
-            `UPDATE app_outbox_events
-             SET status = 'failed',
-                 lease_expires_at = NULL,
-                 last_error = $2,
-                 next_attempt_at = NOW() + ($3::bigint * INTERVAL '1 millisecond'),
-                 updated_at = NOW()
-             WHERE id = $1`,
-            [row.id, errorMessage, backoffMs]
-          );
+          const sql = hasToken
+            ? `UPDATE app_outbox_events
+               SET status = 'failed',
+                   lease_expires_at = NULL,
+                   claim_token = NULL,
+                   claimed_at = NULL,
+                   claimed_by = NULL,
+                   last_error = $2,
+                   next_attempt_at = NOW() + ($3::bigint * INTERVAL '1 millisecond'),
+                   updated_at = NOW()
+               WHERE id = $1
+                 AND status = 'processing'
+                 AND claim_token = $4`
+            : `UPDATE app_outbox_events
+               SET status = 'failed',
+                   lease_expires_at = NULL,
+                   claim_token = NULL,
+                   claimed_at = NULL,
+                   claimed_by = NULL,
+                   last_error = $2,
+                   next_attempt_at = NOW() + ($3::bigint * INTERVAL '1 millisecond'),
+                   updated_at = NOW()
+               WHERE id = $1`;
+          const params = hasToken
+            ? [row.id, errorMessage, backoffMs, row.claim_token]
+            : [row.id, errorMessage, backoffMs];
+          await client.query(sql, params);
         }
       }
       await client.query('COMMIT');

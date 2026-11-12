@@ -20,7 +20,8 @@
     "preflight:legacy": "tsx scripts/preflight-legacy-audit.ts",
     "rebuild:read-models": "tsx scripts/rebuild-read-models.ts",
     "benchmark:release030": "tsx scripts/benchmark-release030.ts",
-    "benchmark:release031": "tsx scripts/benchmark-release031.ts"
+    "benchmark:release031": "tsx scripts/benchmark-release031.ts",
+    "benchmark:release032": "tsx scripts/benchmark-release032.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1161.0",

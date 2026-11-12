@@ -1,3 +1,5 @@
+import { acquireObjectSessionLock, releaseObjectSessionLock } from '../../services/storageObjectLock.js';
+import { storageCleanupService } from '../../services/storageCleanup.service.js';
 import Decimal from 'decimal.js';
 import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
@@ -547,18 +549,46 @@ export class NormalBillsService {
         const [year, month] = getBusinessDateISO(env.BUSINESS_TIME_ZONE).split('-');
         const candidateKey = `normal-bills/${year}/${month}/${billRecord.id}.pdf`;
 
+        const uploadClient = await appPool.connect();
+        let uploadedToR2 = false;
+
         try {
+          await acquireObjectSessionLock(uploadClient, candidateKey);
+
           await this.storageService.uploadBufferToR2({
             buffer: pdfBuffer,
             objectKey: candidateKey,
             contentType: 'application/pdf',
           });
+          uploadedToR2 = true;
+
+          await uploadClient.query('BEGIN');
+          await uploadClient.query(
+            `UPDATE normal_bills SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3`,
+            ['uploaded', candidateKey, billRecord.id]
+          );
+          await uploadClient.query('COMMIT');
           r2Key = candidateKey;
           pdfStatus = 'uploaded';
-        } catch (uploadErr) {
-          console.error('[NORMAL BILL R2 UPLOAD] Upload failed:', uploadErr);
+        } catch (uploadOrDbErr) {
+          await uploadClient.query('ROLLBACK').catch(() => {});
+          if (uploadedToR2) {
+            await storageCleanupService.enqueueCleanupJob({
+              objectKey: candidateKey,
+              objectKind: 'normal_bill',
+              reason: 'normal_bill_pdf_db_failed',
+            }).catch(() => {});
+          }
+          console.error('[NORMAL BILL R2 UPLOAD] Upload or DB update failed:', uploadOrDbErr);
           r2Key = null;
           pdfStatus = 'failed';
+          await appPool.query(
+            'UPDATE normal_bills SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3',
+            ['failed', null, billRecord.id]
+          ).catch(() => {});
+        } finally {
+          await releaseObjectSessionLock(uploadClient, candidateKey).catch(() => {});
+          uploadClient.release();
         }
       }
     } catch (pdfErr) {
@@ -567,12 +597,7 @@ export class NormalBillsService {
       pdfStatus = 'failed';
     }
 
-    // Update PDF status in DB and sync stored idempotency response
     try {
-      await appPool.query(
-        `UPDATE normal_bills SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3`,
-        [pdfStatus, r2Key, billRecord.id]
-      );
       billRecord.pdf_status = pdfStatus;
       billRecord.r2_object_key = r2Key;
 
@@ -910,28 +935,63 @@ export class NormalBillsService {
     const [year, month] = dateStr.split('-');
     const candidateKey = `normal-bills/${year}/${month}/${bill.id}.pdf`;
 
+    const retryClient = await appPool.connect();
+    let uploadedToR2 = false;
+
     try {
+      await acquireObjectSessionLock(retryClient, candidateKey);
+
       await this.storageService.uploadBufferToR2({
         buffer: pdfBuffer,
         objectKey: candidateKey,
         contentType: 'application/pdf',
       });
-    } catch (uploadErr) {
-      await appPool.query(
-        'UPDATE normal_bills SET pdf_status = $1, r2_object_key = NULL, updated_at = NOW() WHERE id = $2',
-        ['failed', bill.id]
+      uploadedToR2 = true;
+
+      await retryClient.query('BEGIN');
+      const prevRes = await retryClient.query(
+        'SELECT r2_object_key FROM normal_bills WHERE id = $1 FOR UPDATE',
+        [bill.id]
       );
+      const prevKey = prevRes.rows[0]?.r2_object_key ?? null;
+
+      await retryClient.query(
+        'UPDATE normal_bills SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3',
+        ['uploaded', candidateKey, bill.id]
+      );
+
+      if (prevKey && prevKey !== candidateKey) {
+        await storageCleanupService.enqueueCleanupJobInTransaction(retryClient, {
+          objectKey: prevKey,
+          objectKind: 'normal_bill',
+          reason: 'normal_bill_pdf_replace',
+        });
+      }
+
+      await retryClient.query('COMMIT');
+    } catch (uploadErr) {
+      await retryClient.query('ROLLBACK').catch(() => {});
+      if (uploadedToR2) {
+        await storageCleanupService.enqueueCleanupJob({
+          objectKey: candidateKey,
+          objectKind: 'normal_bill',
+          reason: 'normal_bill_pdf_retry_db_failed',
+        }).catch(() => {});
+      }
+      await appPool.query(
+        'UPDATE normal_bills SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3',
+        ['failed', null, bill.id]
+      ).catch(() => {});
       throw new AppError(
         `Failed to upload bill PDF to storage: ${(uploadErr as Error).message}`,
         502,
         'PDF_UPLOAD_FAILED'
       );
+    } finally {
+      await releaseObjectSessionLock(retryClient, candidateKey).catch(() => {});
+      retryClient.release();
     }
 
-    await appPool.query(
-      'UPDATE normal_bills SET pdf_status = $1, r2_object_key = $2, updated_at = NOW() WHERE id = $3',
-      ['uploaded', candidateKey, bill.id]
-    );
     return {
       ...bill,
       pdf_status: 'uploaded',

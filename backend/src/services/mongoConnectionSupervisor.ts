@@ -7,13 +7,14 @@ import {
   isMongoEnabled,
   isMongoReady,
   redactMongoUri,
+  registerMongoUnreadyListener,
   setMongoAvailabilityState,
 } from '../config/mongodb.js';
 import { readModelOutboxWorker } from '../modules/readModels/readModelOutbox.worker.js';
 
 /**
  * Calculates exponential backoff delay with uniform jitter.
- * Formula: delay = min(maxMs, baseMs * 2^(attempt-1)) * (0.8 + 0.4 * random)
+ * Formula: delay = min(maxMs, min(maxMs, baseMs * 2^(attempt-1)) * (0.8 + 0.4 * random))
  */
 export function calculateMongoRetryDelay(
   attempt: number,
@@ -43,7 +44,9 @@ export class MongoConnectionSupervisor {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private activeReconnectPromise: Promise<void> | null = null;
+  private reconnectRequestedWhileActive = false;
   private listenersAttached = false;
+  private unregisterUnreadyListener: (() => void) | null = null;
 
   private readonly baseRetryDelayMs: number;
   private readonly maxRetryDelayMs: number;
@@ -55,6 +58,10 @@ export class MongoConnectionSupervisor {
 
   public isStarted(): boolean {
     return this.started;
+  }
+
+  public getConsecutiveFailures(): number {
+    return this.reconnectAttempt;
   }
 
   public async start(): Promise<void> {
@@ -70,6 +77,14 @@ export class MongoConnectionSupervisor {
 
     this.attachMongooseListeners();
 
+    if (!this.unregisterUnreadyListener) {
+      this.unregisterUnreadyListener = registerMongoUnreadyListener(() => {
+        if (this.stopped) return;
+        void readModelOutboxWorker.stop().catch(() => {});
+        this.scheduleReconnect();
+      });
+    }
+
     // Initial connection attempt on startup
     await this.triggerConnectionAttempt();
   }
@@ -78,6 +93,11 @@ export class MongoConnectionSupervisor {
     this.stopped = true;
     this.started = false;
     this.clearReconnectTimer();
+
+    if (this.unregisterUnreadyListener) {
+      this.unregisterUnreadyListener();
+      this.unregisterUnreadyListener = null;
+    }
 
     if (this.activeReconnectPromise) {
       try {
@@ -91,7 +111,7 @@ export class MongoConnectionSupervisor {
     await readModelOutboxWorker.stop().catch(() => {});
   }
 
-  private clearReconnectTimer(): void {
+  public clearReconnectTimer(): void {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -122,7 +142,16 @@ export class MongoConnectionSupervisor {
   }
 
   public scheduleReconnect(): void {
-    if (this.stopped || !isMongoEnabled() || this.reconnectTimer || this.activeReconnectPromise) {
+    if (this.stopped || !isMongoEnabled()) {
+      return;
+    }
+
+    if (this.reconnectTimer) {
+      return;
+    }
+
+    if (this.activeReconnectPromise) {
+      this.reconnectRequestedWhileActive = true;
       return;
     }
 
@@ -140,7 +169,13 @@ export class MongoConnectionSupervisor {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.stopped) {
-        void this.triggerConnectionAttempt();
+        void this.triggerConnectionAttempt().catch((err) => {
+          console.error(
+            '[MONGO SUPERVISOR] Unexpected reconnect error:',
+            (err as Error).message
+          );
+          this.scheduleReconnect();
+        });
       }
     }, delayMs);
 
@@ -150,10 +185,15 @@ export class MongoConnectionSupervisor {
   }
 
   public async triggerConnectionAttempt(): Promise<void> {
-    if (this.stopped || !isMongoEnabled()) return;
+    if (this.stopped || !isMongoEnabled()) {
+      return;
+    }
+
     if (this.activeReconnectPromise) {
       return this.activeReconnectPromise;
     }
+
+    let retryNeeded = false;
 
     const runPromise = (async () => {
       try {
@@ -162,39 +202,72 @@ export class MongoConnectionSupervisor {
         if (mongoose.connection.readyState !== 1) {
           await connectMongo({ maxRetries: 1 });
         } else {
-          // Connection is open; verify index initialization
-          const indexRes = await ensureMongoIndexes();
-          if (!indexRes.success) {
-            throw new Error(`Index initialization failed: ${indexRes.error}`);
+          const indexResult = await ensureMongoIndexes();
+          if (!indexResult.success) {
+            throw new Error(
+              `MongoDB index initialization failed: ${indexResult.error}`
+            );
           }
         }
 
-        if (isMongoReady()) {
-          this.reconnectAttempt = 0;
-          console.log('[MONGO SUPERVISOR] MongoDB is fully initialized & ready. Starting outbox worker.');
-          readModelOutboxWorker.start();
+        // Explicit ping during readiness restoration
+        if (mongoose.connection.db) {
+          await mongoose.connection.db.admin().ping();
         }
-      } catch (err) {
-        console.warn(
-          `[MONGO SUPERVISOR] Connection/initialization attempt failed (target=${redactMongoUri(env.MONGODB_URI)}):`,
-          (err as Error)?.message
+
+        if (!isMongoReady()) {
+          throw new Error(
+            'MongoDB connection attempt completed without readiness.'
+          );
+        }
+
+        this.reconnectAttempt = 0;
+        this.clearReconnectTimer();
+
+        console.log(
+          '[MONGO SUPERVISOR] MongoDB recovered successfully. Starting read-model worker.'
         );
+
+        readModelOutboxWorker.start();
+      } catch (err) {
+        retryNeeded = true;
+        console.warn(
+          '[MONGO SUPERVISOR] Connection attempt failed:',
+          (err as Error).message
+        );
+
         if (mongoose.connection.readyState === 1) {
-          setMongoAvailabilityState('degraded', { connectionReady: true, initializationReady: false });
+          setMongoAvailabilityState('degraded', {
+            connectionReady: true,
+            initializationReady: false,
+          });
         } else {
-          setMongoAvailabilityState('disconnected', { connectionReady: false, initializationReady: false });
+          setMongoAvailabilityState('disconnected', {
+            connectionReady: false,
+            initializationReady: false,
+          });
         }
-        void readModelOutboxWorker.stop().catch(() => {});
-        if (!this.stopped) {
-          this.scheduleReconnect();
-        }
-      } finally {
-        this.activeReconnectPromise = null;
+
+        await readModelOutboxWorker.stop().catch(() => {});
       }
     })();
 
     this.activeReconnectPromise = runPromise;
-    return runPromise;
+
+    try {
+      await runPromise;
+    } finally {
+      if (this.activeReconnectPromise === runPromise) {
+        this.activeReconnectPromise = null;
+      }
+
+      const shouldRetry = retryNeeded || this.reconnectRequestedWhileActive;
+      this.reconnectRequestedWhileActive = false;
+
+      if (shouldRetry && !this.stopped) {
+        this.scheduleReconnect();
+      }
+    }
   }
 }
 

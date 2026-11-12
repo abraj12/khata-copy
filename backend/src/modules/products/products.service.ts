@@ -5,6 +5,7 @@ import { validateMoneyInput, escapeLike } from '../../utils/validation.js';
 import { storageService } from '../../services/storage.service.js';
 import { storageCleanupService } from '../../services/storageCleanup.service.js';
 import { acquireObjectLocksInTransaction } from '../../services/storageObjectLock.js';
+import { storageUploadIntentService } from '../../services/storageUploadIntent.service.js';
 
 export interface ProductRecord {
   id: number;

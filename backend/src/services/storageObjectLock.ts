@@ -53,8 +53,8 @@ export async function acquireObjectLocksInTransaction(
 /**
  * Acquires a session-level advisory lock on an object key.
  * Must be explicitly released with releaseObjectSessionLock using the same client.
- * Used by workers that must hold a lock across external R2 deletion requests
- * without leaving a database transaction open.
+ * Used by workers and upload handlers that must hold a lock across external R2
+ * requests without leaving a database transaction open.
  */
 export async function acquireObjectSessionLock(
   client: PoolClient,
@@ -88,5 +88,46 @@ export async function releaseObjectSessionLock(
     return Boolean(res.rows[0]?.pg_advisory_unlock);
   } catch {
     return false;
+  }
+}
+
+/**
+ * Acquires session-level advisory locks for multiple keys in deterministic sorted order.
+ */
+export async function acquireObjectSessionLocks(
+  client: PoolClient,
+  keys: (string | null | undefined)[]
+): Promise<string[]> {
+  const sortedUniqueKeys = Array.from(
+    new Set(
+      keys
+        .map((k) => k?.trim())
+        .filter((k): k is string => Boolean(k && k.length > 0))
+    )
+  ).sort();
+
+  for (const key of sortedUniqueKeys) {
+    await acquireObjectSessionLock(client, key);
+  }
+  return sortedUniqueKeys;
+}
+
+/**
+ * Releases session-level advisory locks for multiple keys in reverse order.
+ */
+export async function releaseObjectSessionLocks(
+  client: PoolClient,
+  keys: (string | null | undefined)[]
+): Promise<void> {
+  const sortedUniqueKeys = Array.from(
+    new Set(
+      keys
+        .map((k) => k?.trim())
+        .filter((k): k is string => Boolean(k && k.length > 0))
+    )
+  ).sort().reverse();
+
+  for (const key of sortedUniqueKeys) {
+    await releaseObjectSessionLock(client, key);
   }
 }

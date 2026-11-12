@@ -110,7 +110,7 @@ describe('Khata Release #031 — Outbox Claiming, Lease Recovery & Concurrency S
       await worker.drainNow('lease_reclaim_test');
 
       const reclaimQuery = executedSql.find(
-        (q) => q.text.includes('SET status = \'pending\'') && q.text.includes('lease_expires_at < NOW()')
+        (q) => (q.text.includes('status = \'pending\'') || q.text.includes('ELSE \'pending\' END')) && q.text.includes('lease_expires_at < NOW()')
       );
       expect(reclaimQuery).toBeDefined();
     });

@@ -1,3 +1,4 @@
+import * as mongodbConfig from '../src/config/mongodb.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import session from 'express-session';
@@ -66,6 +67,7 @@ describe('Server-Side Logout Session Revocation Test Suite', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(mongodbConfig, 'isMongoReady').mockReturnValue(true);
   });
 
   it('1. Successfully revokes session server-side on POST /api/v1/auth/logout', async () => {
@@ -175,5 +177,34 @@ describe('Server-Side Logout Session Revocation Test Suite', () => {
     expect(store.destroyCalls).toEqual([]);
     // Session is still active in store
     expect(store.sessions.has(TEST_SESSION_ID)).toBe(true);
+  });
+  it('4. Successfully logs out and destroys session during MongoDB outage (HTTP 200 preserved)', async () => {
+    vi.spyOn(mongodbConfig, 'isMongoReady').mockReturnValue(false);
+    vi.spyOn(mongodbConfig, 'getMongoAvailabilityState').mockReturnValue('disconnected');
+
+    const store = new RecordingSessionStore();
+    seedAuthenticatedSession(store, TEST_SESSION_ID, VALID_CSRF_TOKEN);
+    const cookieHeader = createSignedCookieHeader(TEST_SESSION_ID);
+
+    const app = createApp({ customStore: store });
+
+    // Step 1: Confirm regular business route fails with 503 MANDATORY_SERVICE_UNAVAILABLE
+    const bizRes = await request(app)
+      .get('/api/v1/products')
+      .set('Cookie', cookieHeader);
+    expect(bizRes.status).toBe(503);
+    expect(bizRes.body.code).toBe('MANDATORY_SERVICE_UNAVAILABLE');
+
+    // Step 2: Confirm POST /api/v1/auth/logout succeeds with 200 despite MongoDB outage
+    const logoutRes = await request(app)
+      .post('/api/v1/auth/logout')
+      .set('Origin', 'https://erp.algions.in')
+      .set('Cookie', cookieHeader)
+      .set('X-CSRF-Token', VALID_CSRF_TOKEN);
+
+    expect(logoutRes.status).toBe(200);
+    expect(logoutRes.body.success).toBe(true);
+    expect(store.destroyCalls).toEqual([TEST_SESSION_ID]);
+    expect(store.sessions.has(TEST_SESSION_ID)).toBe(false);
   });
 });

@@ -70,6 +70,7 @@ const TEST_HASH =
 
 async function dropPublicSchemaObjects(client: pg.PoolClient): Promise<void> {
   await client.query(`
+    DROP TABLE IF EXISTS "storage_upload_intents" CASCADE;
     DROP TABLE IF EXISTS "storage_cleanup_jobs" CASCADE;
     DROP TABLE IF EXISTS "app_outbox_events" CASCADE;
     DROP TABLE IF EXISTS "business_expense_events" CASCADE;
@@ -177,13 +178,24 @@ describeIntegration('Release #030 — Real PostgreSQL 18.6 & MongoDB 8.2.4 Integ
     };
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
     vi.spyOn(appPool, 'connect').mockImplementation(() => pool.connect());
     vi.spyOn(appPool, 'query').mockImplementation((...args: any[]) => (pool.query as any)(...args));
     env.OWNER_PHONE = TEST_PHONE;
     env.OWNER_PASSWORD_HASH = TEST_HASH;
     env.SESSION_COOKIE_SECURE = false;
+    if (process.env.TEST_MONGODB_URI) {
+      env.MONGODB_ENABLED = true;
+      env.MONGODB_URI = process.env.TEST_MONGODB_URI;
+      env.MONGODB_DATABASE = TARGET_MONGO_DB;
+      try {
+        await connectMongo();
+        await ensureMongoIndexes();
+      } catch (err) {
+        console.error('[TEST MONGO ERROR]', err);
+      }
+    }
   });
 
   afterEach(async () => {
@@ -253,6 +265,7 @@ describeIntegration('Release #030 — Real PostgreSQL 18.6 & MongoDB 8.2.4 Integ
     expect(post029Migrations).toEqual([
       '030_storage_cleanup_jobs.sql',
       '031_outbox_worker_search_indexes.sql',
+      '032_storage_lifecycle_and_worker_fencing.sql',
     ]);
 
     const client = await pool.connect();

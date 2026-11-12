@@ -1,8 +1,54 @@
+
+/**
+ * Safely resolves an R2 canonical storage key from a raw key or bucket-hosted URL.
+ * Returns null for external non-R2 URLs to guarantee external logos are never deleted.
+ */
+export function resolveCanonicalR2Key(urlOrKey: string | null | undefined): string | null {
+  if (!urlOrKey || typeof urlOrKey !== 'string') return null;
+  const trimmed = urlOrKey.trim();
+  if (!trimmed) return null;
+
+  const knownPrefixes = [
+    'quotation-logos/',
+    'products/',
+    'offline-bills/',
+    'supplier-bills/',
+    'gst-invoices/',
+    'normal-bills/',
+  ];
+
+  for (const prefix of knownPrefixes) {
+    if (trimmed.startsWith(prefix)) {
+      return trimmed.split('?')[0].split('#')[0];
+    }
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    const pathname = parsed.pathname;
+    let path = pathname.startsWith('/') ? pathname.slice(1) : pathname;
+    const bucket = env.R2_BUCKET_NAME;
+    if (bucket && path.startsWith(`${bucket}/`)) {
+      path = path.slice(bucket.length + 1);
+    }
+    for (const prefix of knownPrefixes) {
+      if (path.startsWith(prefix)) {
+        return path.split('?')[0].split('#')[0];
+      }
+    }
+  } catch {
+    // Not a valid URL
+  }
+
+  return null;
+}
 import Decimal from 'decimal.js';
 import type { PoolClient } from 'pg';
 import { appPool } from '../../config/database.js';
-import { enqueueOutboxEvent, notifyOutboxCommitted } from '../readModels/outbox.service.js';
 import { env } from '../../config/env.js';
+import { acquireObjectLocksInTransaction } from '../../services/storageObjectLock.js';
+import { storageCleanupService } from '../../services/storageCleanup.service.js';
+import { enqueueOutboxEvent, notifyOutboxCommitted } from '../readModels/outbox.service.js';
 import { AppError } from '../../utils/errors.js';
 import { getBusinessDateISO } from '../../utils/businessDate.js';
 import {
@@ -235,15 +281,49 @@ export class QuotationsService {
       RETURNING *
     `;
 
-    const res = await appPool.query(sql, params);
-    if ((res.rowCount ?? 0) === 0) {
-      throw new AppError(
-        'Company tax profile is not configured in quotation_settings.',
-        500,
-        'COMPANY_TAX_PROFILE_MISSING'
-      );
+    const client = await appPool.connect();
+    let oldR2Key: string | null = null;
+    let newR2Key: string | null = null;
+
+    try {
+      await client.query('BEGIN');
+
+      const existingRes = await client.query('SELECT logo_url FROM quotation_settings WHERE id = 1 FOR UPDATE');
+      if (existingRes.rows.length === 0) {
+        throw new AppError(
+          'Company tax profile is not configured in quotation_settings.',
+          500,
+          'COMPANY_TAX_PROFILE_MISSING'
+        );
+      }
+
+      if (data.logoUrl !== undefined) {
+        oldR2Key = resolveCanonicalR2Key(existingRes.rows[0].logo_url);
+        newR2Key = resolveCanonicalR2Key(data.logoUrl);
+
+        if (oldR2Key || newR2Key) {
+          await acquireObjectLocksInTransaction(client, [oldR2Key, newR2Key]);
+        }
+      }
+
+      const res = await client.query(sql, params);
+
+      if (oldR2Key && oldR2Key !== newR2Key) {
+        await storageCleanupService.enqueueCleanupJobInTransaction(client, {
+          objectKey: oldR2Key,
+          objectKind: 'quotation_logo',
+          reason: 'quotation_logo_replace',
+        });
+      }
+
+      await client.query('COMMIT');
+      return res.rows[0];
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
     }
-    return res.rows[0];
   }
 
   /**

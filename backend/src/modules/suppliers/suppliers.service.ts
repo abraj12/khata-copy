@@ -14,7 +14,8 @@ import {
 } from '../billing/numbering.js';
 import { storageService } from '../../services/storage.service.js';
 import { storageCleanupService } from '../../services/storageCleanup.service.js';
-import { acquireObjectLocksInTransaction } from '../../services/storageObjectLock.js';
+import { acquireObjectLocksInTransaction, acquireObjectSessionLocks, releaseObjectSessionLocks } from '../../services/storageObjectLock.js';
+import crypto from 'crypto';
 import {
   acquireIdempotencyLock,
   checkIdempotencyRecord,
@@ -2104,6 +2105,99 @@ export class SuppliersService {
     } finally {
       client.release();
     }
+  }
+
+  public async uploadAndSetPurchaseBillAttachment(
+    billId: number,
+    file: {
+      buffer: Buffer;
+      mimetype: string;
+      originalname?: string;
+    }
+  ): Promise<PurchaseBillDetail> {
+    const existing = await this.getPurchaseBillById(billId);
+    if (!existing) {
+      throw new AppError('Purchase bill not found.', 404, 'PURCHASE_BILL_NOT_FOUND');
+    }
+    const previousKey = (existing as any).attachmentObjectKey || (existing as any).attachment_object_key || null;
+
+    const cleanMime = file.mimetype.toLowerCase().trim();
+    let ext = 'jpg';
+    if (cleanMime === 'image/png') ext = 'png';
+    else if (cleanMime === 'image/webp') ext = 'webp';
+    else if (cleanMime === 'application/pdf') ext = 'pdf';
+
+    const randomId = crypto.randomUUID();
+    const newKey = `supplier-bills/${billId}/${randomId}.${ext}`;
+
+    const client = await appPool.connect();
+    let uploaded = false;
+
+    try {
+      await acquireObjectSessionLocks(client, [previousKey, newKey]);
+
+      const uploadRes = await storageService.validateAndUploadBuffer({
+        buffer: file.buffer,
+        mimeType: file.mimetype,
+        folder: 'supplier-bills',
+        referenceId: billId,
+        customKey: newKey,
+      });
+      uploaded = true;
+
+      await client.query('BEGIN');
+      const lockRes = await client.query(
+        'SELECT id, attachment_object_key FROM supplier_purchase_bills WHERE id = $1 FOR UPDATE',
+        [billId]
+      );
+      if (lockRes.rows.length === 0) {
+        throw new AppError('Purchase bill not found.', 404, 'PURCHASE_BILL_NOT_FOUND');
+      }
+      const actualPrevKey = lockRes.rows[0].attachment_object_key || null;
+
+      await client.query(
+        `UPDATE supplier_purchase_bills
+         SET
+           attachment_object_key = $1,
+           attachment_content_type = $2,
+           attachment_size_bytes = $3,
+           attachment_filename = $4,
+           updated_at = NOW()
+         WHERE id = $5`,
+        [
+          newKey,
+          uploadRes.contentType,
+          uploadRes.sizeBytes,
+          (file.originalname || `purchase-bill-${billId}`).slice(0, 255),
+          billId,
+        ]
+      );
+
+      if (actualPrevKey && actualPrevKey !== newKey) {
+        await storageCleanupService.enqueueCleanupJobInTransaction(client, {
+          objectKey: actualPrevKey,
+          objectKind: 'supplier_bill',
+          reason: 'supplier_attachment_replace',
+        });
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      if (uploaded) {
+        await storageCleanupService.enqueueCleanupJob({
+          objectKey: newKey,
+          objectKind: 'supplier_bill',
+          reason: 'supplier_attachment_rollback',
+        }).catch(() => {});
+      }
+      throw err;
+    } finally {
+      await releaseObjectSessionLocks(client, [previousKey, newKey]).catch(() => {});
+      client.release();
+    }
+
+    return this.getPurchaseBillById(billId);
   }
 
   public async setPurchaseBillAttachment(
