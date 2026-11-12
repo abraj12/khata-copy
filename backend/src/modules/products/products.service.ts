@@ -4,6 +4,7 @@ import { enqueueOutboxEvent, notifyOutboxCommitted } from '../readModels/outbox.
 import { validateMoneyInput, escapeLike } from '../../utils/validation.js';
 import { storageService } from '../../services/storage.service.js';
 import { storageCleanupService } from '../../services/storageCleanup.service.js';
+import { acquireObjectLocksInTransaction } from '../../services/storageObjectLock.js';
 
 export interface ProductRecord {
   id: number;
@@ -399,20 +400,38 @@ export class ProductsService {
    * Attaches or replaces a product image after verifying the uploaded R2 object
    */
   public async attachProductImage(productId: number, imageObjectKey: string): Promise<ProductRecord> {
-    const existing = await this.getProductById(productId);
-    if (!existing || existing.archived_at) {
-      throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
+    if (!imageObjectKey || !imageObjectKey.trim()) {
+      throw new AppError('Image object key is required.', 400, 'INVALID_OBJECT_KEY');
     }
+    const cleanKey = imageObjectKey.trim();
 
-    // Verify object in storage
-    const verified = await storageService.verifyObject(imageObjectKey, 'products', productId);
-
-    const oldKey = existing.image_object_key;
+    // Verify uploaded object in storage
+    const verified = await storageService.verifyObject(cleanKey, 'products', productId);
 
     const client = await appPool.connect();
     let updatedRows: any[];
+    let oldKey: string | null = null;
+    let committed = false;
+
     try {
       await client.query('BEGIN');
+      const existingRes = await client.query(
+        `SELECT id, archived_at, image_object_key
+         FROM products
+         WHERE id = $1
+         FOR UPDATE`,
+        [productId]
+      );
+
+      if (existingRes.rows.length === 0 || existingRes.rows[0].archived_at) {
+        throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
+      }
+
+      oldKey = existingRes.rows[0].image_object_key ?? null;
+
+      // Acquire advisory locks on both old and new keys in deterministic sorted order
+      await acquireObjectLocksInTransaction(client, [oldKey, cleanKey]);
+
       const result = await client.query(
         `UPDATE products
          SET image_object_key = $1,
@@ -423,11 +442,20 @@ export class ProductsService {
          WHERE id = $4 AND archived_at IS NULL
          RETURNING id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
                    image_object_key, image_content_type, image_size_bytes, image_updated_at`,
-        [imageObjectKey, verified.contentType, verified.contentLength, productId]
+        [cleanKey, verified.contentType, verified.contentLength, productId]
       );
 
       if (result.rows.length === 0) {
         throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
+      }
+
+      // If replacing an old image, enqueue cleanup job inside the SAME transaction
+      if (oldKey && oldKey !== cleanKey) {
+        await storageCleanupService.enqueueCleanupJobInTransaction(client, {
+          objectKey: oldKey,
+          objectKind: 'product_image',
+          reason: 'product_image_replace',
+        });
       }
 
       await enqueueOutboxEvent(client, {
@@ -436,33 +464,27 @@ export class ProductsService {
         eventType: 'product.image_updated',
       });
       await client.query('COMMIT');
+      committed = true;
       notifyOutboxCommitted();
       updatedRows = result.rows;
     } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      if (imageObjectKey !== oldKey) {
-        await storageCleanupService.attemptDeleteOrEnqueue({
-          objectKey: imageObjectKey,
-          objectKind: 'product_image',
-          reason: 'product_image_tx_rollback',
-          isRollbackNewUpload: true,
-        });
+      if (!committed) {
+        await client.query('ROLLBACK').catch(() => {});
+        if (cleanKey !== oldKey) {
+          await storageCleanupService.attemptDeleteOrEnqueue({
+            objectKey: cleanKey,
+            objectKind: 'product_image',
+            reason: 'product_image_tx_rollback',
+            isRollbackNewUpload: true,
+          }).catch(() => {});
+        }
       }
       throw err;
     } finally {
       client.release();
     }
 
-    // Delete previous image only after database commit succeeds (enqueue retry if R2 fails)
-    if (oldKey && oldKey !== imageObjectKey) {
-      await storageCleanupService.attemptDeleteOrEnqueue({
-        objectKey: oldKey,
-        objectKind: 'product_image',
-        reason: 'product_image_replace',
-      });
-    }
     const result = { rows: updatedRows };
-
     const [updatedWithUrl] = await this.attachPresignedUrls(result.rows);
     return updatedWithUrl;
   }
@@ -471,17 +493,31 @@ export class ProductsService {
    * Removes a product image without deleting the product itself
    */
   public async removeProductImage(productId: number): Promise<ProductRecord> {
-    const existing = await this.getProductById(productId);
-    if (!existing || existing.archived_at) {
-      throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
-    }
-
-    const oldKey = existing.image_object_key;
-
     const client = await appPool.connect();
     let resultRows: any[];
+    let oldKey: string | null = null;
+    let committed = false;
+
     try {
       await client.query('BEGIN');
+      const existingRes = await client.query(
+        `SELECT id, archived_at, image_object_key
+         FROM products
+         WHERE id = $1
+         FOR UPDATE`,
+        [productId]
+      );
+
+      if (existingRes.rows.length === 0 || existingRes.rows[0].archived_at) {
+        throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
+      }
+
+      oldKey = existingRes.rows[0].image_object_key ?? null;
+
+      if (oldKey) {
+        await acquireObjectLocksInTransaction(client, [oldKey]);
+      }
+
       const result = await client.query(
         `UPDATE products
          SET image_object_key = NULL,
@@ -499,31 +535,34 @@ export class ProductsService {
         throw new AppError('Product not found or archived.', 404, 'NOT_FOUND');
       }
 
+      // Enqueue cleanup job inside the SAME transaction
+      if (oldKey) {
+        await storageCleanupService.enqueueCleanupJobInTransaction(client, {
+          objectKey: oldKey,
+          objectKind: 'product_image',
+          reason: 'product_image_remove',
+        });
+      }
+
       await enqueueOutboxEvent(client, {
         aggregateType: 'product',
         aggregateId: productId,
         eventType: 'product.image_removed',
       });
       await client.query('COMMIT');
+      committed = true;
       notifyOutboxCommitted();
       resultRows = result.rows;
     } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
+      if (!committed) {
+        await client.query('ROLLBACK').catch(() => {});
+      }
       throw err;
     } finally {
       client.release();
     }
 
-    // Delete previous R2 object only after DB commit succeeds (enqueue retry if R2 fails)
-    if (oldKey) {
-      await storageCleanupService.attemptDeleteOrEnqueue({
-        objectKey: oldKey,
-        objectKind: 'product_image',
-        reason: 'product_image_remove',
-      });
-    }
     const result = { rows: resultRows };
-
     return { ...result.rows[0], image_url: null };
   }
 

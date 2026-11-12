@@ -63,6 +63,7 @@ function usePaginatedCatalogue<T extends { id: number }>({
   const [items, setItems] = useState<T[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isServiceUnavailable, setIsServiceUnavailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState<CataloguePaginationMeta>({
     hasMore: false,
@@ -174,6 +175,7 @@ function usePaginatedCatalogue<T extends { id: number }>({
           return;
         }
 
+        setIsServiceUnavailable(false);
         setItems((prev) => (append ? mergeUniqueById(prev, result.items) : mergeUniqueById([], result.items)));
         const pageHasMore = Boolean(result.pagination?.hasMore);
         setPagination({
@@ -190,7 +192,17 @@ function usePaginatedCatalogue<T extends { id: number }>({
         if (requestId !== requestIdRef.current) {
           return;
         }
-        setError(err?.message || errorFallbackMessage);
+        const isUnavailable =
+          err?.status === 503 ||
+          err?.code === 'MANDATORY_SERVICE_UNAVAILABLE' ||
+          err?.code === 'READ_MODEL_UNAVAILABLE' ||
+          err?.code === 'SERVICE_UNAVAILABLE';
+        setIsServiceUnavailable(isUnavailable);
+        setError(
+          isUnavailable
+            ? 'Catalogue service is temporarily unavailable. Data updates will resume automatically.'
+            : (err?.message || errorFallbackMessage)
+        );
       } finally {
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
@@ -248,6 +260,7 @@ function usePaginatedCatalogue<T extends { id: number }>({
     setSearchQuery,
     isLoading,
     isLoadingMore,
+    isServiceUnavailable,
     error,
     hasMore: pagination.hasMore,
     nextOffset: pagination.nextOffset,

@@ -63,10 +63,19 @@ export function validateAndParseMongoEnv(
 
   const cfg = parsed.data;
 
-  if (nodeEnv === 'production' && !cfg.MONGODB_ENABLED) {
-    throw new Error(
-      '[MONGODB CONFIG ERROR] In production, MONGODB_ENABLED must be set to true so read models and analytics do not fall back silently.'
-    );
+  // Release 031: MongoDB is strictly mandatory in production
+  if (nodeEnv === 'production') {
+    if (!cfg.MONGODB_ENABLED) {
+      throw new Error(
+        '[SECURITY FATAL] MongoDB is mandatory in production. MONGODB_ENABLED must be true.'
+      );
+    }
+
+    if (!cfg.MONGODB_URI || !cfg.MONGODB_DATABASE) {
+      throw new Error(
+        '[SECURITY FATAL] MongoDB URI and database name must be configured in production.'
+      );
+    }
   }
 
   if (cfg.MONGODB_ENABLED) {

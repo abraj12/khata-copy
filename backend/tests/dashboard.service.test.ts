@@ -259,6 +259,7 @@ describe('Release #024: Home Dashboard, Profitability Analytics & Operating Expe
 
   beforeEach(async () => {
     vi.restoreAllMocks();
+    env.MONGODB_ENABLED = false;
     const loginRes = await request(app).post('/api/v1/auth/login').send({
       phone: TEST_PHONE,
       password: TEST_PASSWORD,

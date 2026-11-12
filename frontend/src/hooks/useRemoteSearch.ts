@@ -41,6 +41,7 @@ export function useRemoteSearch<T>({
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isError, setIsError] = useState(false);
+  const [isServiceUnavailable, setIsServiceUnavailable] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
@@ -99,6 +100,7 @@ export function useRemoteSearch<T>({
         setIsLoading(enabledRef.current);
         setIsLoadingMore(false);
         setIsError(false);
+        setIsServiceUnavailable(false);
         setErrorMessage(null);
       }
 
@@ -140,6 +142,7 @@ export function useRemoteSearch<T>({
         setIsLoading(true);
         setIsLoadingMore(false);
         setIsError(false);
+        setIsServiceUnavailable(false);
         setErrorMessage(null);
       } else {
         isLoadingMoreRef.current = true;
@@ -182,6 +185,7 @@ export function useRemoteSearch<T>({
         setNextOffset(pageHasMore ? (result.nextOffset ?? null) : null);
         setNextCursor(pageHasMore ? (result.nextCursor ?? null) : null);
         setIsError(false);
+        setIsServiceUnavailable(false);
         setErrorMessage(null);
       } catch (err) {
         if (controller.signal.aborted || currentRequestId !== requestIdRef.current) {
@@ -191,8 +195,18 @@ export function useRemoteSearch<T>({
           return;
         }
 
+        const isUnavailable =
+          (err as any)?.status === 503 ||
+          (err as any)?.code === 'MANDATORY_SERVICE_UNAVAILABLE' ||
+          (err as any)?.code === 'READ_MODEL_UNAVAILABLE' ||
+          (err as any)?.code === 'SERVICE_UNAVAILABLE';
         setIsError(true);
-        setErrorMessage((err as Error)?.message || 'Failed to fetch search results.');
+        setIsServiceUnavailable(isUnavailable);
+        setErrorMessage(
+          isUnavailable
+            ? 'Search service is temporarily unavailable. Data updates will resume automatically once connection is restored.'
+            : (err as Error)?.message || 'Failed to fetch search results.'
+        );
       } finally {
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
@@ -272,6 +286,7 @@ export function useRemoteSearch<T>({
     setIsLoading(false);
     setIsLoadingMore(false);
     setIsError(false);
+    setIsServiceUnavailable(false);
     setErrorMessage(null);
   }, [abortAndInvalidate]);
 
@@ -283,6 +298,7 @@ export function useRemoteSearch<T>({
     isLoading,
     isLoadingMore,
     isError,
+    isServiceUnavailable,
     errorMessage,
     hasMore,
     nextOffset,

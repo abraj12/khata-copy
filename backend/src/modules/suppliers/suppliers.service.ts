@@ -14,6 +14,7 @@ import {
 } from '../billing/numbering.js';
 import { storageService } from '../../services/storage.service.js';
 import { storageCleanupService } from '../../services/storageCleanup.service.js';
+import { acquireObjectLocksInTransaction } from '../../services/storageObjectLock.js';
 import {
   acquireIdempotencyLock,
   checkIdempotencyRecord,
@@ -2127,6 +2128,8 @@ export class SuppliersService {
       }
       previousKey = res.rows[0].attachment_object_key ?? null;
 
+      await acquireObjectLocksInTransaction(client, [previousKey, attachment.objectKey]);
+
       await client.query(
         `UPDATE supplier_purchase_bills
          SET
@@ -2145,6 +2148,14 @@ export class SuppliersService {
         ]
       );
 
+      if (previousKey && previousKey !== attachment.objectKey) {
+        await storageCleanupService.enqueueCleanupJobInTransaction(client, {
+          objectKey: previousKey,
+          objectKind: 'supplier_bill',
+          reason: 'supplier_attachment_replace',
+        });
+      }
+
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
@@ -2153,46 +2164,60 @@ export class SuppliersService {
       client.release();
     }
 
-    if (previousKey && previousKey !== attachment.objectKey) {
-      await storageCleanupService.attemptDeleteOrEnqueue({
-        objectKey: previousKey,
-        objectKind: 'supplier_bill',
-        reason: 'supplier_attachment_replace',
-      });
-    }
-
     return this.getPurchaseBillById(billId);
   }
 
   public async removePurchaseBillAttachment(billId: number): Promise<PurchaseBillDetail> {
-    const existingRes = await appPool.query(
-      `SELECT attachment_object_key FROM supplier_purchase_bills WHERE id = $1`,
-      [billId]
-    );
-    if (existingRes.rows.length === 0) {
-      throw new AppError('Purchase bill not found.', 404, 'PURCHASE_BILL_NOT_FOUND');
-    }
-    const previousKey: string | null = existingRes.rows[0].attachment_object_key ?? null;
+    const client = await appPool.connect();
+    let previousKey: string | null = null;
+    let committed = false;
 
-    await appPool.query(
-      `UPDATE supplier_purchase_bills
-       SET
-         attachment_object_key = NULL,
-         attachment_content_type = NULL,
-         attachment_size_bytes = NULL,
-         attachment_filename = NULL,
-         updated_at = NOW()
-       WHERE id = $1`,
-      [billId]
-    );
+    try {
+      await client.query('BEGIN');
+      const existingRes = await client.query(
+        `SELECT attachment_object_key FROM supplier_purchase_bills WHERE id = $1 FOR UPDATE`,
+        [billId]
+      );
+      if (existingRes.rows.length === 0) {
+        throw new AppError('Purchase bill not found.', 404, 'PURCHASE_BILL_NOT_FOUND');
+      }
+      previousKey = existingRes.rows[0].attachment_object_key ?? null;
 
-    if (previousKey) {
-      await storageCleanupService.attemptDeleteOrEnqueue({
-        objectKey: previousKey,
-        objectKind: 'supplier_bill',
-        reason: 'supplier_attachment_remove',
-      });
+      if (previousKey) {
+        await acquireObjectLocksInTransaction(client, [previousKey]);
+      }
+
+      await client.query(
+        `UPDATE supplier_purchase_bills
+         SET
+           attachment_object_key = NULL,
+           attachment_content_type = NULL,
+           attachment_size_bytes = NULL,
+           attachment_filename = NULL,
+           updated_at = NOW()
+         WHERE id = $1`,
+        [billId]
+      );
+
+      if (previousKey) {
+        await storageCleanupService.enqueueCleanupJobInTransaction(client, {
+          objectKey: previousKey,
+          objectKind: 'supplier_bill',
+          reason: 'supplier_attachment_remove',
+        });
+      }
+
+      await client.query('COMMIT');
+      committed = true;
+    } catch (err) {
+      if (!committed) {
+        await client.query('ROLLBACK').catch(() => {});
+      }
+      throw err;
+    } finally {
+      client.release();
     }
+
     return this.getPurchaseBillById(billId);
   }
 

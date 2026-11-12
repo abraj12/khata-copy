@@ -59,6 +59,7 @@ export const ProductsView: React.FC = () => {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isServiceUnavailable, setIsServiceUnavailable] = useState(false);
   const [search, setSearchState] = useState('');
   const debouncedSearch = useDebouncedValue(search, 280);
   const [searchFetchNonce, setSearchFetchNonce] = useState(0);
@@ -244,6 +245,7 @@ export const ProductsView: React.FC = () => {
         total: null,
         totalIsExact: false,
       };
+      setIsServiceUnavailable(false);
       if (append) {
         setProducts((prev) => mergeUniqueById(prev, items));
       } else {
@@ -261,6 +263,14 @@ export const ProductsView: React.FC = () => {
     } catch (err) {
       if (controller.signal.aborted || currentReqId !== fetchProductsRequestIdRef.current) return;
       if ((err as Error).name === 'AbortError' || (err as { code?: string }).code === 'ABORTED') return;
+      const isUnavailable =
+        (err as any)?.status === 503 ||
+        (err as any)?.code === 'MANDATORY_SERVICE_UNAVAILABLE' ||
+        (err as any)?.code === 'READ_MODEL_UNAVAILABLE' ||
+        (err as any)?.code === 'SERVICE_UNAVAILABLE';
+      if (isUnavailable) {
+        setIsServiceUnavailable(true);
+      }
       showNotification('error', (err as Error).message || 'Failed to load products.');
     } finally {
       if (fetchProductsAbortRef.current === controller) {
@@ -830,6 +840,28 @@ export const ProductsView: React.FC = () => {
             </button>
           </div>
         </form>
+      )}
+
+      {/* Service Unavailable Outage Banner */}
+      {isServiceUnavailable && (
+        <div
+          role="alert"
+          className="p-3 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 text-xs flex flex-col sm:flex-row items-center justify-between gap-2"
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+            <span>
+              MongoDB read service is temporarily unavailable. Product search and list updates will resume automatically once connection is restored.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => void fetchProducts(debouncedSearch, 0, false, null)}
+            className="neu-btn-secondary text-xs px-3 py-1 font-semibold whitespace-nowrap"
+          >
+            Retry Connection
+          </button>
+        </div>
       )}
 
       {/* Inset Search Input */}

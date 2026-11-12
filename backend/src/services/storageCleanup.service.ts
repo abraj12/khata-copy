@@ -133,6 +133,18 @@ export class StorageCleanupService {
   }
 
   /**
+   * Idempotently enqueues or updates an active cleanup retry job inside an existing
+   * PostgreSQL transaction. This ensures object reference removal and cleanup job
+   * creation commit atomically together.
+   */
+  public async enqueueCleanupJobInTransaction(
+    client: PoolClient,
+    input: EnqueueCleanupJobInput
+  ): Promise<number | null> {
+    return this.enqueueCleanupJob(input, client);
+  }
+
+  /**
    * Idempotently enqueues or updates an active cleanup retry job in PostgreSQL.
    * Only enforces uniqueness across active statuses ('pending', 'processing', 'failed')
    * so completed/dead-letter history does not block future cleanup of a re-used key.

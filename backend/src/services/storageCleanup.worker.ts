@@ -1,5 +1,6 @@
 import { appPool } from '../config/database.js';
 import { storageService } from './storage.service.js';
+import { acquireObjectSessionLock, releaseObjectSessionLock } from './storageObjectLock.js';
 import {
   redactObjectKeyForLog,
   registerStorageCleanupListener,
@@ -304,23 +305,40 @@ export class StorageCleanupWorker {
   }
 
   private async processSingleJob(job: ClaimedCleanupJob): Promise<boolean> {
+    const client = await appPool.connect();
+    let lockAcquired = false;
+
     try {
-      const refs = await storageCleanupService.findLiveObjectReferences(job.object_key);
+      lockAcquired = await acquireObjectSessionLock(client, job.object_key);
+
+      await client.query('BEGIN');
+      const refs = await storageCleanupService.findLiveObjectReferences(job.object_key, client);
       if (refs.length > 0) {
+        await client.query('COMMIT');
         await this.markJobCompleted(
           job.id,
-          `Skipped deletion: object_key still referenced in ${refs.join(', ')}`
+          `Skipped deletion: object remains referenced in ${refs.join(', ')}`
         );
         return true;
       }
+      await client.query('COMMIT');
 
+      // Advisory session lock remains held across R2 delete.
+      // PG transaction is closed during external network request.
       await storageService.deleteObject(job.object_key);
+
       await this.markJobCompleted(job.id, null);
       return true;
     } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
       const safeError = sanitizeStorageErrorMessage(err);
-      await this.markJobFailedOrDeadLetter(job, safeError);
+      await this.markJobFailedOrDeadLetter(job, safeError).catch(() => {});
       return false;
+    } finally {
+      if (lockAcquired) {
+        await releaseObjectSessionLock(client, job.object_key).catch(() => {});
+      }
+      client.release();
     }
   }
 

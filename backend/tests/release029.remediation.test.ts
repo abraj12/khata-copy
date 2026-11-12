@@ -698,6 +698,12 @@ describe('Khata Release #029 — Reliability, DSA Search, Keyset Pagination & Ha
       vi.spyOn(appPool, 'connect').mockResolvedValue(
         buildMockPoolClient(async (sql: any) => {
           const text = String(sql);
+          if (text.includes('FOR UPDATE')) {
+            return {
+              rows: [{ id: 21, archived_at: null, image_object_key: 'products/21/existing-old.jpg' }],
+              rowCount: 1,
+            };
+          }
           if (text.includes('UPDATE products')) {
             throw new Error('PG disk full');
           }

@@ -63,6 +63,11 @@ describe('Offline Bills & Non-Financial Document Storage Test Suite', () => {
       return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] } as any;
     });
 
+    vi.spyOn(appPool, 'connect').mockImplementation(async () => ({
+      query: (sql: any, params?: any) => (appPool.query as any)(sql, params),
+      release: () => {},
+    }) as any);
+
     const loginRes = await request(app).post('/api/v1/auth/login').send({
       phone: TEST_PHONE,
       password: TEST_PASSWORD,
@@ -325,6 +330,10 @@ describe('Offline Bills & Non-Financial Document Storage Test Suite', () => {
 
     it('deletes offline bill record and triggers storage deletion', async () => {
       let deletedFromR2Key = '';
+      const { storageCleanupService } = await import('../src/services/storageCleanup.service.js');
+      vi.spyOn(storageCleanupService, 'enqueueCleanupJobInTransaction').mockImplementation(async (_client: any, input: any) => {
+        deletedFromR2Key = input.objectKey;
+      });
       vi.spyOn(storageService, 'deleteObject').mockImplementation(async (key: string) => {
         deletedFromR2Key = key;
       });

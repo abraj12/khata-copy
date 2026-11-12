@@ -86,14 +86,8 @@ export const notificationCreateSchema = z
 
 export class AppDataService {
   private ensureMongoAvailableForAppData(): boolean {
-    if (!isMongoEnabled()) {
-      return false;
-    }
-    if (!isMongoReady()) {
-      if (env.NODE_ENV === 'production') {
-        throw new ReadModelUnavailableError('MongoDB app-data store is unavailable.');
-      }
-      return false;
+    if (!isMongoEnabled() || !isMongoReady()) {
+      throw new ReadModelUnavailableError('MongoDB app-data store is unavailable.');
     }
     return true;
   }
@@ -394,21 +388,25 @@ export class AppDataService {
   public async recordTelemetry(
     input: z.infer<typeof telemetryPayloadSchema>
   ): Promise<{ recorded: boolean }> {
-    const parsed = telemetryPayloadSchema.parse(input);
-    if (!isMongoEnabled() || !isMongoReady()) {
+    try {
+      const parsed = telemetryPayloadSchema.parse(input);
+      if (!isMongoEnabled() || !isMongoReady()) {
+        return { recorded: false };
+      }
+
+      await AppTelemetryModel.create({
+        kind: parsed.kind,
+        name: parsed.name,
+        durationMs: parsed.durationMs ?? null,
+        ok: parsed.ok ?? true,
+        meta: parsed.meta ?? {},
+        createdAt: new Date(),
+      }).catch(() => {});
+
+      return { recorded: true };
+    } catch {
       return { recorded: false };
     }
-
-    await AppTelemetryModel.create({
-      kind: parsed.kind,
-      name: parsed.name,
-      durationMs: parsed.durationMs ?? null,
-      ok: parsed.ok ?? true,
-      meta: parsed.meta ?? {},
-      createdAt: new Date(),
-    });
-
-    return { recorded: true };
   }
 }
 
