@@ -136,7 +136,7 @@ describe('Search & Bounded Pagination Test Suite', () => {
       expect(executedSql).toContain('ORDER BY LOWER(name) ASC, name ASC, id ASC');
     });
 
-    it('7. Enforces stable customer ordering (last_activity DESC, name ASC, id ASC) and parameterized LIMIT/OFFSET', async () => {
+    it('7. Enforces canonical customer ordering (outstanding DESC, last_activity DESC NULLS LAST, id ASC) and parameterized LIMIT/OFFSET', async () => {
       let executedSql = '';
       let executedParams: unknown[] = [];
 
@@ -147,7 +147,9 @@ describe('Search & Bounded Pagination Test Suite', () => {
       });
 
       await khataService.listCustomers();
-      expect(executedSql).toContain('ORDER BY GREATEST(tx.last_activity, pay.last_payment) DESC NULLS LAST, c.name ASC, c.id ASC');
+      expect(executedSql).toContain('ROUND(GREATEST(COALESCE(tx.total_udhar, 0) - COALESCE(alloc.total_allocated, 0), 0), 2) DESC');
+      expect(executedSql).toContain('GREATEST(tx.last_activity, pay.last_payment) DESC NULLS LAST');
+      expect(executedSql).toContain('c.id ASC');
       expect(executedSql).toContain('LIMIT $1 OFFSET $2');
       expect(executedParams).toEqual([26, 0]);
     });

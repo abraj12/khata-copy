@@ -210,9 +210,15 @@ describe('Khata Release #027 — MongoDB Architecture, Outbox, Fail-Closed Reads
       let backlogActive = false;
       vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
         const text = typeof sql === 'string' ? sql : sql?.text || '';
-        if (text.includes('pending_count')) {
+        if (text.includes('next_wake_at')) {
+          const nowMs = Date.now();
           return {
-            rows: [{ pending_count: backlogActive ? 1 : 0, next_delay_ms: backlogActive ? 2000 : null }],
+            rows: [
+              {
+                next_wake_at: backlogActive ? new Date(nowMs + 2000).toISOString() : null,
+                server_now: new Date(nowMs).toISOString(),
+              },
+            ],
             rowCount: 1,
           } as any;
         }

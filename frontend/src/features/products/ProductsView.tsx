@@ -59,8 +59,10 @@ export const ProductsView: React.FC = () => {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [search, setSearch] = useState('');
+  const [search, setSearchState] = useState('');
   const debouncedSearch = useDebouncedValue(search, 280);
+  const [searchFetchNonce, setSearchFetchNonce] = useState(0);
+  const needsRefetchOnRestoreRef = useRef(false);
 
   // Create state
   const [isAdding, setIsAdding] = useState(false);
@@ -89,7 +91,7 @@ export const ProductsView: React.FC = () => {
         setEditBarcode(scanned);
         showNotification('success', `Barcode "${scanned}" captured from scanner!`);
       } else {
-        setSearch(scanned);
+        handleSearchChange(scanned);
         showNotification('success', `Searching for scanned barcode: ${scanned}`);
       }
     },
@@ -143,12 +145,44 @@ export const ProductsView: React.FC = () => {
 
   const fetchProductsRequestIdRef = useRef(0);
   const fetchProductsAbortRef = useRef<AbortController | null>(null);
+  const fetchProductsIsLoadingMoreRef = useRef(false);
+  const activeProductSearchRef = useRef('');
+
+  const abortAndInvalidateProducts = () => {
+    fetchProductsRequestIdRef.current += 1;
+    fetchProductsIsLoadingMoreRef.current = false;
+    if (fetchProductsAbortRef.current) {
+      fetchProductsAbortRef.current.abort();
+      fetchProductsAbortRef.current = null;
+    }
+  };
+
+  const handleSearchChange = (nextSearch: string) => {
+    setSearchState(nextSearch);
+    if (nextSearch !== debouncedSearch) {
+      needsRefetchOnRestoreRef.current = true;
+      abortAndInvalidateProducts();
+      setProducts([]);
+      setPagination({
+        limit: 25,
+        offset: 0,
+        hasMore: false,
+        nextOffset: null,
+        nextCursor: null,
+        total: null,
+        totalIsExact: false,
+      });
+      setIsLoading(true);
+      setIsLoadingMore(false);
+    } else if (needsRefetchOnRestoreRef.current) {
+      needsRefetchOnRestoreRef.current = false;
+      setSearchFetchNonce((n) => n + 1);
+    }
+  };
 
   useEffect(() => {
     return () => {
-      if (fetchProductsAbortRef.current) {
-        fetchProductsAbortRef.current.abort();
-      }
+      abortAndInvalidateProducts();
     };
   }, []);
 
@@ -158,18 +192,29 @@ export const ProductsView: React.FC = () => {
     append: boolean = false,
     cursor: string | null = null
   ) => {
-    if (fetchProductsAbortRef.current) {
-      fetchProductsAbortRef.current.abort();
-    }
+    abortAndInvalidateProducts();
     const controller = new AbortController();
     fetchProductsAbortRef.current = controller;
-    const currentReqId = ++fetchProductsRequestIdRef.current;
+    const currentReqId = fetchProductsRequestIdRef.current;
+    activeProductSearchRef.current = searchQuery;
 
     try {
       if (append) {
+        fetchProductsIsLoadingMoreRef.current = true;
         setIsLoadingMore(true);
       } else {
+        fetchProductsIsLoadingMoreRef.current = false;
+        setPagination({
+          limit: 25,
+          offset: 0,
+          hasMore: false,
+          nextOffset: null,
+          nextCursor: null,
+          total: null,
+          totalIsExact: false,
+        });
         setIsLoading(true);
+        setIsLoadingMore(false);
         if (searchQuery !== '') {
           setProducts([]);
         }
@@ -187,7 +232,7 @@ export const ProductsView: React.FC = () => {
         pagination?: CursorPaginationMeta;
       }>(`/api/v1/products?${qs.toString()}`, { signal: controller.signal });
 
-      if (currentReqId !== fetchProductsRequestIdRef.current) return;
+      if (controller.signal.aborted || currentReqId !== fetchProductsRequestIdRef.current) return;
 
       const items = res.data.products || res.data.data || [];
       const pag: CursorPaginationMeta = res.data.pagination || {
@@ -202,7 +247,7 @@ export const ProductsView: React.FC = () => {
       if (append) {
         setProducts((prev) => mergeUniqueById(prev, items));
       } else {
-        setProducts(items);
+        setProducts(mergeUniqueById([], items));
       }
       setPagination({
         limit: pag.limit ?? 25,
@@ -214,11 +259,15 @@ export const ProductsView: React.FC = () => {
         totalIsExact: pag.totalIsExact,
       });
     } catch (err) {
-      if (currentReqId !== fetchProductsRequestIdRef.current) return;
-      if ((err as Error).name === 'AbortError') return;
+      if (controller.signal.aborted || currentReqId !== fetchProductsRequestIdRef.current) return;
+      if ((err as Error).name === 'AbortError' || (err as { code?: string }).code === 'ABORTED') return;
       showNotification('error', (err as Error).message || 'Failed to load products.');
     } finally {
-      if (currentReqId === fetchProductsRequestIdRef.current) {
+      if (fetchProductsAbortRef.current === controller) {
+        fetchProductsAbortRef.current = null;
+      }
+      if (!controller.signal.aborted && currentReqId === fetchProductsRequestIdRef.current) {
+        fetchProductsIsLoadingMoreRef.current = false;
         setIsLoading(false);
         setIsLoadingMore(false);
       }
@@ -226,15 +275,28 @@ export const ProductsView: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchProducts(debouncedSearch, 0, false, null);
-  }, [debouncedSearch]);
+    needsRefetchOnRestoreRef.current = false;
+    void fetchProducts(debouncedSearch, 0, false, null);
+    return () => {
+      abortAndInvalidateProducts();
+    };
+  }, [debouncedSearch, searchFetchNonce]);
 
   const handleLoadMore = () => {
-    if (!pagination.hasMore || isLoadingMore) return;
+    if (
+      !pagination.hasMore ||
+      isLoading ||
+      isLoadingMore ||
+      fetchProductsIsLoadingMoreRef.current ||
+      search !== activeProductSearchRef.current
+    ) {
+      return;
+    }
     const useCursor = typeof pagination.nextCursor === 'string' && pagination.nextCursor.length > 0;
     if (!useCursor && pagination.nextOffset === null) return;
-    fetchProducts(
-      debouncedSearch,
+    fetchProductsIsLoadingMoreRef.current = true;
+    void fetchProducts(
+      activeProductSearchRef.current,
       pagination.nextOffset ?? 0,
       true,
       useCursor ? pagination.nextCursor : null
@@ -776,7 +838,7 @@ export const ProductsView: React.FC = () => {
         <input
           type="text"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => handleSearchChange(e.target.value)}
           placeholder="Search products by name, HSN, or barcode..."
           className="neu-input neu-input-with-leading-icon w-full text-sm font-medium"
         />
@@ -1015,7 +1077,7 @@ export const ProductsView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleLoadMore}
-                  disabled={isLoadingMore}
+                  disabled={isLoading || isLoadingMore}
                   className="neu-btn-secondary text-xs px-5 py-2 font-bold inline-flex items-center gap-1.5 min-h-[38px]"
                 >
                   {isLoadingMore ? (
@@ -1421,7 +1483,7 @@ export const ProductsView: React.FC = () => {
         isOpen={isScanningGlobal}
         onClose={() => setIsScanningGlobal(false)}
         onProductFound={(product) => {
-          setSearch(product.name);
+          handleSearchChange(product.name);
           showNotification('success', `Scanned: ${product.name}`);
         }}
         onCreateWithBarcode={(barcode) => {

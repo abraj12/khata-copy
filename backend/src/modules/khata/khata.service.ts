@@ -190,7 +190,91 @@ export class KhataService {
     const limit = Math.min(Math.max(1, opts.limit || 25), 200);
     const offset = Math.max(0, opts.offset || 0);
 
-    let sql = `
+    const params: unknown[] = [];
+    const rawSearch = opts.search ? opts.search.trim() : '';
+    const hasSearch = rawSearch.length > 0;
+    let searchConditionSql = '';
+
+    if (hasSearch) {
+      const escaped = escapeLike(rawSearch.toLowerCase());
+      params.push(`%${escaped}%`);
+
+      const digits = rawSearch.replace(/\D/g, '');
+      let cleanPhoneDigits = digits;
+      if (
+        (digits.startsWith('91') && digits.length === 12) ||
+        (rawSearch.startsWith('+91') && digits.startsWith('91') && digits.length >= 5 && digits.length <= 12)
+      ) {
+        cleanPhoneDigits = digits.slice(2);
+      } else if (digits.startsWith('0') && digits.length >= 4 && digits.length <= 11) {
+        cleanPhoneDigits = digits.slice(1);
+      }
+
+      if (cleanPhoneDigits.length >= 3) {
+        params.push(`%${escapeLike(cleanPhoneDigits)}%`);
+        searchConditionSql = `AND (c.normalized_name ILIKE $1 ESCAPE '\\' OR c.phone ILIKE $1 ESCAPE '\\' OR c.normalized_phone ILIKE $2 ESCAPE '\\')`;
+      } else {
+        searchConditionSql = `AND (c.normalized_name ILIKE $1 ESCAPE '\\' OR c.phone ILIKE $1 ESCAPE '\\')`;
+      }
+    }
+
+    const sql = hasSearch
+      ? `
+      WITH matched_customers AS MATERIALIZED (
+        SELECT c.id, c.name, c.phone, c.address, c.state, c.state_code
+        FROM customers c
+        WHERE c.archived_at IS NULL
+          ${searchConditionSql}
+      ),
+      customer_tx AS (
+        SELECT
+          t.customer_id,
+          COALESCE(SUM(t.total_amount), 0)::numeric AS total_udhar,
+          MAX(t.created_at) AS last_activity
+        FROM udhar_transactions t
+        WHERE t.customer_id IN (SELECT id FROM matched_customers)
+        GROUP BY t.customer_id
+      ),
+      customer_alloc AS (
+        SELECT
+          t.customer_id,
+          COALESCE(SUM(pa.amount), 0)::numeric AS total_allocated
+        FROM payment_allocations pa
+        JOIN udhar_transactions t ON t.id = pa.transaction_id
+        WHERE t.customer_id IN (SELECT id FROM matched_customers)
+        GROUP BY t.customer_id
+      ),
+      customer_pay AS (
+        SELECT
+          p.customer_id,
+          COALESCE(SUM(p.amount), 0)::numeric AS total_received,
+          MAX(p.received_at) AS last_payment
+        FROM payments p
+        WHERE p.customer_id IN (SELECT id FROM matched_customers)
+        GROUP BY p.customer_id
+      )
+      SELECT
+        c.id,
+        c.name,
+        c.phone,
+        c.address,
+        c.state,
+        c.state_code,
+        COALESCE(tx.total_udhar, 0)::numeric AS total_udhar,
+        COALESCE(pay.total_received, 0)::numeric AS total_received,
+        GREATEST(COALESCE(tx.total_udhar, 0) - COALESCE(alloc.total_allocated, 0), 0)::numeric AS outstanding,
+        GREATEST(tx.last_activity, pay.last_payment) AS last_activity
+      FROM matched_customers c
+      LEFT JOIN customer_tx tx ON tx.customer_id = c.id
+      LEFT JOIN customer_alloc alloc ON alloc.customer_id = c.id
+      LEFT JOIN customer_pay pay ON pay.customer_id = c.id
+      ORDER BY
+        ROUND(GREATEST(COALESCE(tx.total_udhar, 0) - COALESCE(alloc.total_allocated, 0), 0), 2) DESC,
+        GREATEST(tx.last_activity, pay.last_payment) DESC NULLS LAST,
+        c.id ASC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `
+      : `
       WITH customer_tx AS (
         SELECT
           customer_id,
@@ -230,34 +314,13 @@ export class KhataService {
       LEFT JOIN customer_tx tx ON tx.customer_id = c.id
       LEFT JOIN customer_alloc alloc ON alloc.customer_id = c.id
       LEFT JOIN customer_pay pay ON pay.customer_id = c.id
+      WHERE c.archived_at IS NULL
+      ORDER BY
+        ROUND(GREATEST(COALESCE(tx.total_udhar, 0) - COALESCE(alloc.total_allocated, 0), 0), 2) DESC,
+        GREATEST(tx.last_activity, pay.last_payment) DESC NULLS LAST,
+        c.id ASC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
-
-    const conditions: string[] = ['c.archived_at IS NULL'];
-    const params: unknown[] = [];
-
-    if (opts.search && opts.search.trim()) {
-      const raw = opts.search.trim();
-      const escaped = escapeLike(raw.toLowerCase());
-      params.push(`%${escaped}%`);
-
-      const digits = raw.replace(/\D/g, '');
-      let cleanPhoneDigits = digits;
-      if (cleanPhoneDigits.startsWith('91') && cleanPhoneDigits.length === 12) {
-        cleanPhoneDigits = cleanPhoneDigits.slice(2);
-      } else if (cleanPhoneDigits.startsWith('0') && cleanPhoneDigits.length === 11) {
-        cleanPhoneDigits = cleanPhoneDigits.slice(1);
-      }
-
-      if (cleanPhoneDigits.length >= 3) {
-        params.push(`%${escapeLike(cleanPhoneDigits)}%`);
-        conditions.push(`(c.normalized_name ILIKE $1 OR c.phone ILIKE $1 OR c.normalized_phone ILIKE $2)`);
-      } else {
-        conditions.push(`(c.normalized_name ILIKE $1 OR c.phone ILIKE $1)`);
-      }
-    }
-
-    sql += ` WHERE ${conditions.join(' AND ')}`;
-    sql += ` ORDER BY GREATEST(tx.last_activity, pay.last_payment) DESC NULLS LAST, c.name ASC, c.id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limit + 1, offset);
 
     const result = await appPool.query(sql, params);

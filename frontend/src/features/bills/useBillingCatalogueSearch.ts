@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient } from '../../lib/apiClient.js';
-import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { CATALOGUE_PAGE_SIZE } from '../../utils/billingLimits.js';
 import {
   buildPaginatedSearchParams,
@@ -55,8 +54,11 @@ function usePaginatedCatalogue<T extends { id: number }>({
   fetchPage,
   errorFallbackMessage,
 }: UsePaginatedCatalogueConfig<T>) {
-  const [searchQuery, setSearchQuery] = useState('');
-  const debouncedSearch = useDebouncedValue(searchQuery, 300);
+  const [searchQuery, setSearchQueryState] = useState('');
+  const [debouncedState, setDebouncedState] = useState<{ query: string; nonce: number }>({
+    query: '',
+    nonce: 0,
+  });
 
   const [items, setItems] = useState<T[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -72,32 +74,107 @@ function usePaginatedCatalogue<T extends { id: number }>({
 
   const requestIdRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const isLoadingMoreRef = useRef(false);
   const activeQueryRef = useRef('');
+  const debouncedQueryRef = useRef('');
+  debouncedQueryRef.current = debouncedState.query;
+  const fetchPageRef = useRef(fetchPage);
+  fetchPageRef.current = fetchPage;
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const needsRefetchOnRestoreRef = useRef(false);
+
+  const abortAndInvalidate = useCallback(() => {
+    requestIdRef.current += 1;
+    isLoadingMoreRef.current = false;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      abortAndInvalidate();
+    };
+  }, [abortAndInvalidate]);
+
+  const setSearchQuery = useCallback(
+    (nextQuery: string) => {
+      setSearchQueryState(nextQuery);
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+
+      const trimmedNext = nextQuery.trim();
+      if (trimmedNext !== debouncedQueryRef.current.trim()) {
+        needsRefetchOnRestoreRef.current = true;
+        abortAndInvalidate();
+        setItems([]);
+        setPagination({
+          hasMore: false,
+          nextOffset: null,
+          nextCursor: null,
+          total: null,
+          totalIsExact: false,
+        });
+        setIsLoading(true);
+        setIsLoadingMore(false);
+        setError(null);
+      }
+
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null;
+        setDebouncedState((prev) => {
+          if (trimmedNext === prev.query.trim() && !needsRefetchOnRestoreRef.current) {
+            return prev;
+          }
+          needsRefetchOnRestoreRef.current = false;
+          return { query: trimmedNext, nonce: prev.nonce + 1 };
+        });
+      }, 300);
+    },
+    [abortAndInvalidate]
+  );
 
   const runFetch = useCallback(
     async (rawQuery: string, offset: number, append: boolean, cursor: string | null = null) => {
-      abortControllerRef.current?.abort();
+      abortAndInvalidate();
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
-      const requestId = ++requestIdRef.current;
+      const requestId = requestIdRef.current;
       const trimmedQuery = rawQuery.trim();
       activeQueryRef.current = trimmedQuery;
 
       if (append) {
+        isLoadingMoreRef.current = true;
         setIsLoadingMore(true);
       } else {
+        isLoadingMoreRef.current = false;
+        setPagination({
+          hasMore: false,
+          nextOffset: null,
+          nextCursor: null,
+          total: null,
+          totalIsExact: false,
+        });
         setIsLoading(true);
+        setIsLoadingMore(false);
       }
       setError(null);
 
       try {
-        const result = await fetchPage(trimmedQuery, offset, controller.signal, cursor);
+        const result = await fetchPageRef.current(trimmedQuery, offset, controller.signal, cursor);
         if (controller.signal.aborted || requestId !== requestIdRef.current) {
           return;
         }
 
-        setItems((prev) => (append ? mergeUniqueById(prev, result.items) : result.items));
+        setItems((prev) => (append ? mergeUniqueById(prev, result.items) : mergeUniqueById([], result.items)));
         const pageHasMore = Boolean(result.pagination?.hasMore);
         setPagination({
           hasMore: pageHasMore,
@@ -115,33 +192,44 @@ function usePaginatedCatalogue<T extends { id: number }>({
         }
         setError(err?.message || errorFallbackMessage);
       } finally {
-        if (requestId === requestIdRef.current) {
+        if (abortControllerRef.current === controller) {
+          abortControllerRef.current = null;
+        }
+        if (!controller.signal.aborted && requestId === requestIdRef.current) {
+          isLoadingMoreRef.current = false;
           setIsLoading(false);
           setIsLoadingMore(false);
         }
       }
     },
-    [fetchPage, errorFallbackMessage]
+    [errorFallbackMessage, abortAndInvalidate]
   );
 
   useEffect(() => {
-    void runFetch(debouncedSearch, 0, false, null);
+    needsRefetchOnRestoreRef.current = false;
+    void runFetch(debouncedState.query, 0, false, null);
     return () => {
-      abortControllerRef.current?.abort();
-      requestIdRef.current += 1;
+      abortAndInvalidate();
     };
-  }, [debouncedSearch, runFetch]);
+  }, [debouncedState, runFetch, abortAndInvalidate]);
 
   const loadMore = useCallback(() => {
-    if (!pagination.hasMore || isLoading || isLoadingMore) {
+    if (
+      !pagination.hasMore ||
+      isLoading ||
+      isLoadingMore ||
+      isLoadingMoreRef.current ||
+      searchQuery.trim() !== activeQueryRef.current
+    ) {
       return;
     }
     const useCursor = typeof pagination.nextCursor === 'string' && pagination.nextCursor.length > 0;
     if (!useCursor && pagination.nextOffset === null) {
       return;
     }
+    isLoadingMoreRef.current = true;
     void runFetch(activeQueryRef.current, pagination.nextOffset ?? 0, true, useCursor ? pagination.nextCursor : null);
-  }, [pagination.hasMore, pagination.nextCursor, pagination.nextOffset, isLoading, isLoadingMore, runFetch]);
+  }, [pagination.hasMore, pagination.nextCursor, pagination.nextOffset, isLoading, isLoadingMore, searchQuery, runFetch]);
 
   const prependItem = useCallback((created: T) => {
     setItems((prev) => {
@@ -151,7 +239,7 @@ function usePaginatedCatalogue<T extends { id: number }>({
   }, []);
 
   const refresh = useCallback(() => {
-    void runFetch(searchQuery, 0, false, null);
+    void runFetch(searchQuery.trim(), 0, false, null);
   }, [runFetch, searchQuery]);
 
   return {

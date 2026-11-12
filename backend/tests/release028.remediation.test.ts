@@ -211,8 +211,11 @@ describe('Khata Release #028 — Reliability, Consistency, Neon Optimization & P
             rowCount: 1,
           } as any;
         }
-        if (text.includes('pending_count') && text.includes('dead_letter_count')) {
-          return { rows: [{ pending_count: 0, dead_letter_count: 1, next_delay_ms: null }], rowCount: 1 } as any;
+        if (text.includes('dead_letter_count')) {
+          return { rows: [{ dead_letter_count: 1 }], rowCount: 1 } as any;
+        }
+        if (text.includes('next_wake_at')) {
+          return { rows: [{ next_wake_at: null, server_now: new Date().toISOString() }], rowCount: 1 } as any;
         }
         if (text.includes('dead_letter_at')) {
           return { rows: [], rowCount: 1 } as any;
@@ -275,8 +278,8 @@ describe('Khata Release #028 — Reliability, Consistency, Neon Optimization & P
           leaseRenewCalls += 1;
           return { rows: [], rowCount: 1 } as any;
         }
-        if (text.includes('pending_count') && text.includes('dead_letter_count')) {
-          return { rows: [{ pending_count: 0, dead_letter_count: 0, next_delay_ms: null }], rowCount: 1 } as any;
+        if (text.includes('next_wake_at')) {
+          return { rows: [{ next_wake_at: null, server_now: new Date().toISOString() }], rowCount: 1 } as any;
         }
         return { rows: [], rowCount: 0 } as any;
       });
@@ -329,8 +332,8 @@ describe('Khata Release #028 — Reliability, Consistency, Neon Optimization & P
           }
           return { rows: [], rowCount: 0 } as any;
         }
-        if (text.includes('pending_count') && text.includes('dead_letter_count')) {
-          return { rows: [{ pending_count: 0, dead_letter_count: 0, next_delay_ms: null }], rowCount: 1 } as any;
+        if (text.includes('next_wake_at')) {
+          return { rows: [{ next_wake_at: null, server_now: new Date().toISOString() }], rowCount: 1 } as any;
         }
         return { rows: [], rowCount: 0 } as any;
       });

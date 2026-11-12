@@ -32,10 +32,16 @@ npm ci
 # 2. Compile both backend and frontend workspaces
 npm run build
 
-# 3. Execute automated unit test suites (328 backend + 146 frontend tests)
+# 3. Execute automated unit test suites (342 backend + 153 frontend tests)
 npm test
 
-# 4. Validate Digital Asset Links configuration for TWA
+# 4. Execute real PostgreSQL + MongoDB integration suite (requires TEST_DATABASE_URL / TEST_MONGODB_URI)
+npm run test:integration
+
+# 5. Execute reproducible 1k-100k performance & EXPLAIN benchmark suite
+npm run benchmark:release030
+
+# 6. Validate Digital Asset Links configuration for TWA
 node frontend/scripts/validate-assetlinks.js
 ```
 
@@ -105,6 +111,8 @@ Migrations list:
 27. `027_outbox_events.sql`: Transactional `app_outbox_events` table and partial ready/lease/aggregate indexes for MongoDB synchronization.
 28. `028_outbox_dead_letter.sql`: `dead_letter` status constraint, `dead_letter_at` timestamp, and dead-letter audit index.
 29. `029_outbox_legacy_dead_letter_and_perf_indexes.sql`: Legacy exhausted outbox row backfill into `dead_letter`, selective unresolved index (`idx_app_outbox_unresolved_created`), and optional `pg_trgm` GIN search fallback indexes (`idx_products_active_name_trgm`, `idx_customers_active_name_trgm`).
+30. `030_storage_cleanup_jobs.sql`: Durable Cloudflare R2 orphan-cleanup retry queue (`storage_cleanup_jobs`) with active partial unique deduplication and wakeup/lease/completion indexes.
+31. `031_outbox_worker_search_indexes.sql`: Selective partial outbox wakeup indexes (`idx_app_outbox_*`), active B-tree barcode/HSN/customer search indexes, and privilege-guarded `pg_trgm` GIN fallback indexes.
 
 ### 3.3 Running Workspaces Locally
 
@@ -171,12 +179,14 @@ Because the application is a Trusted Web Activity, ordinary frontend updates dep
 | Document | Purpose & Contents |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | High-level topology, single-shopkeeper data flow, TWA architecture, and security design |
-| [docs/DATABASE_AND_MIGRATIONS.md](docs/DATABASE_AND_MIGRATIONS.md) | Schema specification (all 29 migrations), FIFO payment allocation, and composite foreign keys |
+| [docs/DATABASE_AND_MIGRATIONS.md](docs/DATABASE_AND_MIGRATIONS.md) | Schema specification (all 31 migrations), FIFO payment allocation, and composite foreign keys |
 | [docs/MONGODB_ARCHITECTURE.md](docs/MONGODB_ARCHITECTURE.md) | MongoDB read-model synchronization, outbox worker, cursor pagination, and indexing architecture |
 | [docs/ANDROID_RELEASE.md](docs/ANDROID_RELEASE.md) | TWA build guide, keystore signing configuration, and Digital Asset Links verification |
 | [docs/ACCESSIBILITY_AND_THEMES.md](docs/ACCESSIBILITY_AND_THEMES.md) | 9 tactile neumorphic appearance presets, CSS gradient rendering, and keyboard accessibility |
-| [docs/RELEASE_029_REMEDIATION_REPORT.md](docs/RELEASE_029_REMEDIATION_REPORT.md) | Release #029 remediation findings, verification matrix, and production hardening report |
-| [docs/RELEASE_029_PERFORMANCE_BENCHMARKS.md](docs/RELEASE_029_PERFORMANCE_BENCHMARKS.md) | Reproducible local MongoDB (`1k`–`100k`) & PostgreSQL outbox/EXPLAIN benchmarks |
-| [docs/ALGORITHM_AND_COMPLEXITY_REVIEW.md](docs/ALGORITHM_AND_COMPLEXITY_REVIEW.md) | Search tokenization, keyset pagination, outbox coalescing, and Big-O complexity review |
+| [docs/RELEASE_030_REMEDIATION_REPORT.md](docs/RELEASE_030_REMEDIATION_REPORT.md) | Release #030 remediation findings, verification matrix, and 22-section engineering report |
+| [docs/RELEASE_030_PERFORMANCE_BENCHMARKS.md](docs/RELEASE_030_PERFORMANCE_BENCHMARKS.md) | Reproducible `1k`–`100k` PostgreSQL 18.6 (`EXPLAIN`) & MongoDB 8.2.4 benchmarks |
+| [docs/RELEASE_029_REMEDIATION_REPORT.md](docs/RELEASE_029_REMEDIATION_REPORT.md) | Prior Release #029 remediation findings and verification report |
+| [docs/RELEASE_029_PERFORMANCE_BENCHMARKS.md](docs/RELEASE_029_PERFORMANCE_BENCHMARKS.md) | Prior Release #029 benchmark baseline report |
+| [docs/ALGORITHM_AND_COMPLEXITY_REVIEW.md](docs/ALGORITHM_AND_COMPLEXITY_REVIEW.md) | Search tokenization, keyset pagination, outbox coalescing, and theoretical vs observed complexity review |
 | [docs/REMEDIATION_REPORT.md](docs/REMEDIATION_REPORT.md) | Earlier baseline audit reconciliation report with verification evidence |
 | [docs/REMEDIATION_BASELINE.md](docs/REMEDIATION_BASELINE.md) | Audit trail from baseline commit to current implementation |

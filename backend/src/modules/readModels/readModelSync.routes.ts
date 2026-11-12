@@ -1,5 +1,5 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
-import { appPool } from '../../config/database.js';
+import { appPool, inspectSearchIndexCapabilities } from '../../config/database.js';
 import { isMongoEnabled, isMongoReady } from '../../config/mongodb.js';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { DashboardSnapshotModel } from './models.js';
@@ -24,7 +24,7 @@ router.use(requireOwnerSession);
  */
 router.get('/status', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const [countsRes, deadLettersRes] = await Promise.all([
+    const [countsRes, deadLettersRes, searchCapabilities] = await Promise.all([
       appPool.query(`
         SELECT
           COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
@@ -57,6 +57,13 @@ router.get('/status', async (_req: Request, res: Response, next: NextFunction) =
         ORDER BY COALESCE(dead_letter_at, updated_at, created_at) DESC, id DESC
         LIMIT 20
       `),
+      inspectSearchIndexCapabilities().catch(() => ({
+        pgTrgmInstalled: false,
+        expectedOptionalIndexes: [],
+        presentOptionalIndexes: [],
+        missingOptionalIndexes: [],
+        fallbackSearchMode: 'unknown' as const,
+      })),
     ]);
 
     const c = countsRes.rows[0] || {};
@@ -130,6 +137,7 @@ router.get('/status', async (_req: Request, res: Response, next: NextFunction) =
           : null,
         syncStatus,
         worker: readModelOutboxWorker.getStatus(),
+        searchCapabilities,
       },
     });
   } catch (err) {

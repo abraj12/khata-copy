@@ -185,6 +185,8 @@ export const EXPECTED_MIGRATIONS = [
   '027_outbox_events.sql',
   '028_outbox_dead_letter.sql',
   '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
+  '030_storage_cleanup_jobs.sql',
+  '031_outbox_worker_search_indexes.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [
@@ -217,7 +219,72 @@ export const EXPECTED_CORE_TABLES = [
   'business_expenses',
   'business_expense_events',
   'app_outbox_events',
+  'storage_cleanup_jobs',
 ];
+
+export const OPTIONAL_SEARCH_TRGM_INDEXES = [
+  'idx_products_active_name_trgm',
+  'idx_products_active_hsn_trgm',
+  'idx_products_active_barcode_trgm',
+  'idx_customers_active_name_trgm',
+  'idx_customers_active_phone_trgm',
+  'idx_customers_active_normalized_phone_trgm',
+] as const;
+
+export interface SearchIndexCapabilitiesReport {
+  pgTrgmInstalled: boolean;
+  expectedOptionalIndexes: string[];
+  presentOptionalIndexes: string[];
+  missingOptionalIndexes: string[];
+  fallbackSearchMode: 'pg_trgm_gin' | 'sequential_fallback' | 'unknown';
+}
+
+/**
+ * Inspects live PostgreSQL extension and index metadata to determine whether
+ * optional trigram fallback search indexes are actually installed.
+ */
+export async function inspectSearchIndexCapabilities(options?: {
+  warnOnMissing?: boolean;
+}): Promise<SearchIndexCapabilitiesReport> {
+  const expectedOptionalIndexes = [...OPTIONAL_SEARCH_TRGM_INDEXES];
+  const [extRes, idxRes] = await Promise.all([
+    appPool.query(
+      `SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') AS pg_trgm_installed`
+    ),
+    appPool.query(
+      `SELECT indexname
+       FROM pg_indexes
+       WHERE schemaname = 'public'
+         AND indexname = ANY($1::text[])`,
+      [expectedOptionalIndexes]
+    ),
+  ]);
+
+  const pgTrgmInstalled = Boolean(extRes.rows[0]?.pg_trgm_installed);
+  const presentSet = new Set(
+    idxRes.rows.map((r: { indexname?: string }) => String(r.indexname || ''))
+  );
+  const presentOptionalIndexes = expectedOptionalIndexes.filter((name) => presentSet.has(name));
+  const missingOptionalIndexes = expectedOptionalIndexes.filter((name) => !presentSet.has(name));
+
+  if (options?.warnOnMissing && missingOptionalIndexes.length > 0) {
+    console.warn('[PG SEARCH CAPABILITIES] Optional trigram search indexes missing; fallback ILIKE may use sequential scans.', {
+      pgTrgmInstalled,
+      missingOptionalIndexes,
+    });
+  }
+
+  return {
+    pgTrgmInstalled,
+    expectedOptionalIndexes,
+    presentOptionalIndexes,
+    missingOptionalIndexes,
+    fallbackSearchMode:
+      pgTrgmInstalled && missingOptionalIndexes.length === 0
+        ? 'pg_trgm_gin'
+        : 'sequential_fallback',
+  };
+}
 
 export interface ReadinessReport {
   isReady: boolean;

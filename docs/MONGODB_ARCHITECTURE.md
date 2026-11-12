@@ -1,8 +1,8 @@
 # Khata ERP — MongoDB Read-Optimized Architecture & Outbox Synchronization
 
-- **Release:** `#029`
+- **Release:** `#030`
 - **Owner / Maintainer:** ALGIONS AI LABS PRIVATE LIMITED
-- **Primary System of Record:** Neon PostgreSQL (`postgresql`, migrations `001`–`029`)
+- **Primary System of Record:** Neon PostgreSQL (`postgresql`, migrations `001`–`031`)
 - **Read-Optimized Projection & App-Data Store:** MongoDB (`mongoose`, controlled indexes + partial unique filters + TTL collections)
 
 ---
@@ -121,12 +121,14 @@ PostgreSQL COMMIT
 
 - **Zero Idle Polling:** `ReadModelOutboxWorker` (`backend/src/modules/readModels/readModelOutbox.worker.ts`) uses an in-process `EventEmitter` listener on committed writes and **never runs an idle `setInterval` poller**. *(Tradeoff: Render free-tier web instances run as a single Node process; horizontal multi-instance scaling would require an external pub/sub or low-frequency wake mechanism across workers.)*
 - **Lease Renewal & Exhaustion Protection:** Long-running batches renew their lock via `renewBatchLease()` every `leaseHeartbeatIntervalMs`. When PostgreSQL or MongoDB throws during batch failure recording, `markEventsFailedWithBackoff()` propagates errors to `handleDrainFailure()`, activating bounded exponential-backoff retries (`scheduleOneShotRetry()`) and marking `outboxDegraded: true`.
-- **Dead-Letter Transition & Owner Recovery:** Exhausted events (`attempt_count >= max_attempts`) deterministically transition to `status = 'dead_letter'` with `dead_letter_at = NOW()` (`028_outbox_dead_letter.sql`, backfilling legacy exhausted rows and adding partial outbox/trigram indexes in `029_outbox_legacy_dead_letter_and_perf_indexes.sql`), surfaced via `GET /api/v1/read-model-sync/status` and retryable on demand via `POST /api/v1/read-model-sync/outbox/:id/retry` (`backend/src/modules/readModels/readModelSync.routes.ts`).
+- **`O(log N)` `LIMIT 1` Backlog Wakeup Probes (Release #030):** `inspectRetryableBacklogDelay()` executes a 3-branch `UNION ALL` (`LIMIT 1` on `pending`, retryable `failed`, and `processing`) over partial outbox indexes (`031_outbox_worker_search_indexes.sql`), eliminating full-table scans over `100k+` `'processed'` events, while `refreshDeadLetterIndicator()` runs only at startup and exhaustion transitions.
+- **Dead-Letter Transition & Owner Recovery:** Exhausted events (`attempt_count >= max_attempts`) deterministically transition to `status = 'dead_letter'` with `dead_letter_at = NOW()` (`028_outbox_dead_letter.sql`, backfilling legacy exhausted rows in `029`), surfaced alongside `searchCapabilities` via `GET /api/v1/read-model-sync/status` and retryable on demand via `POST /api/v1/read-model-sync/outbox/:id/retry` (`backend/src/modules/readModels/readModelSync.routes.ts`).
 - **Coalesced Snapshot Refreshes:** Burst domain writes update `product_search`, `customer_summaries`, `daily_analytics`, and `recent_activity` immediately via deduplicated outbox aggregation and batched `bulkWrite` syncs while throttling full PostgreSQL global `dashboard_snapshots` queries via `READ_MODEL_DASHBOARD_REFRESH_MIN_INTERVAL_MS` (`15000 ms` default) with a single trailing flush (`flushDashboardRefresh()`).
+- **Durable R2 Orphan Cleanup Isolation:** Failed Cloudflare R2 object deletions enqueue retries in dedicated table `storage_cleanup_jobs` (`030_storage_cleanup_jobs.sql`, `StorageCleanupWorker`) rather than polluting financial `app_outbox_events`.
 
 ### 3.3 Separation of Schema Migrations vs Read-Model Rebuilds
 
-- **Schema Migrations Only:** `backend/scripts/migrate.ts` (`npm run migrate`) executes strictly ordered SQL migrations (`001`–`029`) without triggering full MongoDB rebuilds.
+- **Schema Migrations Only:** `backend/scripts/migrate.ts` (`npm run migrate`) executes strictly ordered SQL migrations (`001`–`031`) without triggering full MongoDB rebuilds.
 - **Explicit Rebuild CLI:** `backend/scripts/rebuild-read-models.ts` (`npm run rebuild:read-models -- --confirm`) requires `--confirm` / `--yes` and fails closed otherwise, invoking `ReadModelSyncService.rebuildAllReadModels({ confirm: true })` in bounded batches.
 
 ---
@@ -143,7 +145,7 @@ When `MONGODB_ENABLED=true`:
 ### Fail-Closed & Cursor Error Contracts
 
 - If `MONGODB_ENABLED=true` and MongoDB disconnects (`!isMongoReady()`), `ReadModelsQueryService.assertMongoReady()` throws `ReadModelUnavailableError`, returning HTTP `503` (`code: "READ_MODEL_UNAVAILABLE"`) without silent Neon fallback scans.
-- Malformed or tampered `cursor` tokens throw `InvalidPaginationCursorError`, returning HTTP `400` (`code: "INVALID_PAGINATION_CURSOR"`).
+- Malformed, tampered, or cross-query `cursor` tokens (`buildProductCursorQueryContext` / `buildCustomerCursorQueryContext` checked by `decodeProductCursor` / `decodeCustomerCursor`) throw `InvalidPaginationCursorError`, returning HTTP `400` (`code: "INVALID_PAGINATION_CURSOR"`).
 - `/api/v1/health/live` executes `0` PostgreSQL or MongoDB queries; `/api/v1/health/ready` runs explicit readiness probes.
 
 ---

@@ -1,9 +1,10 @@
 import { createApp } from './app.js';
-import { closeDatabasePools } from './config/database.js';
+import { closeDatabasePools, inspectSearchIndexCapabilities } from './config/database.js';
 import { env } from './config/env.js';
 import { connectMongo, disconnectMongo, isMongoEnabled, isMongoReady } from './config/mongodb.js';
 import { runPendingMigrationsWithRetry } from './config/migrator.js';
 import { readModelOutboxWorker } from './modules/readModels/readModelOutbox.worker.js';
+import { storageCleanupWorker } from './services/storageCleanup.worker.js';
 
 async function bootstrap() {
   try {
@@ -25,6 +26,9 @@ async function bootstrap() {
     }
   }
 
+  void inspectSearchIndexCapabilities({ warnOnMissing: true }).catch(() => {});
+  storageCleanupWorker.start();
+
   if (isMongoEnabled() && isMongoReady()) {
     readModelOutboxWorker.start();
   }
@@ -42,7 +46,10 @@ async function bootstrap() {
     shuttingDown = true;
     console.log(`[KHATA SERVER] ${signal} signal received: shutting down gracefully`);
 
-    await readModelOutboxWorker.stop().catch(() => {});
+    await Promise.all([
+      readModelOutboxWorker.stop().catch(() => {}),
+      storageCleanupWorker.stop().catch(() => {}),
+    ]);
 
     await new Promise<void>((resolve) => {
       server.close(() => {

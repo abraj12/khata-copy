@@ -74,6 +74,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
     try {
       // 1. Drop public schema tables cleanly for test isolation
       await client.query(`
+        DROP TABLE IF EXISTS "storage_cleanup_jobs" CASCADE;
         DROP TABLE IF EXISTS "app_outbox_events" CASCADE;
         DROP TABLE IF EXISTS "business_expense_events" CASCADE;
         DROP TABLE IF EXISTS "business_expenses" CASCADE;
@@ -143,6 +144,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '027_outbox_events.sql',
         '028_outbox_dead_letter.sql',
         '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
+        '030_storage_cleanup_jobs.sql',
+        '031_outbox_worker_search_indexes.sql',
       ];
 
       await client.query(`
@@ -178,7 +181,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
   });
 
   // 1. Migration tracking & Core Tables Verification
-  it('1. All migrations 001-029 are tracked and all core tables exist in PostgreSQL schema', async () => {
+  it('1. All migrations 001-031 are tracked and all core tables exist in PostgreSQL schema', async () => {
     const migRes = await pool.query('SELECT version FROM schema_migrations ORDER BY version ASC');
     expect(migRes.rows.map((r) => r.version)).toEqual([
       '001_auth_tables.sql',
@@ -210,6 +213,8 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '027_outbox_events.sql',
       '028_outbox_dead_letter.sql',
       '029_outbox_legacy_dead_letter_and_perf_indexes.sql',
+      '030_storage_cleanup_jobs.sql',
+      '031_outbox_worker_search_indexes.sql',
     ]);
 
     const expectedTables = [
@@ -242,6 +247,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       'business_expenses',
       'business_expense_events',
       'app_outbox_events',
+      'storage_cleanup_jobs',
     ];
 
     const tablesRes = await pool.query(

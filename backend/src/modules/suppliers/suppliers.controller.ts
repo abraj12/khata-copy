@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { suppliersService } from './suppliers.service.js';
 import { storageService } from '../../services/storage.service.js';
+import { storageCleanupService } from '../../services/storageCleanup.service.js';
 import {
   allocateAdvanceSchema,
   cancelPurchaseBillSchema,
@@ -270,7 +271,12 @@ export const suppliersController = {
         });
         res.json({ success: true, data: updatedBill });
       } catch (dbErr) {
-        await storageService.deleteObject(uploaded.objectKey);
+        await storageCleanupService.attemptDeleteOrEnqueue({
+          objectKey: uploaded.objectKey,
+          objectKind: 'supplier_bill',
+          reason: 'supplier_attachment_rollback',
+          isRollbackNewUpload: true,
+        });
         throw dbErr;
       }
     } catch (err) {

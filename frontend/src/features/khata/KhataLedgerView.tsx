@@ -168,8 +168,10 @@ export const KhataLedgerView: React.FC = () => {
   });
   const [isLoadingCustomers, setIsLoadingCustomers] = useState(true);
   const [isLoadingMoreCustomers, setIsLoadingMoreCustomers] = useState(false);
-  const [search, setSearch] = useState('');
+  const [search, setSearchState] = useState('');
   const debouncedSearch = useDebouncedValue(search, 280);
+  const [searchFetchNonce, setSearchFetchNonce] = useState(0);
+  const needsRefetchOnRestoreRef = useRef(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Offline Bills Modal state
@@ -251,12 +253,44 @@ export const KhataLedgerView: React.FC = () => {
 
   const fetchCustomersRequestIdRef = useRef(0);
   const fetchCustomersAbortRef = useRef<AbortController | null>(null);
+  const fetchCustomersIsLoadingMoreRef = useRef(false);
+  const activeCustomerSearchRef = useRef('');
+
+  const abortAndInvalidateCustomers = () => {
+    fetchCustomersRequestIdRef.current += 1;
+    fetchCustomersIsLoadingMoreRef.current = false;
+    if (fetchCustomersAbortRef.current) {
+      fetchCustomersAbortRef.current.abort();
+      fetchCustomersAbortRef.current = null;
+    }
+  };
+
+  const handleCustomerSearchChange = (nextSearch: string) => {
+    setSearchState(nextSearch);
+    if (nextSearch !== debouncedSearch) {
+      needsRefetchOnRestoreRef.current = true;
+      abortAndInvalidateCustomers();
+      setCustomers([]);
+      setCustomerPagination({
+        limit: 25,
+        offset: 0,
+        hasMore: false,
+        nextOffset: null,
+        nextCursor: null,
+        total: null,
+        totalIsExact: false,
+      });
+      setIsLoadingCustomers(true);
+      setIsLoadingMoreCustomers(false);
+    } else if (needsRefetchOnRestoreRef.current) {
+      needsRefetchOnRestoreRef.current = false;
+      setSearchFetchNonce((n) => n + 1);
+    }
+  };
 
   useEffect(() => {
     return () => {
-      if (fetchCustomersAbortRef.current) {
-        fetchCustomersAbortRef.current.abort();
-      }
+      abortAndInvalidateCustomers();
     };
   }, []);
 
@@ -266,18 +300,29 @@ export const KhataLedgerView: React.FC = () => {
     append: boolean = false,
     cursor: string | null = null
   ) => {
-    if (fetchCustomersAbortRef.current) {
-      fetchCustomersAbortRef.current.abort();
-    }
+    abortAndInvalidateCustomers();
     const controller = new AbortController();
     fetchCustomersAbortRef.current = controller;
-    const currentReqId = ++fetchCustomersRequestIdRef.current;
+    const currentReqId = fetchCustomersRequestIdRef.current;
+    activeCustomerSearchRef.current = queryText;
 
     try {
       if (append) {
+        fetchCustomersIsLoadingMoreRef.current = true;
         setIsLoadingMoreCustomers(true);
       } else {
+        fetchCustomersIsLoadingMoreRef.current = false;
+        setCustomerPagination({
+          limit: 25,
+          offset: 0,
+          hasMore: false,
+          nextOffset: null,
+          nextCursor: null,
+          total: null,
+          totalIsExact: false,
+        });
         setIsLoadingCustomers(true);
+        setIsLoadingMoreCustomers(false);
         if (queryText !== '') {
           setCustomers([]);
         }
@@ -296,7 +341,7 @@ export const KhataLedgerView: React.FC = () => {
         pagination?: CursorPaginationMeta;
       }>(`/api/v1/khata/customers?${qs.toString()}`, { signal: controller.signal });
 
-      if (currentReqId !== fetchCustomersRequestIdRef.current) return;
+      if (controller.signal.aborted || currentReqId !== fetchCustomersRequestIdRef.current) return;
 
       const items = res.data.customers || res.data.data || [];
       const pagination: CursorPaginationMeta = res.data.pagination || {
@@ -312,7 +357,7 @@ export const KhataLedgerView: React.FC = () => {
       if (append) {
         setCustomers((prev) => mergeUniqueById(prev, items));
       } else {
-        setCustomers(items);
+        setCustomers(mergeUniqueById([], items));
       }
       setCustomerPagination({
         limit: pagination.limit ?? 25,
@@ -324,11 +369,15 @@ export const KhataLedgerView: React.FC = () => {
         totalIsExact: pagination.totalIsExact,
       });
     } catch (err) {
-      if (currentReqId !== fetchCustomersRequestIdRef.current) return;
-      if ((err as Error).name === 'AbortError') return;
+      if (controller.signal.aborted || currentReqId !== fetchCustomersRequestIdRef.current) return;
+      if ((err as Error).name === 'AbortError' || (err as { code?: string }).code === 'ABORTED') return;
       showNotification('error', (err as Error).message || 'Failed to load customers.');
     } finally {
-      if (currentReqId === fetchCustomersRequestIdRef.current) {
+      if (fetchCustomersAbortRef.current === controller) {
+        fetchCustomersAbortRef.current = null;
+      }
+      if (!controller.signal.aborted && currentReqId === fetchCustomersRequestIdRef.current) {
+        fetchCustomersIsLoadingMoreRef.current = false;
         setIsLoadingCustomers(false);
         setIsLoadingMoreCustomers(false);
       }
@@ -340,16 +389,29 @@ export const KhataLedgerView: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    fetchCustomers(debouncedSearch, 0, false, null);
-  }, [debouncedSearch]);
+    needsRefetchOnRestoreRef.current = false;
+    void fetchCustomers(debouncedSearch, 0, false, null);
+    return () => {
+      abortAndInvalidateCustomers();
+    };
+  }, [debouncedSearch, searchFetchNonce]);
 
   const handleLoadMoreCustomers = () => {
-    if (!customerPagination.hasMore || isLoadingMoreCustomers) return;
+    if (
+      !customerPagination.hasMore ||
+      isLoadingCustomers ||
+      isLoadingMoreCustomers ||
+      fetchCustomersIsLoadingMoreRef.current ||
+      search !== activeCustomerSearchRef.current
+    ) {
+      return;
+    }
     const useCursor =
       typeof customerPagination.nextCursor === 'string' && customerPagination.nextCursor.length > 0;
     if (!useCursor && customerPagination.nextOffset === null) return;
-    fetchCustomers(
-      debouncedSearch,
+    fetchCustomersIsLoadingMoreRef.current = true;
+    void fetchCustomers(
+      activeCustomerSearchRef.current,
       customerPagination.nextOffset ?? 0,
       true,
       useCursor ? customerPagination.nextCursor : null
@@ -1066,7 +1128,7 @@ export const KhataLedgerView: React.FC = () => {
         <input
           type="text"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => handleCustomerSearchChange(e.target.value)}
           placeholder="Search customer by name or phone..."
           className="neu-input neu-input-with-leading-icon w-full text-sm font-medium"
         />
@@ -1225,7 +1287,7 @@ export const KhataLedgerView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleLoadMoreCustomers}
-                  disabled={isLoadingMoreCustomers}
+                  disabled={isLoadingCustomers || isLoadingMoreCustomers}
                   className="neu-btn-secondary text-xs px-5 py-2 font-bold inline-flex items-center gap-1.5 min-h-[38px]"
                 >
                   {isLoadingMoreCustomers ? (

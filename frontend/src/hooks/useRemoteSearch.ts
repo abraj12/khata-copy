@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useDebouncedValue } from './useDebouncedValue.js';
 import { mergeUniqueByKey } from '../types/pagination.js';
 
 export interface RemoteSearchResult<T> {
@@ -33,7 +32,10 @@ export function useRemoteSearch<T>({
   getItemKey,
 }: UseRemoteSearchOptions<T>) {
   const [query, setQueryState] = useState('');
-  const debouncedQuery = useDebouncedValue(query, debounceMs);
+  const [debouncedState, setDebouncedState] = useState<{ query: string; nonce: number }>({
+    query: '',
+    nonce: 0,
+  });
 
   const [items, setItems] = useState<T[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -46,34 +48,72 @@ export function useRemoteSearch<T>({
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const requestIdRef = useRef(0);
+  const isLoadingMoreRef = useRef(false);
+  const activeQueryRef = useRef('');
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const needsRefetchOnRestoreRef = useRef(false);
+  const suppressNextResetEffectRef = useRef(false);
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  const fetcherRef = useRef(fetcher);
+  fetcherRef.current = fetcher;
+  const getItemKeyRef = useRef(getItemKey);
+  getItemKeyRef.current = getItemKey;
 
-  // Unmount cleanup: abort any in-flight request
+  const abortAndInvalidate = useCallback(() => {
+    requestIdRef.current += 1;
+    isLoadingMoreRef.current = false;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  }, []);
+
+  // Unmount cleanup: clear pending debounce and invalidate any in-flight request
   useEffect(() => {
     return () => {
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
       }
+      abortAndInvalidate();
     };
-  }, []);
+  }, [abortAndInvalidate]);
 
   // Immediate query change handler: clears stale results and resets cursors during debounce
   const setQuery = useCallback(
     (newQuery: string) => {
       setQueryState(newQuery);
-      if (newQuery !== debouncedQuery) {
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-        }
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+
+      if (newQuery !== debouncedState.query) {
+        needsRefetchOnRestoreRef.current = true;
+        abortAndInvalidate();
         setItems([]);
         setHasMore(false);
         setNextOffset(null);
         setNextCursor(null);
-        setIsLoading(true);
+        setIsLoading(enabledRef.current);
+        setIsLoadingMore(false);
         setIsError(false);
         setErrorMessage(null);
       }
+
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null;
+        setDebouncedState((prev) => {
+          if (newQuery === prev.query && !needsRefetchOnRestoreRef.current) {
+            return prev;
+          }
+          needsRefetchOnRestoreRef.current = false;
+          return { query: newQuery, nonce: prev.nonce + 1 };
+        });
+      }, debounceMs);
     },
-    [debouncedQuery]
+    [debouncedState.query, debounceMs, abortAndInvalidate]
   );
 
   const executeFetch = useCallback(
@@ -85,31 +125,38 @@ export function useRemoteSearch<T>({
     ) => {
       if (!enabled) return;
 
-      // Abort previous request
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
+      abortAndInvalidate();
       const controller = new AbortController();
       abortControllerRef.current = controller;
-      const currentRequestId = ++requestIdRef.current;
+      const currentRequestId = requestIdRef.current;
 
       if (isInitialOrSearchChange) {
+        activeQueryRef.current = searchQuery;
+        isLoadingMoreRef.current = false;
+        setItems([]); // Clear stale items from previous query immediately
+        setHasMore(false);
+        setNextOffset(null);
+        setNextCursor(null);
         setIsLoading(true);
+        setIsLoadingMore(false);
         setIsError(false);
         setErrorMessage(null);
-        setItems([]); // Clear stale items from previous query immediately
       } else {
+        isLoadingMoreRef.current = true;
         setIsLoadingMore(true);
       }
 
       try {
-        const result = await fetcher(searchQuery, offset, pageSize, controller.signal, cursor);
+        const result = await fetcherRef.current(searchQuery, offset, pageSize, controller.signal, cursor);
 
-        // Guard against race conditions and stale responses
-        if (currentRequestId !== requestIdRef.current) return;
+        // Guard against race conditions, ignored abort signals, and stale responses
+        if (controller.signal.aborted || currentRequestId !== requestIdRef.current) {
+          return;
+        }
 
+        const currentGetItemKey = getItemKeyRef.current;
         const keyExtractor =
-          getItemKey ||
+          currentGetItemKey ||
           ((item: T) => {
             if (item && typeof item === 'object' && 'id' in item) {
               return (item as { id: string | number }).id;
@@ -117,10 +164,16 @@ export function useRemoteSearch<T>({
             return Symbol() as unknown as string;
           });
 
+        const useKeyDedup = Boolean(
+          currentGetItemKey || (result.items[0] && typeof result.items[0] === 'object' && 'id' in result.items[0])
+        );
+
         setItems((prev) =>
           isInitialOrSearchChange
-            ? result.items
-            : getItemKey || (result.items[0] && typeof result.items[0] === 'object' && 'id' in result.items[0])
+            ? useKeyDedup
+              ? mergeUniqueByKey([], result.items, keyExtractor)
+              : result.items
+            : useKeyDedup
               ? mergeUniqueByKey(prev, result.items, keyExtractor)
               : [...prev, ...result.items]
         );
@@ -131,44 +184,87 @@ export function useRemoteSearch<T>({
         setIsError(false);
         setErrorMessage(null);
       } catch (err) {
-        if (currentRequestId !== requestIdRef.current) return;
-        if ((err as Error).name === 'AbortError') return;
+        if (controller.signal.aborted || currentRequestId !== requestIdRef.current) {
+          return;
+        }
+        if ((err as Error)?.name === 'AbortError' || (err as { code?: string })?.code === 'ABORTED') {
+          return;
+        }
 
         setIsError(true);
-        setErrorMessage((err as Error).message || 'Failed to fetch search results.');
+        setErrorMessage((err as Error)?.message || 'Failed to fetch search results.');
       } finally {
-        if (currentRequestId === requestIdRef.current) {
+        if (abortControllerRef.current === controller) {
+          abortControllerRef.current = null;
+        }
+        if (!controller.signal.aborted && currentRequestId === requestIdRef.current) {
+          isLoadingMoreRef.current = false;
           setIsLoading(false);
           setIsLoadingMore(false);
         }
       }
     },
-    [enabled, fetcher, pageSize, getItemKey]
+    [enabled, pageSize, abortAndInvalidate]
   );
 
-  // Trigger search when debounced query changes
+  // Trigger search when enabled and debounced query changes; invalidate immediately if disabled
   useEffect(() => {
-    if (!enabled) return;
-    void executeFetch(debouncedQuery, 0, true, null);
-  }, [debouncedQuery, enabled, executeFetch]);
+    if (!enabled) {
+      suppressNextResetEffectRef.current = false;
+      abortAndInvalidate();
+      setIsLoading(false);
+      setIsLoadingMore(false);
+      return;
+    }
+    if (suppressNextResetEffectRef.current) {
+      suppressNextResetEffectRef.current = false;
+      return;
+    }
+    needsRefetchOnRestoreRef.current = false;
+    void executeFetch(debouncedState.query, 0, true, null);
+  }, [debouncedState, enabled, executeFetch, abortAndInvalidate]);
 
   const loadMore = useCallback(() => {
-    if (!hasMore || isLoadingMore || isLoading) return;
+    if (
+      !enabled ||
+      !hasMore ||
+      isLoadingMore ||
+      isLoading ||
+      isLoadingMoreRef.current ||
+      query !== activeQueryRef.current
+    ) {
+      return;
+    }
     const useCursor = typeof nextCursor === 'string' && nextCursor.length > 0;
     if (!useCursor && nextOffset === null) return;
-    void executeFetch(debouncedQuery, nextOffset ?? 0, false, useCursor ? nextCursor : null);
-  }, [hasMore, isLoadingMore, isLoading, nextCursor, nextOffset, executeFetch, debouncedQuery]);
+    isLoadingMoreRef.current = true;
+    void executeFetch(activeQueryRef.current, nextOffset ?? 0, false, useCursor ? nextCursor : null);
+  }, [enabled, hasMore, isLoadingMore, isLoading, query, nextCursor, nextOffset, executeFetch]);
 
   const retry = useCallback(() => {
-    void executeFetch(debouncedQuery, 0, true, null);
-  }, [executeFetch, debouncedQuery]);
+    if (!enabled) return;
+    needsRefetchOnRestoreRef.current = false;
+    void executeFetch(query, 0, true, null);
+  }, [enabled, executeFetch, query]);
 
   const reset = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
     }
+    needsRefetchOnRestoreRef.current = false;
+    abortAndInvalidate();
     setQueryState('');
+    setDebouncedState((prev) => {
+      if (prev.query === '') {
+        return prev;
+      }
+      if (enabledRef.current) {
+        suppressNextResetEffectRef.current = true;
+      }
+      return { query: '', nonce: prev.nonce };
+    });
+    activeQueryRef.current = '';
     setItems([]);
     setHasMore(false);
     setNextOffset(null);
@@ -177,12 +273,12 @@ export function useRemoteSearch<T>({
     setIsLoadingMore(false);
     setIsError(false);
     setErrorMessage(null);
-  }, []);
+  }, [abortAndInvalidate]);
 
   return {
     query,
     setQuery,
-    debouncedQuery,
+    debouncedQuery: debouncedState.query,
     items,
     isLoading,
     isLoadingMore,

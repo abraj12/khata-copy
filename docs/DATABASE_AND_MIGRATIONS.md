@@ -3,7 +3,7 @@
 **Document Status:** Canonical & Implemented  
 **Last Verified:** 2026-11-12  
 **Database Engine:** PostgreSQL 16–18 (Neon Serverless)  
-**Schema Version:** 029  
+**Schema Version:** 031  
 
 ---
 
@@ -42,6 +42,8 @@ Migrations are executed sequentially via `backend/scripts/migrate.ts` using dire
 | **027** | `027_outbox_events.sql` | Creates transactional `app_outbox_events` table and partial ready/processing-lease/aggregate indexes (`idx_app_outbox_*`). |
 | **028** | `028_outbox_dead_letter.sql` | Adds `dead_letter_at`, expands status CHECK constraint to `'dead_letter'`, and adds `idx_app_outbox_dead_letter`. |
 | **029** | `029_outbox_legacy_dead_letter_and_perf_indexes.sql` | Backfills legacy exhausted `'failed'` events (`attempt_count >= max_attempts`) into `'dead_letter'`, adds `idx_app_outbox_unresolved_created` partial index for `O(log N)` backlog probes, and conditionally creates `pg_trgm` GIN indexes (`idx_products_active_name_trgm`, `idx_customers_active_name_trgm`) when role privileges allow. |
+| **030** | `030_storage_cleanup_jobs.sql` | Creates durable Cloudflare R2 orphan-cleanup queue `storage_cleanup_jobs` (`pending`/`processing`/`failed`/`completed`/`dead_letter`), active-state partial unique index `idx_storage_cleanup_active_object`, and partial wakeup/retry/lease indexes (`idx_storage_cleanup_pending_ready`, `idx_storage_cleanup_failed_retryable`, `idx_storage_cleanup_processing_wake`, `idx_storage_cleanup_completed_at`). |
+| **031** | `031_outbox_worker_search_indexes.sql` | Adds selective partial outbox wakeup/retention indexes (`idx_app_outbox_pending_wake`, `idx_app_outbox_failed_retryable`, `idx_app_outbox_processing_wake`, `idx_app_outbox_processed_at`), active B-tree prefix/lookup indexes (`idx_products_active_barcode_prefix`, `idx_products_active_hsn_prefix`, `idx_customers_active_normalized_name_id`, `idx_customers_active_phone_digits`), and permission-guarded `pg_trgm` GIN indexes (`idx_products_active_hsn_trgm`, `idx_products_active_barcode_trgm`, `idx_customers_active_phone_trgm`, `idx_customers_active_normalized_phone_trgm`). |
 
 ---
 
@@ -145,3 +147,6 @@ To apply forward-only migrations safely to Neon PostgreSQL:
 npm run migrate --workspace=backend
 ```
 Migration script uses advisory locking (`pg_advisory_lock(987654321)`) and transaction rollback on failure. Zero data loss.
+
+### Optional `pg_trgm` Capabilities & Observability
+Migration `031` installs `pg_trgm` and optional GIN indexes inside a privilege-safe `DO $$ ... END $$;` handler so constrained managed roles (`insufficient_privilege` / `undefined_file`) never abort deployment. Runtime readiness exposes live capability status (`pgTrgmInstalled`, `presentOptionalIndexes`, `missingOptionalIndexes`, `fallbackSearchMode`) via `inspectSearchIndexCapabilities()` on `GET /api/v1/read-model-sync/status`.

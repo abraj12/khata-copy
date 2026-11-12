@@ -382,13 +382,13 @@ describe('Khata Release #029 — Reliability, DSA Search, Keyset Pagination & Ha
 
       vi.spyOn(appPool, 'query').mockImplementation(async (sql: any) => {
         const text = String(sql);
-        if (text.includes('AS next_delay_ms')) {
+        if (text.includes('next_wake_at')) {
+          const nowMs = Date.now();
           return {
             rows: [
               {
-                pending_count: 1,
-                dead_letter_count: 0,
-                next_delay_ms: 28_000,
+                next_wake_at: new Date(nowMs + 28_000).toISOString(),
+                server_now: new Date(nowMs).toISOString(),
               },
             ],
             rowCount: 1,

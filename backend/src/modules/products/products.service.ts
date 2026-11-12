@@ -3,6 +3,7 @@ import { appPool } from '../../config/database.js';
 import { enqueueOutboxEvent, notifyOutboxCommitted } from '../readModels/outbox.service.js';
 import { validateMoneyInput, escapeLike } from '../../utils/validation.js';
 import { storageService } from '../../services/storage.service.js';
+import { storageCleanupService } from '../../services/storageCleanup.service.js';
 
 export interface ProductRecord {
   id: number;
@@ -22,6 +23,7 @@ export interface ProductRecord {
 
 export interface ListProductsOptions {
   search?: string;
+  exactBarcode?: string;
   limit?: number;
   offset?: number;
 }
@@ -89,11 +91,21 @@ export class ProductsService {
     `;
     const params: unknown[] = [];
 
-    if (opts.search && opts.search.trim()) {
-      const cleanSearch = escapeLike(opts.search.trim());
+    if (opts.exactBarcode && opts.exactBarcode.trim()) {
+      const exactBarcode = this.normalizeBarcode(opts.exactBarcode);
+      if (exactBarcode) {
+        params.push(exactBarcode);
+        const bIdx = params.length;
+        sql += ` AND barcode = $${bIdx}`;
+      }
+    } else if (opts.search && opts.search.trim()) {
+      const rawSearch = opts.search.trim();
+      const cleanSearch = escapeLike(rawSearch);
       params.push(`%${cleanSearch}%`);
-      const pIdx = params.length;
-      sql += ` AND (name ILIKE $${pIdx} ESCAPE '\\' OR (hsn_code IS NOT NULL AND hsn_code ILIKE $${pIdx} ESCAPE '\\') OR (barcode IS NOT NULL AND barcode ILIKE $${pIdx} ESCAPE '\\'))`;
+      const likeIdx = params.length;
+      params.push(rawSearch);
+      const exactIdx = params.length;
+      sql += ` AND (name ILIKE $${likeIdx} ESCAPE '\\' OR (hsn_code IS NOT NULL AND hsn_code ILIKE $${likeIdx} ESCAPE '\\') OR (barcode IS NOT NULL AND (barcode = $${exactIdx} OR barcode ILIKE $${likeIdx} ESCAPE '\\')))`;
     }
 
     sql += ` ORDER BY LOWER(name) ASC, name ASC, id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
@@ -429,16 +441,25 @@ export class ProductsService {
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
       if (imageObjectKey !== oldKey) {
-        await storageService.deleteObject(imageObjectKey).catch(() => {});
+        await storageCleanupService.attemptDeleteOrEnqueue({
+          objectKey: imageObjectKey,
+          objectKind: 'product_image',
+          reason: 'product_image_tx_rollback',
+          isRollbackNewUpload: true,
+        });
       }
       throw err;
     } finally {
       client.release();
     }
 
-    // Delete previous image only after database commit succeeds
+    // Delete previous image only after database commit succeeds (enqueue retry if R2 fails)
     if (oldKey && oldKey !== imageObjectKey) {
-      await storageService.deleteObject(oldKey).catch(() => {});
+      await storageCleanupService.attemptDeleteOrEnqueue({
+        objectKey: oldKey,
+        objectKind: 'product_image',
+        reason: 'product_image_replace',
+      });
     }
     const result = { rows: updatedRows };
 
@@ -493,9 +514,13 @@ export class ProductsService {
       client.release();
     }
 
-    // Delete previous R2 object only after DB commit succeeds
+    // Delete previous R2 object only after DB commit succeeds (enqueue retry if R2 fails)
     if (oldKey) {
-      await storageService.deleteObject(oldKey).catch(() => {});
+      await storageCleanupService.attemptDeleteOrEnqueue({
+        objectKey: oldKey,
+        objectKind: 'product_image',
+        reason: 'product_image_remove',
+      });
     }
     const result = { rows: resultRows };
 

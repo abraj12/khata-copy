@@ -22,6 +22,7 @@
     "hash-password": "npm run hash-password --workspace=backend",
     "preflight:legacy": "npm run preflight:legacy --workspace=backend",
     "rebuild:read-models": "npm run rebuild:read-models --workspace=backend --",
+    "benchmark:release030": "npm run benchmark:release030 --workspace=backend --",
     "test:frontend": "vitest run --config vitest.frontend.config.ts"
   },
   "keywords": [

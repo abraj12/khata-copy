@@ -85,7 +85,7 @@ export function SearchablePicker<T>({
     reset,
   } = useRemoteSearch<T>({
     fetcher: onSearch,
-    enabled: isOpen,
+    enabled: isOpen && !disabled,
     pageSize,
     debounceMs: 280,
     getItemKey: getOptionKey,
@@ -137,30 +137,6 @@ export function SearchablePicker<T>({
     }
   }, [isOpen, isMobile]);
 
-  // Handle outside clicks to close popover on desktop
-  useEffect(() => {
-    if (!isOpen || isMobile) return;
-
-    const handleOutsideClick = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        handleClose();
-      }
-    };
-
-    document.addEventListener('mousedown', handleOutsideClick);
-    return () => document.removeEventListener('mousedown', handleOutsideClick);
-  }, [isOpen, isMobile]);
-
-  // Focus search input when opened
-  useEffect(() => {
-    if (isOpen) {
-      setActiveIndex(-1);
-      setTimeout(() => {
-        searchInputRef.current?.focus();
-      }, 50);
-    }
-  }, [isOpen]);
-
   const handleOpen = () => {
     if (disabled) return;
     setIsOpen(true);
@@ -173,6 +149,38 @@ export function SearchablePicker<T>({
       triggerRef.current?.focus();
     }, 50);
   }, [reset]);
+
+  // Invalidate any in-flight fetch and close if picker becomes disabled
+  useEffect(() => {
+    if (disabled && isOpen) {
+      setIsOpen(false);
+      reset();
+    }
+  }, [disabled, isOpen, reset]);
+
+  // Handle outside clicks to close popover on desktop
+  useEffect(() => {
+    if (!isOpen || isMobile) return;
+
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        handleClose();
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [isOpen, isMobile, handleClose]);
+
+  // Focus search input when opened
+  useEffect(() => {
+    if (isOpen) {
+      setActiveIndex(-1);
+      setTimeout(() => {
+        searchInputRef.current?.focus();
+      }, 50);
+    }
+  }, [isOpen]);
 
   const handleItemSelect = (item: T) => {
     onSelect(item);
@@ -538,7 +546,7 @@ export function SearchablePicker<T>({
             <button
               type="button"
               onClick={loadMore}
-              disabled={isLoadingMore}
+              disabled={isLoading || isLoadingMore}
               className="neu-btn-secondary text-xs px-4 py-2 w-full font-semibold min-h-[38px] flex items-center justify-center gap-1.5"
             >
               {isLoadingMore ? (

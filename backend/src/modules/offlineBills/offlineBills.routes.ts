@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
 import { offlineBillsService } from './offlineBills.service.js';
 import { storageService } from '../../services/storage.service.js';
+import { storageCleanupService } from '../../services/storageCleanup.service.js';
 
 // Multer: memory storage, 10 MB limit for offline bill images
 const upload = multer({
@@ -95,8 +96,12 @@ router.post(
           originalFilename,
         });
       } catch (createErr) {
-        // Safe cleanup: delete orphaned R2 object if DB insertion fails
-        await storageService.deleteObject(objectKey);
+        await storageCleanupService.attemptDeleteOrEnqueue({
+          objectKey,
+          objectKind: 'offline_bill',
+          reason: 'offline_bill_route_rollback',
+          isRollbackNewUpload: true,
+        });
         throw createErr;
       }
 

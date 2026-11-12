@@ -19,6 +19,30 @@ export const MAX_SUPPLIER_DOC_BYTES = 10 * 1024 * 1024; // 10 MB
 
 export type StorageFolder = 'products' | 'offline-bills' | 'supplier-bills';
 
+export type RejectedUploadCleanupHook = (
+  objectKey: string,
+  folder: StorageFolder,
+  reason: string,
+  deleteError: unknown
+) => Promise<void>;
+
+let rejectedUploadCleanupHook: RejectedUploadCleanupHook | null = null;
+
+export function setRejectedUploadCleanupHook(hook: RejectedUploadCleanupHook | null): void {
+  rejectedUploadCleanupHook = hook;
+}
+
+export function isNoSuchKeyError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const record = err as { name?: string; Code?: string; code?: string; $metadata?: { httpStatusCode?: number } };
+  return (
+    record.name === 'NoSuchKey' ||
+    record.Code === 'NoSuchKey' ||
+    record.code === 'NoSuchKey' ||
+    record.$metadata?.httpStatusCode === 404
+  );
+}
+
 export const MAX_BYTES_BY_FOLDER: Record<StorageFolder, number> = {
   products: MAX_PRODUCT_IMAGE_BYTES,
   'offline-bills': MAX_OFFLINE_BILL_BYTES,
@@ -291,7 +315,7 @@ export class StorageService {
 
       const maxBytes = MAX_BYTES_BY_FOLDER[expectedFolder];
       if (contentLength <= 0 || contentLength > maxBytes) {
-        await this.deleteObject(objectKey);
+        await this.cleanupRejectedUpload(objectKey, expectedFolder, 'invalid_object_size');
         throw new AppError(
           `Uploaded object size (${contentLength} bytes) is outside permitted limits.`,
           400,
@@ -301,7 +325,7 @@ export class StorageService {
 
       const allowedSet = expectedFolder === 'supplier-bills' ? ALLOWED_SUPPLIER_DOC_TYPES : ALLOWED_IMAGE_TYPES;
       if (!allowedSet.has(contentType)) {
-        await this.deleteObject(objectKey);
+        await this.cleanupRejectedUpload(objectKey, expectedFolder, 'invalid_content_type');
         throw new AppError(
           `Uploaded object Content-Type "${contentType}" is not an accepted file format.`,
           400,
@@ -321,7 +345,7 @@ export class StorageService {
         };
         const expectedMime = expectedMimeByExt[ext];
         if (expectedMime && expectedMime !== contentType) {
-          await this.deleteObject(objectKey);
+          await this.cleanupRejectedUpload(objectKey, expectedFolder, 'invalid_mime_extension_mismatch');
           throw new AppError(
             `Uploaded object extension ".${ext}" does not match Content-Type "${contentType}".`,
             400,
@@ -340,7 +364,7 @@ export class StorageService {
       );
 
       if (!getRange.Body) {
-        await this.deleteObject(objectKey);
+        await this.cleanupRejectedUpload(objectKey, expectedFolder, 'empty_object_body');
         throw new AppError(
           expectedFolder === 'supplier-bills'
             ? 'Unable to inspect uploaded file contents from storage.'
@@ -353,7 +377,7 @@ export class StorageService {
       const chunk = await getRange.Body.transformToByteArray();
       const validSignature = validateImageMagicBytes(chunk, contentType);
       if (!validSignature) {
-        await this.deleteObject(objectKey);
+        await this.cleanupRejectedUpload(objectKey, expectedFolder, 'invalid_magic_bytes');
         const message =
           contentType === 'application/pdf' || expectedFolder === 'supplier-bills'
             ? 'Uploaded file contents do not match a valid JPEG, PNG, WebP, or PDF signature.'
@@ -540,8 +564,28 @@ export class StorageService {
     return { objectKey, contentType: cleanMime, sizeBytes: buffer.length };
   }
 
+  private async cleanupRejectedUpload(
+    objectKey: string,
+    folder: StorageFolder,
+    reason: string
+  ): Promise<void> {
+    try {
+      await this.deleteObject(objectKey);
+    } catch (delErr) {
+      if (rejectedUploadCleanupHook) {
+        await rejectedUploadCleanupHook(objectKey, folder, reason, delErr).catch((hookErr) => {
+          console.warn('[STORAGE] Rejected-upload cleanup enqueue warning:', (hookErr as Error)?.message);
+        });
+      } else {
+        console.warn('[STORAGE] Failed to delete rejected R2 upload:', (delErr as Error)?.message);
+      }
+    }
+  }
+
   /**
-   * Deletes an object from R2 safely without breaking caller execution
+   * Deletes an object from R2. Treats missing R2 objects (NoSuchKey / 404) as
+   * already cleaned up and propagates transport/permission failures so durable
+   * cleanup retry queues can enqueue retries.
    */
   public async deleteObject(objectKey: string): Promise<void> {
     if (!this.isConfigured() || !objectKey) return;
@@ -554,7 +598,10 @@ export class StorageService {
         })
       );
     } catch (err) {
-      console.warn('[STORAGE] Failed to delete R2 object:', objectKey, (err as Error).message);
+      if (isNoSuchKeyError(err)) {
+        return;
+      }
+      throw err;
     }
   }
 }

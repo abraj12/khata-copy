@@ -73,6 +73,27 @@ export class ReadModelUnavailableError extends Error {
 
 const MAX_CURSOR_ENCODED_LEN = 512;
 
+export function buildProductCursorQueryContext(rawSearch: string): string {
+  const trimmed = rawSearch.trim();
+  return JSON.stringify({
+    normalizedSearch: trimmed.length > 0 ? normalizeSearchText(trimmed) : '',
+    exactBarcode: trimmed,
+    endpoint: 'products',
+    sort: 'normalizedName:asc,productId:asc',
+    version: 1,
+  });
+}
+
+export function buildCustomerCursorQueryContext(rawSearch: string): string {
+  const trimmed = rawSearch.trim();
+  return JSON.stringify({
+    normalizedSearch: trimmed.length > 0 ? normalizeSearchText(trimmed) : '',
+    endpoint: 'customers',
+    sort: 'outstandingPaise:desc,lastActivityAt:desc,customerId:asc',
+    version: 1,
+  });
+}
+
 function hashCursorQuery(normalizedQuery: string): string {
   if (!normalizedQuery) return '';
   return crypto.createHash('sha256').update(normalizedQuery, 'utf8').digest('base64url').slice(0, 12);
@@ -83,7 +104,7 @@ function computeCursorSignature(bodyB64: string): string {
   return crypto.createHmac('sha256', secret).update(bodyB64, 'utf8').digest('base64url').slice(0, 16);
 }
 
-function encodeCursor(payload: Record<string, unknown>, normalizedQuery = ''): string {
+export function encodeCursor(payload: Record<string, unknown>, normalizedQuery = ''): string {
   const fullPayload = { ...payload, v: 1, q: hashCursorQuery(normalizedQuery) };
   const bodyB64 = Buffer.from(JSON.stringify(fullPayload), 'utf8').toString('base64url');
   const sig = computeCursorSignature(bodyB64);
@@ -125,7 +146,7 @@ function decodeVerifiedCursorPayload(rawCursor: string, expectedQuery = ''): Rec
   return rec;
 }
 
-function decodeProductCursor(
+export function decodeProductCursor(
   rawCursor: string,
   expectedQuery = ''
 ): { n: string; id: number } {
@@ -142,7 +163,7 @@ function decodeProductCursor(
   return { n: parsed.n, id: parsed.id };
 }
 
-function decodeCustomerCursor(
+export function decodeCustomerCursor(
   rawCursor: string,
   expectedQuery = ''
 ): { o: number; l: number | null; id: number } {
@@ -947,8 +968,9 @@ export class ReadModelsQueryService {
     const limit = Math.min(Math.max(1, Math.trunc(params.limit ?? 25)), 200);
     const trimmedSearch = (params.search ?? '').trim();
     const normalizedSearch = trimmedSearch.length > 0 ? normalizeSearchText(trimmedSearch) : '';
+    const productCursorContext = buildProductCursorQueryContext(trimmedSearch);
     const trimmedCursor = params.cursor?.trim();
-    const decodedCursor = trimmedCursor ? decodeProductCursor(trimmedCursor, normalizedSearch) : null;
+    const decodedCursor = trimmedCursor ? decodeProductCursor(trimmedCursor, productCursorContext) : null;
     const offset = decodedCursor ? 0 : Math.max(0, Math.trunc(params.offset ?? 0));
 
     const baseFilter: Record<string, unknown> = { isArchived: false };
@@ -1041,7 +1063,7 @@ export class ReadModelsQueryService {
     const lastDoc = docs.length > 0 ? docs[docs.length - 1] : null;
     const nextCursor =
       hasMore && lastDoc
-        ? encodeCursor({ t: 'p', n: lastDoc.normalizedName, id: lastDoc.productId }, normalizedSearch)
+        ? encodeCursor({ t: 'p', n: lastDoc.normalizedName, id: lastDoc.productId }, productCursorContext)
         : null;
 
     return {
@@ -1179,8 +1201,9 @@ export class ReadModelsQueryService {
     const limit = Math.min(Math.max(1, Math.trunc(params.limit ?? 25)), 200);
     const trimmedSearch = (params.search ?? '').trim();
     const normalizedSearch = trimmedSearch.length > 0 ? normalizeSearchText(trimmedSearch) : '';
+    const customerCursorContext = buildCustomerCursorQueryContext(trimmedSearch);
     const trimmedCursor = params.cursor?.trim();
-    const decodedCursor = trimmedCursor ? decodeCustomerCursor(trimmedCursor, normalizedSearch) : null;
+    const decodedCursor = trimmedCursor ? decodeCustomerCursor(trimmedCursor, customerCursorContext) : null;
     const offset = decodedCursor ? 0 : Math.max(0, Math.trunc(params.offset ?? 0));
 
     const baseFilter: Record<string, unknown> = { isArchived: false };
@@ -1302,7 +1325,7 @@ export class ReadModelsQueryService {
               l: lastDoc.lastActivityAt ? new Date(lastDoc.lastActivityAt).getTime() : null,
               id: lastDoc.customerId,
             },
-            normalizedSearch
+            customerCursorContext
           )
         : null;
 
