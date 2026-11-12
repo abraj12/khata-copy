@@ -365,7 +365,7 @@ describe('Mobile responsiveness: flex-wrap containers and bounded popovers', () 
     }
   });
 
-  it('7. App keeps Navbar wrapper sticky at top-0 while scrolling', async () => {
+  it('7. App keeps Navbar sticky at top-0 and Footer sticky at bottom-0 while scrolling', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -413,6 +413,14 @@ describe('Mobile responsiveness: flex-wrap containers and bounded popovers', () 
       expect(stickyWrapper?.className).toContain('sticky');
       expect(stickyWrapper?.className).toContain('top-0');
       expect(stickyWrapper?.className).toContain('mhi-no-print');
+
+      const footer = container.querySelector('footer');
+      expect(footer).not.toBeNull();
+      expect(footer?.className).toContain('sticky');
+      expect(footer?.className).toContain('bottom-0');
+      expect(footer?.className).toContain('z-10');
+      expect(footer?.className).toContain('mhi-no-print');
+      expect(footer?.className).toContain('print:hidden');
     } finally {
       vi.unstubAllGlobals();
     }
