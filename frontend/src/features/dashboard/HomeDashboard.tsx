@@ -184,14 +184,30 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({ onNavigate }) => {
               {data?.syncStatus?.isStale && (
                 <span
                   data-testid="sync-stale-badge"
+                  title={
+                    data.syncStatus.deadLetterCount
+                      ? `${data.syncStatus.deadLetterCount} read-model event(s) require retry. Authoritative ledger writes remain safe in PostgreSQL.`
+                      : data.syncStatus.projectionSyncedAt
+                      ? `Last projection sync: ${new Date(data.syncStatus.projectionSyncedAt).toLocaleString()}`
+                      : 'Read-model snapshot is catching up with PostgreSQL writes.'
+                  }
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30"
                 >
-                  Sync catching up
+                  {(data.syncStatus.deadLetterCount ?? 0) > 0
+                    ? `Sync needs attention (${data.syncStatus.deadLetterCount} failed)`
+                    : data.syncStatus.outboxDegraded
+                    ? 'Sync degraded (catching up)'
+                    : 'Sync catching up'}
                 </span>
               )}
               {data?.syncStatus && !data.syncStatus.isStale && data.syncStatus.source === 'mongodb' && (
                 <span
                   data-testid="sync-fresh-badge"
+                  title={
+                    data.syncStatus.projectionSyncedAt
+                      ? `Projections synced: ${new Date(data.syncStatus.projectionSyncedAt).toLocaleString()}`
+                      : undefined
+                  }
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20"
                 >
                   Read model synced

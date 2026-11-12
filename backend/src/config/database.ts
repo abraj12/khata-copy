@@ -133,6 +133,7 @@ export const EXPECTED_MIGRATIONS = [
   '025_performance_reporting_hardening.sql',
   '026_company_jurisdiction.sql',
   '027_outbox_events.sql',
+  '028_outbox_dead_letter.sql',
 ];
 
 export const EXPECTED_CORE_TABLES = [

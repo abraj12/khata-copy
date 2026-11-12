@@ -34,6 +34,7 @@ const mongoEnvSchema = z.object({
   MONGODB_SERVER_SELECTION_TIMEOUT_MS: z.coerce.number().int().min(500).max(30000).default(5000),
   MONGODB_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(500).max(30000).default(5000),
   MONGODB_READ_STALE_THRESHOLD_MS: z.coerce.number().int().min(5000).max(3600000).default(300000),
+  READ_MODEL_DASHBOARD_REFRESH_MIN_INTERVAL_MS: z.coerce.number().int().min(1000).max(300000).default(15000),
 });
 
 export type MongoEnvConfig = z.infer<typeof mongoEnvSchema>;
@@ -51,6 +52,7 @@ export function validateAndParseMongoEnv(
     MONGODB_SERVER_SELECTION_TIMEOUT_MS: rawEnv.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
     MONGODB_CONNECT_TIMEOUT_MS: rawEnv.MONGODB_CONNECT_TIMEOUT_MS,
     MONGODB_READ_STALE_THRESHOLD_MS: rawEnv.MONGODB_READ_STALE_THRESHOLD_MS,
+    READ_MODEL_DASHBOARD_REFRESH_MIN_INTERVAL_MS: rawEnv.READ_MODEL_DASHBOARD_REFRESH_MIN_INTERVAL_MS,
   });
 
   if (!parsed.success) {

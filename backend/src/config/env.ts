@@ -4,9 +4,9 @@ import { z } from 'zod';
 import { resolveValidatedTestPoolUrls } from './testDbGuard.js';
 import { validateAndParseMongoEnv, type MongoEnvConfig } from './mongoEnv.js';
 
-// Load .env and .env.local if present with deterministic precedence (.env.local overrides .env)
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
-dotenv.config({ path: path.resolve(process.cwd(), '.env.local'), override: true });
+// Load .env.local before .env with override: false so explicit process env wins, and .env.local beats .env
+dotenv.config({ path: path.resolve(process.cwd(), '.env.local'), override: false });
+dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: false });
 
 const booleanStringSchema = z
   .union([z.boolean(), z.string()])

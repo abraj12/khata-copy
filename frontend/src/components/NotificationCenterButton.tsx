@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useViewportPopover } from '../utils/useViewportPopover.js';
 import {
   Bell,
@@ -51,6 +51,8 @@ export const NotificationCenterButton: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const activeFetchControllerRef = useRef<AbortController | null>(null);
+  const loadSeqRef = useRef<number>(0);
   const closePopover = useCallback(() => setIsOpen(false), []);
   const { containerRef, triggerRef, popoverStyle } = useViewportPopover({
     isOpen,
@@ -59,18 +61,48 @@ export const NotificationCenterButton: React.FC = () => {
     offsetY: 8,
   });
 
-  const loadNotifications = useCallback(async (signal?: AbortSignal) => {
+  const loadNotifications = useCallback(async (externalSignal?: AbortSignal) => {
+    activeFetchControllerRef.current?.abort();
+    const controller = new AbortController();
+    activeFetchControllerRef.current = controller;
+    const requestId = ++loadSeqRef.current;
+
+    const onExternalAbort = () => controller.abort();
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        controller.abort();
+        return;
+      }
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+
     setLoading(true);
     setError(null);
     try {
-      const res = await fetchNotificationsApi({ limit: 20, signal });
+      const res = await fetchNotificationsApi({ limit: 20, signal: controller.signal });
+      if (controller.signal.aborted || loadSeqRef.current !== requestId) {
+        return;
+      }
       setNotifications(Array.isArray(res.notifications) ? res.notifications : []);
       setUnreadCount(typeof res.unreadCount === 'number' ? res.unreadCount : 0);
     } catch (err: any) {
-      if (err?.code === 'REQUEST_ABORTED') return;
+      if (
+        controller.signal.aborted ||
+        loadSeqRef.current !== requestId ||
+        err?.code === 'REQUEST_ABORTED' ||
+        err?.name === 'AbortError'
+      ) {
+        return;
+      }
       setError('Unable to load alerts.');
     } finally {
-      setLoading(false);
+      externalSignal?.removeEventListener('abort', onExternalAbort);
+      if (activeFetchControllerRef.current === controller) {
+        activeFetchControllerRef.current = null;
+      }
+      if (loadSeqRef.current === requestId) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -78,7 +110,10 @@ export const NotificationCenterButton: React.FC = () => {
   useEffect(() => {
     const controller = new AbortController();
     void loadNotifications(controller.signal);
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      activeFetchControllerRef.current?.abort();
+    };
   }, [loadNotifications]);
 
 

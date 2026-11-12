@@ -122,4 +122,28 @@ describe('Destructive Test Database Safeguard Suite', () => {
       })
     ).toThrow(/Pool URL mismatch in test mode/);
   });
+
+  it('10. Fails closed when REQUIRE_TEST_DATABASE_URL=true and TEST_DATABASE_URL is missing or NODE_ENV!=test', () => {
+    expect(() =>
+      resolveValidatedTestPoolUrls({
+        NODE_ENV: 'test',
+        REQUIRE_TEST_DATABASE_URL: 'true',
+      })
+    ).toThrow(/REQUIRE_TEST_DATABASE_URL/i);
+
+    expect(() =>
+      resolveValidatedTestPoolUrls({
+        NODE_ENV: 'development',
+        REQUIRE_TEST_DATABASE_URL: 'true',
+        TEST_DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:5432/khata_test',
+      })
+    ).toThrow(/NODE_ENV=test/i);
+  });
+
+  it('11. Permits DB-free unit tests when REQUIRE_TEST_DATABASE_URL is unset and no TEST_DATABASE_URL exists', () => {
+    const urls = resolveValidatedTestPoolUrls({
+      NODE_ENV: 'test',
+    });
+    expect(urls.isTestDbActive).toBe(false);
+  });
 });

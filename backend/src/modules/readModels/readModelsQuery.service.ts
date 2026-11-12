@@ -42,6 +42,22 @@ export interface ReadModelSyncStatus {
   syncedAt: string | null;
   ageMs: number | null;
   isStale: boolean;
+  projectionSyncedAt?: string | null;
+  projectionAgeMs?: number | null;
+  dashboardSyncedAt?: string | null;
+  dashboardAgeMs?: number | null;
+  deadLetterCount?: number;
+  outboxDegraded?: boolean;
+}
+
+export class InvalidPaginationCursorError extends Error {
+  public readonly statusCode = 400;
+  public readonly code = 'INVALID_PAGINATION_CURSOR';
+
+  constructor(message = 'Invalid pagination cursor.') {
+    super(message);
+    this.name = 'InvalidPaginationCursorError';
+  }
 }
 
 export class ReadModelUnavailableError extends Error {
@@ -51,6 +67,50 @@ export class ReadModelUnavailableError extends Error {
   constructor(message = 'Read model projection is unavailable.') {
     super(message);
     this.name = 'ReadModelUnavailableError';
+  }
+}
+
+function encodeCursor(payload: Record<string, unknown>): string {
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+function decodeProductCursor(rawCursor: string): { n: string; id: number } {
+  try {
+    const parsed = JSON.parse(Buffer.from(rawCursor, 'base64url').toString('utf8'));
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      typeof parsed.n !== 'string' ||
+      typeof parsed.id !== 'number' ||
+      !Number.isSafeInteger(parsed.id) ||
+      parsed.id <= 0
+    ) {
+      throw new InvalidPaginationCursorError();
+    }
+    return { n: parsed.n, id: parsed.id };
+  } catch {
+    throw new InvalidPaginationCursorError();
+  }
+}
+
+function decodeCustomerCursor(rawCursor: string): { o: number; l: number | null; id: number } {
+  try {
+    const parsed = JSON.parse(Buffer.from(rawCursor, 'base64url').toString('utf8'));
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      typeof parsed.o !== 'number' ||
+      !Number.isFinite(parsed.o) ||
+      (parsed.l !== null && (typeof parsed.l !== 'number' || !Number.isFinite(parsed.l))) ||
+      typeof parsed.id !== 'number' ||
+      !Number.isSafeInteger(parsed.id) ||
+      parsed.id <= 0
+    ) {
+      throw new InvalidPaginationCursorError();
+    }
+    return { o: parsed.o, l: parsed.l, id: parsed.id };
+  } catch {
+    throw new InvalidPaginationCursorError();
   }
 }
 
@@ -124,9 +184,21 @@ function formatMonthLabel(ym: string): string {
   }).format(dt);
 }
 
+export interface SnapshotFreshnessInput {
+  lastSyncedAt?: Date | string | null;
+  lastProjectionSyncAt?: Date | string | null;
+  lastDashboardRefreshAt?: Date | string | null;
+}
+
 export class ReadModelsQueryService {
-  private readonly staleThresholdMs = 120_000;
   private outboxBacklogPending = false;
+  private deadLetterCount = 0;
+  private lastWorkerError: string | null = null;
+
+  public getStaleThresholdMs(): number {
+    const raw = Number(env.MONGODB_READ_STALE_THRESHOLD_MS);
+    return Number.isFinite(raw) && raw >= 5_000 ? raw : 300_000;
+  }
 
   public markOutboxBacklogPending(pending: boolean): void {
     this.outboxBacklogPending = pending;
@@ -136,33 +208,94 @@ export class ReadModelsQueryService {
     return this.outboxBacklogPending;
   }
 
+  public setOutboxDeadLetterCount(count: number): void {
+    this.deadLetterCount = Math.max(0, Math.trunc(count || 0));
+  }
+
+  public getOutboxDeadLetterCount(): number {
+    return this.deadLetterCount;
+  }
+
+  public setLastWorkerError(err: string | null): void {
+    this.lastWorkerError = err;
+  }
+
+  public getLastWorkerError(): string | null {
+    return this.lastWorkerError;
+  }
+
   private assertMongoReady(): void {
     if (!isMongoReady()) {
       throw new ReadModelUnavailableError('MongoDB read-model store is not connected.');
     }
   }
 
-  private buildSyncStatus(lastSyncedAt: Date | string | null | undefined): ReadModelSyncStatus {
-    if (!lastSyncedAt) {
+  private parseTimestamp(val: Date | string | null | undefined): {
+    iso: string | null;
+    ageMs: number | null;
+    valid: boolean;
+  } {
+    if (!val) return { iso: null, ageMs: null, valid: false };
+    const dt = val instanceof Date ? val : new Date(val);
+    if (Number.isNaN(dt.getTime())) return { iso: null, ageMs: null, valid: false };
+    return {
+      iso: dt.toISOString(),
+      ageMs: Math.max(0, Date.now() - dt.getTime()),
+      valid: true,
+    };
+  }
+
+  public buildSyncStatus(
+    snapshotOrDate: SnapshotFreshnessInput | Date | string | null | undefined,
+    scope: 'projection' | 'dashboard' = 'dashboard'
+  ): ReadModelSyncStatus {
+    const staleThresholdMs = this.getStaleThresholdMs();
+    const outboxDegraded =
+      this.outboxBacklogPending || this.deadLetterCount > 0 || this.lastWorkerError !== null;
+
+    if (!snapshotOrDate) {
       return {
         source: 'mongodb',
         syncedAt: null,
         ageMs: null,
         isStale: true,
+        projectionSyncedAt: null,
+        projectionAgeMs: null,
+        dashboardSyncedAt: null,
+        dashboardAgeMs: null,
+        deadLetterCount: this.deadLetterCount,
+        outboxDegraded,
       };
     }
 
-    const syncedDate = lastSyncedAt instanceof Date ? lastSyncedAt : new Date(lastSyncedAt);
-    const valid = !Number.isNaN(syncedDate.getTime());
-    const ageMs = valid ? Math.max(0, Date.now() - syncedDate.getTime()) : null;
+    const input: SnapshotFreshnessInput =
+      snapshotOrDate instanceof Date || typeof snapshotOrDate === 'string'
+        ? { lastSyncedAt: snapshotOrDate }
+        : snapshotOrDate;
+
+    const dashboardMeta = this.parseTimestamp(input.lastDashboardRefreshAt ?? input.lastSyncedAt);
+    const projectionMeta = this.parseTimestamp(
+      input.lastProjectionSyncAt ?? input.lastSyncedAt ?? input.lastDashboardRefreshAt
+    );
+
+    const primaryMeta = scope === 'projection' ? projectionMeta : dashboardMeta;
     const isStale =
-      !valid || this.outboxBacklogPending || (ageMs !== null && ageMs > this.staleThresholdMs && this.outboxBacklogPending);
+      !primaryMeta.valid ||
+      (primaryMeta.ageMs !== null && primaryMeta.ageMs > staleThresholdMs) ||
+      this.outboxBacklogPending ||
+      this.deadLetterCount > 0;
 
     return {
       source: 'mongodb',
-      syncedAt: valid ? syncedDate.toISOString() : null,
-      ageMs,
+      syncedAt: primaryMeta.iso,
+      ageMs: primaryMeta.ageMs,
       isStale,
+      projectionSyncedAt: projectionMeta.iso,
+      projectionAgeMs: projectionMeta.ageMs,
+      dashboardSyncedAt: dashboardMeta.iso,
+      dashboardAgeMs: dashboardMeta.ageMs,
+      deadLetterCount: this.deadLetterCount,
+      outboxDegraded,
     };
   }
 
@@ -654,7 +787,7 @@ export class ReadModelsQueryService {
     const timeZone = env.BUSINESS_TIME_ZONE || 'Asia/Kolkata';
     const businessDate = getBusinessDateISO(timeZone);
     const hasFilter = Boolean(query.fromDate || query.toDate);
-    const syncStatus = this.buildSyncStatus(snapshot.lastSyncedAt);
+    const syncStatus = this.buildSyncStatus(snapshot, 'dashboard');
 
     if (!hasFilter && snapshot.allTimeOverview) {
       const cached = snapshot.allTimeOverview as unknown as DashboardOverviewData;
@@ -681,6 +814,7 @@ export class ReadModelsQueryService {
     search?: string;
     limit?: number;
     offset?: number;
+    cursor?: string;
   }): Promise<{
     products: Array<{
       id: number;
@@ -698,47 +832,90 @@ export class ReadModelsQueryService {
     offset: number;
     hasMore: boolean;
     nextOffset: number | null;
+    nextCursor: string | null;
     syncStatus: ReadModelSyncStatus;
   }> {
     this.assertMongoReady();
 
-    const limit = Math.min(Math.max(1, Math.trunc(params.limit ?? 25)), 100);
-    const offset = Math.max(0, Math.trunc(params.offset ?? 0));
+    const limit = Math.min(Math.max(1, Math.trunc(params.limit ?? 25)), 200);
+    const trimmedCursor = params.cursor?.trim();
+    const decodedCursor = trimmedCursor ? decodeProductCursor(trimmedCursor) : null;
+    const offset = decodedCursor ? 0 : Math.max(0, Math.trunc(params.offset ?? 0));
     const trimmedSearch = (params.search ?? '').trim();
 
-    const filter: Record<string, unknown> = { isArchived: false };
+    const baseFilter: Record<string, unknown> = { isArchived: false };
     if (trimmedSearch.length > 0) {
       const normalized = normalizeSearchText(trimmedSearch);
       const escapedNormalized = escapeRegex(normalized);
-      const escapedRaw = escapeRegex(trimmedSearch);
-      const tokens = normalized.split(' ').filter(Boolean);
+      const tokens = normalized.split(/[^a-z0-9]+/).filter(Boolean).slice(0, 8);
 
       const orClauses: Record<string, unknown>[] = [
-        { normalizedName: { $regex: escapedNormalized } },
+        { normalizedName: { $regex: `^${escapedNormalized}` } },
         { barcode: trimmedSearch },
-        { hsnCode: { $regex: escapedRaw, $options: 'i' } },
+        { normalizedHsnCode: { $regex: `^${escapeRegex(normalized)}` } },
       ];
-      if (tokens.length > 0) {
-        orClauses.push({
-          searchTokens: {
-            $all: tokens.map((tok) => new RegExp(`^${escapeRegex(tok)}`)),
-          },
-        });
+      if (trimmedSearch.length === 1) {
+        orClauses.push({ barcode: { $regex: `^${escapeRegex(trimmedSearch)}` } });
       }
-      filter.$or = orClauses;
+      if (tokens.length > 0) {
+        const longTokens = tokens.filter((t) => t.length >= 2);
+        const tokenMatchers = (longTokens.length > 0 ? longTokens : tokens).map((tok) =>
+          tok.length >= 2 && tok.length <= 12 ? tok : new RegExp(`^${escapeRegex(tok)}`)
+        );
+        if (longTokens.length > 0) {
+          orClauses.push({
+            searchTokens: tokenMatchers.length === 1 ? tokenMatchers[0] : { $all: tokenMatchers },
+          });
+        }
+      }
+      baseFilter.$or = orClauses;
     }
 
-    const [docs, total, snapshot] = await Promise.all([
-      ProductSearchModel.find(filter)
-        .sort({ normalizedName: 1, productId: 1 })
-        .skip(offset)
-        .limit(limit)
-        .lean(),
-      ProductSearchModel.countDocuments(filter),
+    const queryFilter: Record<string, unknown> = decodedCursor
+      ? {
+          $and: [
+            baseFilter,
+            {
+              $or: [
+                { normalizedName: { $gt: decodedCursor.n } },
+                { normalizedName: decodedCursor.n, productId: { $gt: decodedCursor.id } },
+              ],
+            },
+          ],
+        }
+      : baseFilter;
+
+    const findQuery = ProductSearchModel.find(queryFilter).sort({ normalizedName: 1, productId: 1 });
+    if (decodedCursor) {
+      findQuery.limit(limit + 1);
+    } else {
+      findQuery.skip(offset).limit(limit + 1);
+    }
+
+    const [rawDocs, snapshot, filteredCount] = await Promise.all([
+      findQuery.lean(),
       DashboardSnapshotModel.findOne({ snapshotKey: '__global__' })
-        .select({ lastSyncedAt: 1 })
+        .select({
+          lastSyncedAt: 1,
+          lastProjectionSyncAt: 1,
+          lastDashboardRefreshAt: 1,
+          'globals.activeProducts': 1,
+        })
         .lean(),
+      trimmedSearch.length > 0
+        ? ProductSearchModel.countDocuments(baseFilter)
+        : Promise.resolve(null),
     ]);
+
+    const hasMore = rawDocs.length > limit;
+    const docs = hasMore ? rawDocs.slice(0, limit) : rawDocs;
+
+    const total =
+      filteredCount !== null
+        ? filteredCount
+        : typeof snapshot?.globals?.activeProducts === 'number'
+          ? snapshot.globals.activeProducts
+          : await ProductSearchModel.countDocuments(baseFilter);
 
     const r2Enabled = isR2Configured();
     const products = docs.map((doc) => ({
@@ -752,19 +929,25 @@ export class ReadModelsQueryService {
         doc.imageObjectKey && r2Enabled
           ? doc.imageUrl || `/api/v1/products/${doc.productId}/image`
           : null,
-      created_at: new Date(doc.sourceUpdatedAt || doc.projectionUpdatedAt).toISOString(),
+      created_at: new Date(doc.createdAtPg || doc.sourceUpdatedAt || doc.projectionUpdatedAt).toISOString(),
       updated_at: new Date(doc.sourceUpdatedAt || doc.projectionUpdatedAt).toISOString(),
     }));
 
-    const hasMore = offset + products.length < total;
+    const lastDoc = docs.length > 0 ? docs[docs.length - 1] : null;
+    const nextCursor =
+      hasMore && lastDoc
+        ? encodeCursor({ n: lastDoc.normalizedName, id: lastDoc.productId })
+        : null;
+
     return {
       products,
       total,
       limit,
       offset,
       hasMore,
-      nextOffset: hasMore ? offset + products.length : null,
-      syncStatus: this.buildSyncStatus(snapshot?.lastSyncedAt),
+      nextOffset: !decodedCursor && hasMore ? offset + products.length : null,
+      nextCursor,
+      syncStatus: this.buildSyncStatus(snapshot, 'projection'),
     };
   }
 
@@ -805,7 +988,7 @@ export class ReadModelsQueryService {
         doc.imageObjectKey && isR2Configured()
           ? doc.imageUrl || `/api/v1/products/${doc.productId}/image`
           : null,
-      created_at: new Date(doc.sourceUpdatedAt || doc.projectionUpdatedAt).toISOString(),
+      created_at: new Date(doc.createdAtPg || doc.sourceUpdatedAt || doc.projectionUpdatedAt).toISOString(),
       updated_at: new Date(doc.sourceUpdatedAt || doc.projectionUpdatedAt).toISOString(),
     };
   }
@@ -851,7 +1034,7 @@ export class ReadModelsQueryService {
       totalCustomers: snapshot.globals.khataSummaryTotalCustomers,
       totalOutstanding: toFixedMoney(snapshot.globals.khataSummaryTotalOutstanding),
       totalReceived: toFixedMoney(snapshot.globals.khataSummaryTotalReceived),
-      syncStatus: this.buildSyncStatus(snapshot.lastSyncedAt),
+      syncStatus: this.buildSyncStatus(snapshot, 'dashboard'),
     };
   }
 
@@ -862,6 +1045,7 @@ export class ReadModelsQueryService {
     search?: string;
     limit?: number;
     offset?: number;
+    cursor?: string;
   }): Promise<{
     customers: Array<{
       id: number;
@@ -880,49 +1064,115 @@ export class ReadModelsQueryService {
     offset: number;
     hasMore: boolean;
     nextOffset: number | null;
+    nextCursor: string | null;
     syncStatus: ReadModelSyncStatus;
   }> {
     this.assertMongoReady();
 
-    const limit = Math.min(Math.max(1, Math.trunc(params.limit ?? 25)), 100);
-    const offset = Math.max(0, Math.trunc(params.offset ?? 0));
+    const limit = Math.min(Math.max(1, Math.trunc(params.limit ?? 25)), 200);
+    const trimmedCursor = params.cursor?.trim();
+    const decodedCursor = trimmedCursor ? decodeCustomerCursor(trimmedCursor) : null;
+    const offset = decodedCursor ? 0 : Math.max(0, Math.trunc(params.offset ?? 0));
     const trimmedSearch = (params.search ?? '').trim();
 
-    const filter: Record<string, unknown> = { isArchived: false };
+    const baseFilter: Record<string, unknown> = { isArchived: false };
     if (trimmedSearch.length > 0) {
       const normalized = normalizeSearchText(trimmedSearch);
       const digitsOnly = trimmedSearch.replace(/\D/g, '');
       const escapedNormalized = escapeRegex(normalized);
-      const tokens = normalized.split(' ').filter(Boolean);
+      const tokens = normalized.split(/[^a-z0-9]+/).filter(Boolean).slice(0, 8);
 
       const orClauses: Record<string, unknown>[] = [
-        { normalizedName: { $regex: escapedNormalized } },
-        { phone: { $regex: escapeRegex(trimmedSearch), $options: 'i' } },
+        { normalizedName: { $regex: `^${escapedNormalized}` } },
       ];
       if (digitsOnly.length > 0) {
-        orClauses.push({ normalizedPhone: { $regex: escapeRegex(digitsOnly) } });
+        orClauses.push({ normalizedPhone: { $regex: `^${escapeRegex(digitsOnly)}` } });
+        if (digitsOnly.length >= 3) {
+          orClauses.push({
+            searchTokens:
+              digitsOnly.length <= 15
+                ? digitsOnly
+                : new RegExp(`^${escapeRegex(digitsOnly)}`),
+          });
+        }
       }
       if (tokens.length > 0) {
-        orClauses.push({
-          searchTokens: {
-            $all: tokens.map((tok) => new RegExp(`^${escapeRegex(tok)}`)),
-          },
-        });
+        const longTokens = tokens.filter((t) => t.length >= 2);
+        if (longTokens.length > 0) {
+          const matchers = longTokens.map((tok) =>
+            tok.length <= 12 ? tok : new RegExp(`^${escapeRegex(tok)}`)
+          );
+          orClauses.push({
+            searchTokens: matchers.length === 1 ? matchers[0] : { $all: matchers },
+          });
+        }
       }
-      filter.$or = orClauses;
+      baseFilter.$or = orClauses;
     }
 
-    const [docs, total, snapshot] = await Promise.all([
-      CustomerSummaryModel.find(filter)
-        .sort({ outstandingPaise: -1, lastActivityAt: -1, customerId: 1 })
-        .skip(offset)
-        .limit(limit)
-        .lean(),
-      CustomerSummaryModel.countDocuments(filter),
+    let queryFilter: Record<string, unknown> = baseFilter;
+    if (decodedCursor) {
+      const cursorLastActivity = decodedCursor.l !== null ? new Date(decodedCursor.l) : null;
+      const seekClauses: Record<string, unknown>[] = [{ outstandingPaise: { $lt: decodedCursor.o } }];
+      if (cursorLastActivity) {
+        seekClauses.push({
+          outstandingPaise: decodedCursor.o,
+          lastActivityAt: { $lt: cursorLastActivity },
+        });
+        seekClauses.push({
+          outstandingPaise: decodedCursor.o,
+          lastActivityAt: null,
+        });
+        seekClauses.push({
+          outstandingPaise: decodedCursor.o,
+          lastActivityAt: cursorLastActivity,
+          customerId: { $gt: decodedCursor.id },
+        });
+      } else {
+        seekClauses.push({
+          outstandingPaise: decodedCursor.o,
+          lastActivityAt: null,
+          customerId: { $gt: decodedCursor.id },
+        });
+      }
+      queryFilter = { $and: [baseFilter, { $or: seekClauses }] };
+    }
+
+    const findQuery = CustomerSummaryModel.find(queryFilter).sort({
+      outstandingPaise: -1,
+      lastActivityAt: -1,
+      customerId: 1,
+    });
+    if (decodedCursor) {
+      findQuery.limit(limit + 1);
+    } else {
+      findQuery.skip(offset).limit(limit + 1);
+    }
+
+    const [rawDocs, snapshot, filteredCount] = await Promise.all([
+      findQuery.lean(),
       DashboardSnapshotModel.findOne({ snapshotKey: '__global__' })
-        .select({ lastSyncedAt: 1 })
+        .select({
+          lastSyncedAt: 1,
+          lastProjectionSyncAt: 1,
+          lastDashboardRefreshAt: 1,
+          'globals.activeCustomers': 1,
+        })
         .lean(),
+      trimmedSearch.length > 0
+        ? CustomerSummaryModel.countDocuments(baseFilter)
+        : Promise.resolve(null),
     ]);
+
+    const hasMore = rawDocs.length > limit;
+    const docs = hasMore ? rawDocs.slice(0, limit) : rawDocs;
+
+    const total =
+      filteredCount !== null
+        ? filteredCount
+        : typeof snapshot?.globals?.activeCustomers === 'number'
+          ? snapshot.globals.activeCustomers
+          : await CustomerSummaryModel.countDocuments(baseFilter);
 
     const customers = docs.map((doc) => ({
       id: doc.customerId,
@@ -937,15 +1187,25 @@ export class ReadModelsQueryService {
       created_at: new Date(doc.createdAtPg || doc.sourceUpdatedAt).toISOString(),
     }));
 
-    const hasMore = offset + customers.length < total;
+    const lastDoc = docs.length > 0 ? docs[docs.length - 1] : null;
+    const nextCursor =
+      hasMore && lastDoc
+        ? encodeCursor({
+            o: Number(lastDoc.outstandingPaise || 0),
+            l: lastDoc.lastActivityAt ? new Date(lastDoc.lastActivityAt).getTime() : null,
+            id: lastDoc.customerId,
+          })
+        : null;
+
     return {
       customers,
       total,
       limit,
       offset,
       hasMore,
-      nextOffset: hasMore ? offset + customers.length : null,
-      syncStatus: this.buildSyncStatus(snapshot?.lastSyncedAt),
+      nextOffset: !decodedCursor && hasMore ? offset + customers.length : null,
+      nextCursor,
+      syncStatus: this.buildSyncStatus(snapshot, 'projection'),
     };
   }
 }

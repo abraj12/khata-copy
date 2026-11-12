@@ -64,7 +64,7 @@ export interface NotificationDoc {
   entityId: string | null;
   isRead: boolean;
   readAt: Date | null;
-  dedupeKey: string | null;
+  dedupeKey?: string;
   createdAt: Date;
 }
 
@@ -89,7 +89,7 @@ const notificationSchema = new Schema<NotificationDoc>(
     entityId: { type: String, default: null },
     isRead: { type: Boolean, required: true, default: false },
     readAt: { type: Date, default: null },
-    dedupeKey: { type: String, default: null },
+    dedupeKey: { type: String, default: undefined },
     createdAt: { type: Date, required: true, default: Date.now },
   },
   {
@@ -105,7 +105,11 @@ notificationSchema.index(
 );
 notificationSchema.index(
   { dedupeKey: 1 },
-  { unique: true, sparse: true, name: 'idx_notifications_dedupe_unique' }
+  {
+    unique: true,
+    partialFilterExpression: { dedupeKey: { $type: 'string' } },
+    name: 'idx_notifications_dedupe_unique',
+  }
 );
 
 export interface AppActivityEventDoc {

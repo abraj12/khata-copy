@@ -7,11 +7,13 @@ export interface ProductSearchDoc {
   searchTokens: string[];
   buyingPrice: string;
   hsnCode: string | null;
+  normalizedHsnCode: string | null;
   barcode: string | null;
   imageObjectKey: string | null;
   imageUrl: string | null;
   isArchived: boolean;
   archivedAt: Date | null;
+  createdAtPg?: Date | null;
   sourceUpdatedAt: Date;
   projectionUpdatedAt: Date;
 }
@@ -24,11 +26,13 @@ const productSearchSchema = new Schema<ProductSearchDoc>(
     searchTokens: { type: [String], default: [] },
     buyingPrice: { type: String, required: true },
     hsnCode: { type: String, default: null },
+    normalizedHsnCode: { type: String, default: null },
     barcode: { type: String, default: null },
     imageObjectKey: { type: String, default: null },
     imageUrl: { type: String, default: null },
     isArchived: { type: Boolean, required: true, default: false },
     archivedAt: { type: Date, default: null },
+    createdAtPg: { type: Date, default: null },
     sourceUpdatedAt: { type: Date, required: true },
     projectionUpdatedAt: { type: Date, required: true },
   },
@@ -45,8 +49,20 @@ productSearchSchema.index(
   { name: 'idx_product_search_active_name' }
 );
 productSearchSchema.index({ barcode: 1 }, { sparse: true, name: 'idx_product_search_barcode' });
+productSearchSchema.index(
+  { isArchived: 1, barcode: 1 },
+  { sparse: true, name: 'idx_product_search_active_barcode' }
+);
 productSearchSchema.index({ hsnCode: 1 }, { sparse: true, name: 'idx_product_search_hsn' });
+productSearchSchema.index(
+  { isArchived: 1, normalizedHsnCode: 1, productId: 1 },
+  { name: 'idx_product_search_active_norm_hsn' }
+);
 productSearchSchema.index({ searchTokens: 1 }, { name: 'idx_product_search_tokens' });
+productSearchSchema.index(
+  { isArchived: 1, searchTokens: 1 },
+  { name: 'idx_product_search_active_tokens' }
+);
 
 export interface CustomerSummaryDoc {
   customerId: number;
@@ -119,7 +135,15 @@ customerSummarySchema.index(
   { normalizedPhone: 1 },
   { sparse: true, name: 'idx_customer_summaries_phone' }
 );
+customerSummarySchema.index(
+  { isArchived: 1, normalizedPhone: 1 },
+  { sparse: true, name: 'idx_customer_summaries_active_phone' }
+);
 customerSummarySchema.index({ searchTokens: 1 }, { name: 'idx_customer_summaries_tokens' });
+customerSummarySchema.index(
+  { isArchived: 1, searchTokens: 1 },
+  { name: 'idx_customer_summaries_active_tokens' }
+);
 
 export interface DashboardSnapshotGlobals {
   totalCustomers: number;
@@ -151,6 +175,8 @@ export interface DashboardSnapshotDoc {
   allTimeOverview: Record<string, unknown>;
   lastOutboxEventId: number | null;
   lastSyncedAt: Date;
+  lastProjectionSyncAt?: Date | null;
+  lastDashboardRefreshAt?: Date | null;
   projectionUpdatedAt: Date;
 }
 
@@ -161,6 +187,8 @@ const dashboardSnapshotSchema = new Schema<DashboardSnapshotDoc>(
     allTimeOverview: { type: Schema.Types.Mixed, required: true },
     lastOutboxEventId: { type: Number, default: null },
     lastSyncedAt: { type: Date, required: true },
+    lastProjectionSyncAt: { type: Date, default: null },
+    lastDashboardRefreshAt: { type: Date, default: null },
     projectionUpdatedAt: { type: Date, required: true },
   },
   {
@@ -261,6 +289,10 @@ recentActivitySchema.index(
   { name: 'idx_recent_activity_date_desc' }
 );
 recentActivitySchema.index({ occurredAt: -1 }, { name: 'idx_recent_activity_occurred_desc' });
+recentActivitySchema.index(
+  { occurredAt: 1 },
+  { expireAfterSeconds: 180 * 24 * 60 * 60, name: 'idx_recent_activity_ttl_180d' }
+);
 
 export interface DailyAnalyticsExpenseCategoryItem {
   category: string;

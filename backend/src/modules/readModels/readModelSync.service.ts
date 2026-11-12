@@ -56,14 +56,65 @@ export function buildSearchTokens(parts: Array<string | null | undefined>): stri
       }
     }
   }
-  return Array.from(tokens).slice(0, 64);
+  return Array.from(tokens).slice(0, 96);
+}
+
+export function buildCustomerSearchTokens(
+  name: string | null | undefined,
+  phone: string | null | undefined,
+  normalizedPhone: string | null | undefined
+): string[] {
+  const tokens = new Set<string>();
+  const digits = String(normalizedPhone || phone || '').replace(/\D/g, '');
+  if (digits.length > 0) {
+    tokens.add(digits);
+    const maxPref = Math.min(digits.length, 15);
+    for (let len = 2; len <= maxPref; len++) {
+      tokens.add(digits.slice(0, len));
+    }
+    const maxSuf = Math.min(digits.length, 10);
+    for (let len = 3; len <= maxSuf; len++) {
+      tokens.add(digits.slice(-len));
+    }
+  }
+  for (const tok of buildSearchTokens([name, phone, normalizedPhone])) {
+    tokens.add(tok);
+    if (tokens.size >= 96) break;
+  }
+  return Array.from(tokens);
 }
 
 /**
  * Atomic monotonic timestamp-guarded upsert preventing stale events from overwriting newer projections
  * and avoiding E11000 duplicate-key errors on conditional upserts.
  */
-async function upsertProjectionWithTimestampGuard<
+async function atomicTimestampGuardedUpdate<
+  TDoc extends { sourceUpdatedAt: Date; projectionUpdatedAt: Date }
+>(
+  model: {
+    updateOne: (filter: Record<string, unknown>, update: Record<string, unknown>, opts?: any) => Promise<any>;
+  },
+  keyFilter: Record<string, unknown>,
+  doc: TDoc
+): Promise<'upserted' | 'skipped_stale'> {
+  const res = await model.updateOne(
+    {
+      ...keyFilter,
+      $or: [
+        { sourceUpdatedAt: { $lte: doc.sourceUpdatedAt } },
+        { sourceUpdatedAt: { $exists: false } },
+      ],
+    },
+    { $set: doc },
+    { upsert: false }
+  );
+  if (res && typeof res.matchedCount === 'number' && res.matchedCount === 0) {
+    return 'skipped_stale';
+  }
+  return 'upserted';
+}
+
+export async function upsertProjectionWithTimestampGuard<
   TDoc extends { sourceUpdatedAt: Date; projectionUpdatedAt: Date }
 >(
   model: {
@@ -87,41 +138,21 @@ async function upsertProjectionWithTimestampGuard<
 
   try {
     if (existing) {
-      await model.updateOne(
-        {
-          ...keyFilter,
-          $or: [
-            { sourceUpdatedAt: { $lte: doc.sourceUpdatedAt } },
-            { sourceUpdatedAt: { $exists: false } },
-          ],
-        },
-        { $set: doc }
-      );
-      return 'upserted';
+      return await atomicTimestampGuardedUpdate(model, keyFilter, doc);
     }
 
     await model.updateOne(keyFilter, { $setOnInsert: doc }, { upsert: true });
     return 'upserted';
   } catch (err: any) {
-    // Handle concurrent first-insert race cleanly
+    // Handle concurrent first-insert race cleanly without overwriting newer sourceUpdatedAt
     if (err?.code === 11000) {
-      await model.updateOne(
-        {
-          ...keyFilter,
-          $or: [
-            { sourceUpdatedAt: { $lte: doc.sourceUpdatedAt } },
-            { sourceUpdatedAt: { $exists: false } },
-          ],
-        },
-        { $set: doc }
-      );
-      return 'upserted';
+      return await atomicTimestampGuardedUpdate(model, keyFilter, doc);
     }
     throw err;
   }
 }
 
-async function bulkUpsertByNumericKey(
+export async function bulkUpsertByNumericKey(
   model: any,
   keyField: 'productId' | 'customerId',
   docs: Array<Record<string, unknown> & { sourceUpdatedAt: Date; projectionUpdatedAt: Date }>
@@ -145,16 +176,32 @@ async function bulkUpsertByNumericKey(
   for (const doc of docs) {
     const k = Number(doc[keyField]);
     const existingTs = existingTimestampByKey.get(k);
-    if (existingTs !== undefined && existingTs > doc.sourceUpdatedAt.getTime()) {
-      continue;
+    if (existingTs !== undefined) {
+      if (existingTs > doc.sourceUpdatedAt.getTime()) {
+        continue;
+      }
+      bulkOps.push({
+        updateOne: {
+          filter: {
+            [keyField]: k,
+            $or: [
+              { sourceUpdatedAt: { $lte: doc.sourceUpdatedAt } },
+              { sourceUpdatedAt: { $exists: false } },
+            ],
+          },
+          update: { $set: doc },
+          upsert: false,
+        },
+      });
+    } else {
+      bulkOps.push({
+        updateOne: {
+          filter: { [keyField]: k },
+          update: { $setOnInsert: doc },
+          upsert: true,
+        },
+      });
     }
-    bulkOps.push({
-      updateOne: {
-        filter: { [keyField]: k },
-        update: { $set: doc },
-        upsert: true,
-      },
-    });
   }
 
   if (bulkOps.length === 0) return;
@@ -183,6 +230,7 @@ export interface OutboxBatchEventRow {
 }
 
 export class ReadModelSyncService {
+  private dashboardSnapshotQueue: Promise<void> = Promise.resolve();
   /**
    * Projects a single product from PostgreSQL into MongoDB product_search.
    * Deliberately excludes any stock/inventory/quantity fields.
@@ -202,7 +250,7 @@ export class ReadModelSyncService {
     if (uniqueIds.length === 0) return;
 
     const res = await client.query(
-      `SELECT id, name, buying_price, hsn_code, barcode, updated_at, archived_at,
+      `SELECT id, name, buying_price, hsn_code, barcode, created_at, updated_at, archived_at,
               image_object_key, image_updated_at
        FROM products
        WHERE id = ANY($1::bigint[])`,
@@ -222,19 +270,22 @@ export class ReadModelSyncService {
         Date.parse(String(row.image_updated_at || row.updated_at || '')) || 1;
       const imageUrl = hasImage ? `/api/v1/products/${row.id}/image?v=${versionTag}` : null;
       const sourceUpdatedAt = new Date(row.updated_at || Date.now());
+      const createdAtPg = new Date(row.created_at || row.updated_at || sourceUpdatedAt);
 
       docs.push({
         productId: pid,
         name: String(row.name),
         normalizedName: normalizeSearchText(row.name),
-        searchTokens: buildSearchTokens([row.name, row.hsn_code, row.barcode]),
+        searchTokens: buildSearchTokens([row.hsn_code, row.barcode, row.name]),
         buyingPrice: toFixedMoney(row.buying_price),
         hsnCode: row.hsn_code ? String(row.hsn_code) : null,
+        normalizedHsnCode: row.hsn_code ? normalizeSearchText(row.hsn_code) : null,
         barcode: row.barcode ? String(row.barcode) : null,
         imageObjectKey: row.image_object_key ? String(row.image_object_key) : null,
         imageUrl,
         isArchived: Boolean(row.archived_at),
         archivedAt: row.archived_at ? new Date(row.archived_at) : null,
+        createdAtPg,
         sourceUpdatedAt,
         projectionUpdatedAt: now,
       });
@@ -359,7 +410,11 @@ export class ReadModelSyncService {
         transactionCount: Number(r.tx_count || 0),
         paymentCount: Number(r.pay_count || 0),
         lastActivityAt: r.last_activity ? new Date(r.last_activity) : null,
-        searchTokens: buildSearchTokens([r.name, r.phone, r.normalized_phone]),
+        searchTokens: buildCustomerSearchTokens(
+          r.name ? String(r.name) : null,
+          r.phone ? String(r.phone) : null,
+          r.normalized_phone ? String(r.normalized_phone) : null
+        ),
         isArchived: Boolean(r.archived_at),
         createdAtPg: new Date(r.created_at),
         sourceUpdatedAt,
@@ -1026,8 +1081,20 @@ export class ReadModelSyncService {
 
   /**
    * Computes current non-date-filtered globals and all-time overview snapshot into MongoDB dashboard_snapshots.
+   * Serialized internally to prevent slower overlapping executions from overwriting newer aggregates.
    */
-  public async syncDashboardSnapshot(
+  public syncDashboardSnapshot(
+    client: PoolClient,
+    lastOutboxEventId: number | null = null
+  ): Promise<void> {
+    const run = this.dashboardSnapshotQueue
+      .catch(() => {})
+      .then(() => this.executeSyncDashboardSnapshot(client, lastOutboxEventId));
+    this.dashboardSnapshotQueue = run;
+    return run;
+  }
+
+  private async executeSyncDashboardSnapshot(
     client: PoolClient,
     lastOutboxEventId: number | null = null
   ): Promise<void> {
@@ -1216,7 +1283,11 @@ export class ReadModelSyncService {
           allTimeOverview: allTimeOverview as unknown as Record<string, unknown>,
           lastOutboxEventId: effectiveOutboxId,
           lastSyncedAt: now,
+          lastDashboardRefreshAt: now,
           projectionUpdatedAt: now,
+        },
+        $max: {
+          lastProjectionSyncAt: now,
         },
       },
       { upsert: true }
@@ -1224,10 +1295,27 @@ export class ReadModelSyncService {
   }
 
   /**
+   * Refreshes only the global dashboard snapshot using a pooled PostgreSQL connection.
+   * Invoked by the outbox worker's coalesced trailing refresh scheduler.
+   */
+  public async refreshGlobalDashboardSnapshotFromPool(): Promise<void> {
+    if (!isMongoReady()) return;
+    const client = await appPool.connect();
+    try {
+      await this.syncDashboardSnapshot(client, null);
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * Processes a claimed batch of outbox events cleanly by deduplicating impacted
    * aggregates and dates, then running minimal PostgreSQL projection queries and MongoDB upserts.
    */
-  public async applyOutboxBatch(events: OutboxBatchEventRow[]): Promise<number[]> {
+  public async applyOutboxBatch(
+    events: OutboxBatchEventRow[],
+    options: { skipDashboardSnapshot?: boolean } = {}
+  ): Promise<number[]> {
     if (events.length === 0 || !isMongoReady()) {
       return [];
     }
@@ -1286,7 +1374,23 @@ export class ReadModelSyncService {
       if (needsRecentActivity) {
         await this.syncRecentActivities(client, 30);
       }
-      await this.syncDashboardSnapshot(client, maxOutboxId > 0 ? maxOutboxId : null);
+      if (options.skipDashboardSnapshot) {
+        const projectionNow = new Date();
+        const maxFields: Record<string, unknown> = {
+          lastProjectionSyncAt: projectionNow,
+          projectionUpdatedAt: projectionNow,
+        };
+        if (maxOutboxId > 0) {
+          maxFields.lastOutboxEventId = maxOutboxId;
+        }
+        await DashboardSnapshotModel.updateOne(
+          { snapshotKey: '__global__' },
+          { $max: maxFields },
+          { upsert: false }
+        );
+      } else {
+        await this.syncDashboardSnapshot(client, maxOutboxId > 0 ? maxOutboxId : null);
+      }
     } finally {
       client.release();
     }

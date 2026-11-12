@@ -169,7 +169,7 @@ describe('Khata Release #027 — MongoDB Architecture, Outbox, Fail-Closed Reads
 
       const notifIndexes = NotificationModel.schema.indexes();
       const hasDedupeUnique = notifIndexes.some(
-        ([fields, opts]) => fields.dedupeKey === 1 && opts?.unique === true && opts?.sparse === true
+        ([fields, opts]) => fields.dedupeKey === 1 && opts?.unique === true && !opts?.sparse && (opts?.partialFilterExpression as any)?.dedupeKey?.$type === 'string'
       );
       expect(hasDedupeUnique).toBe(true);
     });

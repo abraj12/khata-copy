@@ -2,16 +2,18 @@ import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
 
-// Pre-load env files before importing config modules that validate env at import time
-const envFiles = [
-  path.resolve(process.cwd(), '.env'),
-  path.resolve(process.cwd(), '.env.local'),
-  path.resolve(process.cwd(), 'backend/.env'),
-  path.resolve(process.cwd(), 'backend/.env.local'),
-];
+// Pre-load env files with override: false (highest-priority .env.local first) so shell/CI env vars always win
+const envFiles = Array.from(
+  new Set([
+    path.resolve(process.cwd(), 'backend/.env.local'),
+    path.resolve(process.cwd(), '.env.local'),
+    path.resolve(process.cwd(), 'backend/.env'),
+    path.resolve(process.cwd(), '.env'),
+  ])
+);
 for (const envFile of envFiles) {
   if (fs.existsSync(envFile)) {
-    dotenv.config({ path: envFile, override: true });
+    dotenv.config({ path: envFile, override: false });
   }
 }
 
@@ -26,22 +28,21 @@ async function main() {
     process.exit(1);
   }
 
-  const [{ connectMongo, disconnectMongo }, { closeDatabasePools }, { readModelSyncService }, { runPendingMigrationsWithRetry }] =
+  const [{ connectMongo, disconnectMongo, ensureMongoIndexes }, { closeDatabasePools }, { readModelSyncService }] =
     await Promise.all([
       import('../src/config/mongodb.js'),
       import('../src/config/database.js'),
       import('../src/modules/readModels/readModelSync.service.js'),
-      import('../src/config/migrator.js'),
     ]);
 
   try {
-    await runPendingMigrationsWithRetry();
     const conn = await connectMongo({ maxRetries: 2 });
     if (!conn.connected) {
       throw new Error(
         `MongoDB must be enabled (MONGODB_ENABLED=true) before running rebuild: ${conn.reason || 'disabled'}`
       );
     }
+    await ensureMongoIndexes();
     const result = await readModelSyncService.rebuildAllReadModels({ confirm: true });
     console.log('[READ-MODEL REBUILD] Completed successfully:', result);
   } finally {

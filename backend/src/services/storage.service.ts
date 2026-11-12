@@ -309,6 +309,27 @@ export class StorageService {
         );
       }
 
+      const extMatch = objectKey.toLowerCase().match(/\.([a-z0-9]+)$/);
+      if (extMatch) {
+        const ext = extMatch[1];
+        const expectedMimeByExt: Record<string, string> = {
+          jpg: 'image/jpeg',
+          jpeg: 'image/jpeg',
+          png: 'image/png',
+          webp: 'image/webp',
+          pdf: 'application/pdf',
+        };
+        const expectedMime = expectedMimeByExt[ext];
+        if (expectedMime && expectedMime !== contentType) {
+          await this.deleteObject(objectKey);
+          throw new AppError(
+            `Uploaded object extension ".${ext}" does not match Content-Type "${contentType}".`,
+            400,
+            'INVALID_CONTENT_TYPE'
+          );
+        }
+      }
+
       // 2. Read first 16 bytes to verify magic bytes / file signature (fail-closed)
       const getRange = await this.s3Client!.send(
         new GetObjectCommand({
@@ -320,18 +341,24 @@ export class StorageService {
 
       if (!getRange.Body) {
         await this.deleteObject(objectKey);
-        throw new AppError('Unable to inspect uploaded image contents from storage.', 502, 'STORAGE_VERIFICATION_FAILED');
+        throw new AppError(
+          expectedFolder === 'supplier-bills'
+            ? 'Unable to inspect uploaded file contents from storage.'
+            : 'Unable to inspect uploaded image contents from storage.',
+          502,
+          'STORAGE_VERIFICATION_FAILED'
+        );
       }
 
       const chunk = await getRange.Body.transformToByteArray();
       const validSignature = validateImageMagicBytes(chunk, contentType);
       if (!validSignature) {
         await this.deleteObject(objectKey);
-        throw new AppError(
-          'Uploaded file contents do not match a valid JPEG, PNG, or WebP image signature.',
-          400,
-          'INVALID_IMAGE_SIGNATURE'
-        );
+        const message =
+          contentType === 'application/pdf' || expectedFolder === 'supplier-bills'
+            ? 'Uploaded file contents do not match a valid JPEG, PNG, WebP, or PDF signature.'
+            : 'Uploaded file contents do not match a valid JPEG, PNG, or WebP image signature.';
+        throw new AppError(message, 400, 'INVALID_IMAGE_SIGNATURE');
       }
 
       return {

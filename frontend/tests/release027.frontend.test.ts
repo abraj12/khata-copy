@@ -418,7 +418,7 @@ describe('Release #027 Frontend Hardening, Bounded Multipage PDF & Mongo UI Suit
     root = createRoot(container);
   });
 
-  it('2. PdfDocumentPreviewModal prints via window.open without noopener/noreferrer, awaits img.decode() before print(), and handles blocked popups', async () => {
+  it('2. PdfDocumentPreviewModal prints canonical pdfBlob via Object URL without full-doc PNG rasterization and handles blocked popups', async () => {
     const pdfBlob = makePdfBlob();
     await act(async () => {
       root.render(
@@ -438,26 +438,13 @@ describe('Release #027 Frontend Hardening, Bounded Multipage PDF & Mongo UI Suit
       await Promise.resolve();
     });
 
-    const callOrder: string[] = [];
-    let writtenHtml = '';
-    const mockDecode = vi.fn(async () => {
-      callOrder.push('decode');
-    });
-    const mockPrint = vi.fn(() => {
-      callOrder.push('print');
-    });
+    const toDataUrlBeforePrint = (HTMLCanvasElement.prototype.toDataURL as any).mock.calls.length;
+    const mockPrint = vi.fn();
     const fakePopup: any = {
       opener: window,
-      document: {
-        open: vi.fn(),
-        write: vi.fn((html: string) => {
-          writtenHtml = html;
-        }),
-        close: vi.fn(),
-        get images() {
-          return [{ decode: mockDecode, complete: false }];
-        },
-      },
+      document: { readyState: 'complete' },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
       focus: vi.fn(),
       print: mockPrint,
       close: vi.fn(),
@@ -473,22 +460,20 @@ describe('Release #027 Frontend Hardening, Bounded Multipage PDF & Mongo UI Suit
       printBtn.click();
     });
 
-    // Must call window.open('', '_blank') WITHOUT features containing noopener/noreferrer, then null opener
-    expect(openSpy).toHaveBeenCalledWith('', '_blank');
+    // Must open canonical PDF Object URL directly WITHOUT rasterizing pages to PNG data URLs
+    expect(URL.createObjectURL).toHaveBeenCalledWith(pdfBlob);
+    expect((HTMLCanvasElement.prototype.toDataURL as any).mock.calls.length).toBe(toDataUrlBeforePrint);
+    // Fallback opens canonical blob URL WITHOUT noopener/noreferrer, then nulls opener and triggers print()
+    expect(openSpy).toHaveBeenCalledWith('blob:r27-preview-url', '_blank');
     expect(fakePopup.opener).toBeNull();
-    // All 10 pages rendered into canonical print document
-    const imgMatches = writtenHtml.match(/<div class="page-break"><img /g) || [];
-    expect(imgMatches.length).toBe(10);
-    // img.decode() strictly precedes print()
-    expect(mockDecode).toHaveBeenCalledTimes(1);
     expect(mockPrint).toHaveBeenCalledTimes(1);
-    expect(callOrder.indexOf('decode')).toBeLessThan(callOrder.indexOf('print'));
 
-    // Pop-up blocked fallback downloads canonical PDF + shows banner notice
+    // Pop-up blocked fallback revokes object URL, downloads canonical PDF, and shows banner notice
     openSpy.mockReturnValue(null);
     await act(async () => {
       printBtn.click();
     });
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:r27-preview-url');
     expect(container.textContent).toContain('Pop-up blocked by browser — downloaded canonical PDF instead.');
   });
 

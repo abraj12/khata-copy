@@ -10,11 +10,11 @@ import { createApp } from '../../src/app.js';
 import { env } from '../../src/config/env.js';
 import { assertSafeTestDatabaseUrl } from '../../src/config/testDbGuard.js';
 import { appPool, closeDatabasePools } from '../../src/config/database.js';
-import { connectMongo, disconnectMongo, isMongoReady } from '../../src/config/mongodb.js';
-import { READ_MODEL_MODELS } from '../../src/modules/readModels/models.js';
-import { APP_DATA_MODELS } from '../../src/modules/appData/models.js';
+import { connectMongo, disconnectMongo, ensureMongoIndexes, isMongoReady } from '../../src/config/mongodb.js';
+import { ProductSearchModel, READ_MODEL_MODELS, RecentActivityModel } from '../../src/modules/readModels/models.js';
+import { APP_DATA_MODELS, NotificationModel, SearchAnalyticsModel } from '../../src/modules/appData/models.js';
 import { ReadModelOutboxWorker, readModelOutboxWorker } from '../../src/modules/readModels/readModelOutbox.worker.js';
-import { readModelSyncService } from '../../src/modules/readModels/readModelSync.service.js';
+import { readModelSyncService, upsertProjectionWithTimestampGuard } from '../../src/modules/readModels/readModelSync.service.js';
 import { readModelsQueryService } from '../../src/modules/readModels/readModelsQuery.service.js';
 import {
   allocateDocumentNumber,
@@ -43,8 +43,19 @@ import { getCompanyTaxProfile } from '../../src/services/companyTaxProfile.servi
 const { Pool } = pg;
 Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
 
-const testDbUrl = process.env.TEST_DATABASE_URL;
-const describeIntegration = testDbUrl ? describe : describe.skip;
+const testDbUrl = process.env.TEST_DATABASE_URL?.trim();
+const requireTestDb = process.env.REQUIRE_TEST_DATABASE_URL === 'true';
+
+if (requireTestDb && !testDbUrl) {
+  throw new Error(
+    '[TEST DB GUARD] REQUIRE_TEST_DATABASE_URL=true requires TEST_DATABASE_URL to run PostgreSQL integration tests; refusing silent skip.'
+  );
+}
+if (requireTestDb && testDbUrl) {
+  assertSafeTestDatabaseUrl(testDbUrl);
+}
+
+const describeIntegration = testDbUrl || requireTestDb ? describe : describe.skip;
 
 describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
   let pool: pg.Pool;
@@ -130,6 +141,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
         '025_performance_reporting_hardening.sql',
         '026_company_jurisdiction.sql',
         '027_outbox_events.sql',
+        '028_outbox_dead_letter.sql',
       ];
 
       await client.query(`
@@ -165,7 +177,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
   });
 
   // 1. Migration tracking & Core Tables Verification
-  it('1. All migrations 001-019 are tracked and all 17 core tables exist in PostgreSQL schema', async () => {
+  it('1. All migrations 001-028 are tracked and all core tables exist in PostgreSQL schema', async () => {
     const migRes = await pool.query('SELECT version FROM schema_migrations ORDER BY version ASC');
     expect(migRes.rows.map((r) => r.version)).toEqual([
       '001_auth_tables.sql',
@@ -195,6 +207,7 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       '025_performance_reporting_hardening.sql',
       '026_company_jurisdiction.sql',
       '027_outbox_events.sql',
+      '028_outbox_dead_letter.sql',
     ]);
 
     const expectedTables = [
@@ -3767,6 +3780,225 @@ describeIntegration('PostgreSQL Real Database Integration Test Suite', () => {
       expect(pgRawPoolQuerySpy).not.toHaveBeenCalled();
     } finally {
       vi.restoreAllMocks();
+      await readModelOutboxWorker.stop().catch(() => {});
+      await disconnectMongo().catch(() => {});
+      env.MONGODB_ENABLED = prevMongoEnabled;
+      env.MONGODB_URI = prevMongoUri;
+      env.MONGODB_DATABASE = prevMongoDb;
+      env.OWNER_PHONE = prevPhone;
+      env.OWNER_PASSWORD_HASH = prevHash;
+      env.SESSION_COOKIE_SECURE = prevCookieSecure;
+    }
+  });
+
+  it('35. Release #028: Dead-letter lifecycle/retry, notification sparse->partial migration, 180d TTL, PII redaction, out-of-order guard, created_at & keyset cursor', async () => {
+    const targetMongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/khata_integration_test';
+    if (process.env.MONGODB_ENABLED === 'false') {
+      return;
+    }
+
+    const prevMongoEnabled = env.MONGODB_ENABLED;
+    const prevMongoUri = env.MONGODB_URI;
+    const prevMongoDb = env.MONGODB_DATABASE;
+    const prevPhone = env.OWNER_PHONE;
+    const prevHash = env.OWNER_PASSWORD_HASH;
+    const prevCookieSecure = env.SESSION_COOKIE_SECURE;
+
+    const TEST_PHONE = '9876543210';
+    const TEST_PASSWORD = 'KhataOwner@2026!';
+    const TEST_HASH =
+      '$argon2id$v=19$m=65536,t=3,p=4$r8d9IIf2qq2yux48fjyp5g$NguetCKE39Yg87iMcaXXeobM8JnU+B4/BKokFoI5yR4';
+
+    env.OWNER_PHONE = TEST_PHONE;
+    env.OWNER_PASSWORD_HASH = TEST_HASH;
+    env.SESSION_COOKIE_SECURE = false;
+    env.MONGODB_ENABLED = true;
+    env.MONGODB_URI = targetMongoUri;
+    env.MONGODB_DATABASE = 'khata_integration_test';
+
+    const app = createApp({ useMemoryStoreInTest: true });
+    let worker: ReadModelOutboxWorker | null = null;
+
+    try {
+      await readModelOutboxWorker.stop();
+      worker = new ReadModelOutboxWorker({ batchSize: 10, dashboardRefreshMinIntervalMs: 1000 });
+      await connectMongo({ uri: targetMongoUri, dbName: 'khata_integration_test' });
+      expect(isMongoReady()).toBe(true);
+
+      vi.spyOn(appPool, 'connect').mockImplementation(() => pool.connect());
+      vi.spyOn(appPool, 'query').mockImplementation((...args: any[]) => (pool.query as any)(...args));
+
+      for (const Model of [...READ_MODEL_MODELS, ...APP_DATA_MODELS]) {
+        await Model.deleteMany({});
+      }
+
+      // 1. Verify 028 schema migration artifacts in PG 18
+      const colCheck = await pool.query(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_name = 'app_outbox_events' AND column_name = 'dead_letter_at'`
+      );
+      expect(colCheck.rows).toHaveLength(1);
+
+      const idxCheck = await pool.query(
+        `SELECT indexname FROM pg_indexes WHERE tablename = 'app_outbox_events' AND indexname = 'idx_app_outbox_dead_letter'`
+      );
+      expect(idxCheck.rows).toHaveLength(1);
+
+      // 2. Verify legacy notification sparse unique index migration on real MongoDB 8.2
+      const notifColl = NotificationModel.collection;
+      await notifColl.dropIndex('idx_notifications_dedupe_unique').catch(() => {});
+      await notifColl.createIndex(
+        { dedupeKey: 1 },
+        { unique: true, sparse: true, name: 'idx_notifications_dedupe_unique' }
+      );
+      await notifColl.insertOne({
+        ownerKey: 'owner',
+        category: 'system',
+        severity: 'info',
+        title: 'Legacy Null Alert',
+        message: 'Pre-migration doc',
+        isRead: false,
+        readAt: null,
+        dedupeKey: null,
+        createdAt: new Date(),
+      } as any);
+
+      await ensureMongoIndexes();
+      const notifIndexesAfter = await notifColl.listIndexes().toArray();
+      const partialIdx = notifIndexesAfter.find((idx) => idx.name === 'idx_notifications_dedupe_unique');
+      expect(partialIdx?.partialFilterExpression).toEqual({ dedupeKey: { $type: 'string' } });
+      expect(partialIdx?.sparse).toBeFalsy();
+
+      // Now multiple notifications without dedupeKey insert cleanly while string dedupeKey enforces uniqueness
+      await NotificationModel.create({
+        ownerKey: 'owner',
+        category: 'system',
+        severity: 'info',
+        title: 'Alert A',
+        message: 'M1',
+        createdAt: new Date(),
+      });
+      await NotificationModel.create({
+        ownerKey: 'owner',
+        category: 'system',
+        severity: 'info',
+        title: 'Alert B',
+        message: 'M2',
+        createdAt: new Date(),
+      });
+
+      // 3. Verify 180-day TTL index on real recent_activity collection
+      const recentIndexes = await RecentActivityModel.collection.listIndexes().toArray();
+      const ttl180 = recentIndexes.find((idx) => idx.name === 'idx_recent_activity_ttl_180d');
+      expect(ttl180?.expireAfterSeconds).toBe(15_552_000);
+
+      // 4. Create real product + customer, verify PG created_at preservation, customer PII search redaction & keyset pagination
+      const prod1 = await productsService.createProduct('R28 Alpha Steel', '150.00', '7214', '8902800000111');
+      const prod2 = await productsService.createProduct('R28 Beta Copper', '250.00', '7408', '8902800000222');
+      const cust = await khataService.createCustomer({
+        name: 'R28 Real Privacy Customer',
+        phone: '9822211128',
+        address: 'Boring Road, Patna',
+        state: 'Bihar',
+        stateCode: '10',
+      });
+
+      while ((await worker.drainNow()).processedCount > 0) {
+        // drain real outbox events to MongoDB
+      }
+
+      const pgProdCreatedRes = await pool.query('SELECT created_at FROM products WHERE id = $1', [prod1.id]);
+      const expectedCreatedIso = new Date(pgProdCreatedRes.rows[0].created_at).toISOString();
+
+      const agent = request.agent(app);
+      const preLoginCsrf = (await agent.get('/api/v1/auth/csrf-token').expect(200)).body.csrfToken; await agent.post('/api/v1/auth/login').set('X-CSRF-Token', preLoginCsrf).send({ phone: TEST_PHONE, password: TEST_PASSWORD }).expect(200);
+      const csrfRes = await agent.get('/api/v1/auth/csrf-token').expect(200);
+      const csrf = csrfRes.body.csrfToken;
+
+      const page1 = await agent.get('/api/v1/products?limit=1').expect(200);
+      expect(page1.body.data).toHaveLength(1);
+      expect(page1.body.pagination.hasMore).toBe(true);
+      expect(page1.body.pagination.nextCursor).toBeTruthy();
+
+      const page2 = await agent
+        .get(`/api/v1/products?limit=1&cursor=${encodeURIComponent(page1.body.pagination.nextCursor)}`)
+        .expect(200);
+      expect(page2.body.data).toHaveLength(1);
+      expect(page2.body.data[0].id).not.toBe(page1.body.data[0].id);
+
+      const alphaSearch = await agent.get('/api/v1/products?search=R28%20Alpha').expect(200);
+      expect(alphaSearch.body.data[0].created_at).toBe(expectedCreatedIso);
+
+      await agent.get('/api/v1/products?cursor=invalid_cursor_token').expect(400);
+
+      // Customer search via real endpoint must redact phone PII in search_analytics
+      await SearchAnalyticsModel.deleteMany({});
+      await agent.get(`/api/v1/khata/customers?search=${cust.phone}`).expect(200);
+      await new Promise((r) => setTimeout(r, 80));
+      const analyticsRows = await SearchAnalyticsModel.find({ module: 'customers' }).lean();
+      expect(analyticsRows.length).toBeGreaterThanOrEqual(1);
+      expect(analyticsRows[0].normalizedQuery).toBe('customer_phone_search');
+      expect(JSON.stringify(analyticsRows)).not.toContain('9822211128');
+
+      // 5. Real MongoDB out-of-order guard prevents stale write from overwriting newer state
+      const realProdDoc = await ProductSearchModel.findOne({ productId: prod2.id }).lean();
+      expect(realProdDoc).toBeTruthy();
+      const guardOutcome = await upsertProjectionWithTimestampGuard(
+        ProductSearchModel as any,
+        { productId: prod2.id },
+        {
+          ...(realProdDoc as any),
+          name: 'Stale Overwrite Attempt',
+          sourceUpdatedAt: new Date(new Date(realProdDoc!.sourceUpdatedAt).getTime() - 60_000),
+          projectionUpdatedAt: new Date(),
+        }
+      );
+      expect(guardOutcome).toBe('skipped_stale');
+      const reloadedProd2 = await ProductSearchModel.findOne({ productId: prod2.id }).lean();
+      expect(reloadedProd2?.name).toBe('R28 Beta Copper');
+
+      // 6. Real PG outbox dead-letter transition -> status endpoint -> retry recovery endpoint -> worker re-drain
+      const deadInsert = await pool.query(
+        `INSERT INTO app_outbox_events (aggregate_type, aggregate_id, event_type, payload, status, attempt_count, max_attempts, next_attempt_at)
+         VALUES ('product', $1, 'product.updated', '{}'::jsonb, 'pending', 4, 5, NOW())
+         RETURNING id`,
+        [String(prod1.id)]
+      );
+      const deadId = Number(deadInsert.rows[0].id);
+
+      const applySpy = vi
+        .spyOn(readModelSyncService, 'applyOutboxBatch')
+        .mockRejectedValueOnce(new Error('Simulated integration poison pill'));
+      await worker.drainNow();
+      applySpy.mockRestore();
+
+      const deadRowRes = await pool.query(
+        `SELECT status, dead_letter_at FROM app_outbox_events WHERE id = $1`,
+        [deadId]
+      );
+      expect(deadRowRes.rows[0].status).toBe('dead_letter');
+      expect(deadRowRes.rows[0].dead_letter_at).not.toBeNull();
+
+      const syncStatusRes = await agent.get('/api/v1/read-model-sync/status').expect(200);
+      expect(syncStatusRes.body.data.outbox.deadLetterCount).toBeGreaterThanOrEqual(1);
+      expect(syncStatusRes.body.data.outbox.recentDeadLetters.some((d: any) => d.id === deadId)).toBe(true);
+
+      const retryRes = await agent
+        .post(`/api/v1/read-model-sync/outbox/${deadId}/retry`)
+        .set('x-csrf-token', csrf)
+        .expect(200);
+      expect(retryRes.body.event.status).toBe('pending');
+
+      await worker.drainNow();
+      const recoveredRes = await pool.query(
+        `SELECT status, dead_letter_at FROM app_outbox_events WHERE id = $1`,
+        [deadId]
+      );
+      expect(recoveredRes.rows[0].status).toBe('processed');
+      expect(recoveredRes.rows[0].dead_letter_at).toBeNull();
+    } finally {
+      vi.restoreAllMocks();
+      await worker?.stop().catch(() => {});
       await readModelOutboxWorker.stop().catch(() => {});
       await disconnectMongo().catch(() => {});
       env.MONGODB_ENABLED = prevMongoEnabled;

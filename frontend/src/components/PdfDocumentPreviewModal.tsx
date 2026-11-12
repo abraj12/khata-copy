@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { loadPdfJs } from '../utils/pdfImageExporter.js';
 import { downloadBlobSafely } from '../utils/blobDownload.js';
+import { printCanonicalPdfBlob } from '../utils/pdfPrint.js';
 import { PdfImageExportModal } from './PdfImageExportModal.js';
 
 export const MAX_ACTIVE_PREVIEW_CANVASES = 6;
@@ -41,15 +42,6 @@ export function computeActivePageWindow(
   return pages;
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 function zeroCanvas(canvas: HTMLCanvasElement | null | undefined): void {
   if (!canvas) return;
   try {
@@ -60,31 +52,6 @@ function zeroCanvas(canvas: HTMLCanvasElement | null | undefined): void {
   }
   canvas.width = 0;
   canvas.height = 0;
-}
-
-async function waitForPrintImagesReady(printWindow: Window): Promise<void> {
-  const images = Array.from(printWindow.document?.images || []);
-  if (images.length === 0) return;
-
-  await Promise.all(
-    images.map(async (img) => {
-      try {
-        if (typeof img.decode === 'function') {
-          await img.decode();
-          return;
-        }
-      } catch {
-        // Fall through to complete / onload check if decode rejects
-      }
-      if (img.complete) return;
-      await new Promise<void>((resolve) => {
-        const done = () => resolve();
-        img.addEventListener('load', done, { once: true });
-        img.addEventListener('error', done, { once: true });
-        setTimeout(done, 1500);
-      });
-    })
-  );
 }
 
 export interface PdfDocumentPreviewModalProps {
@@ -136,6 +103,7 @@ export const PdfDocumentPreviewModal: React.FC<PdfDocumentPreviewModalProps> = (
   const fetchPdfBlobRef = useRef(fetchPdfBlob);
   fetchPdfBlobRef.current = fetchPdfBlob;
   const didAutoPrintRef = useRef<boolean>(false);
+  const activePrintCleanupRef = useRef<(() => void) | null>(null);
 
   const activePages = useMemo(
     () => computeActivePageWindow(currentPage, numPages, MAX_ACTIVE_PREVIEW_CANVASES),
@@ -209,6 +177,8 @@ export const PdfDocumentPreviewModal: React.FC<PdfDocumentPreviewModalProps> = (
   // Fetch PDF blob and parse via PDF.js
   useEffect(() => {
     if (!isOpen) {
+      activePrintCleanupRef.current?.();
+      activePrintCleanupRef.current = null;
       didAutoPrintRef.current = false;
       setPrintNotice(null);
       void destroyLoadedPdf();
@@ -417,114 +387,32 @@ export const PdfDocumentPreviewModal: React.FC<PdfDocumentPreviewModalProps> = (
   }, [pdfBlob, fileName]);
 
   const handlePrint = useCallback(async () => {
-    const pdfDoc = pdfDocRef.current;
-    if (!pdfDoc || numPages <= 0) return;
+    if (!pdfBlob || numPages <= 0) return;
 
+    activePrintCleanupRef.current?.();
+    activePrintCleanupRef.current = null;
     setPrintNotice(null);
-    // Do NOT pass noopener,noreferrer in window.open features — Chromium/Android returns null!
-    const printWindow = window.open('', '_blank');
-    if (printWindow) {
-      try {
-        printWindow.opener = null;
-      } catch {
-        // Ignore read-only opener implementations
-      }
-    }
-
-    if (!printWindow) {
-      handleDownload();
-      setPrintNotice('Pop-up blocked by browser — downloaded canonical PDF instead.');
-      return;
-    }
-
     setIsPrinting(true);
-    const safeTitle = escapeHtml(title || documentLabel);
+
+    const handle = printCanonicalPdfBlob({
+      pdfBlob,
+      onFallbackDownload: handleDownload,
+    });
+    activePrintCleanupRef.current = handle.cleanup;
 
     try {
-      printWindow.document.open();
-      printWindow.document.write(
-        `<!DOCTYPE html><html><head><title>${safeTitle}</title><style>body{font-family:system-ui,sans-serif;margin:2rem;color:#334155;}</style></head><body><p>Preparing ${numPages} page(s) for printing...</p></body></html>`
-      );
-      printWindow.document.close();
-    } catch {
-      // Ignore write failures if window closed early
-    }
-
-    const offscreenCanvas = document.createElement('canvas');
-    const pageDataUrls: string[] = [];
-
-    try {
-      for (let pageNumber = 1; pageNumber <= numPages; pageNumber++) {
-        let page: any = null;
-        try {
-          page = await pdfDoc.getPage(pageNumber);
-          const unscaled = page.getViewport({ scale: 1 });
-          const targetScale = Math.max(1, Math.min(2, 1650 / Math.max(1, unscaled.width)));
-          const viewport = page.getViewport({ scale: targetScale });
-
-          offscreenCanvas.width = Math.max(1, Math.floor(viewport.width));
-          offscreenCanvas.height = Math.max(1, Math.floor(viewport.height));
-
-          const ctx = offscreenCanvas.getContext('2d', { alpha: false });
-          if (!ctx) {
-            throw new Error('Canvas 2D context unavailable for printing.');
-          }
-          ctx.fillStyle = '#FFFFFF';
-          ctx.fillRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
-
-          const task = page.render({
-            canvas: offscreenCanvas,
-            canvasContext: ctx,
-            viewport,
-          });
-          await task.promise;
-          pageDataUrls.push(offscreenCanvas.toDataURL('image/png'));
-        } finally {
-          page?.cleanup?.();
-        }
+      const result = await handle.promise;
+      if (result.notice) {
+        setPrintNotice(result.notice);
       }
     } catch (err: any) {
-      zeroCanvas(offscreenCanvas);
-      setIsPrinting(false);
-      try {
-        printWindow.close();
-      } catch {
-        // Ignore close error
-      }
-      setPrintNotice(err?.message || 'Unable to prepare pages for printing. Use Download instead.');
-      return;
-    } finally {
-      zeroCanvas(offscreenCanvas);
-    }
-
-    if (pageDataUrls.length === 0) {
-      setIsPrinting(false);
-      return;
-    }
-
-    const imgTags = pageDataUrls
-      .map(
-        (src, idx) =>
-          `<div class="page-break"><img src="${src}" alt="${escapeHtml(documentLabel)} page ${idx + 1}" /></div>`
-      )
-      .join('');
-
-    try {
-      printWindow.document.open();
-      printWindow.document.write(
-        `<!DOCTYPE html><html><head><title>${safeTitle}</title><style>@page{size:A4 portrait;margin:0;}body{margin:0;background:#fff;}.page-break{page-break-after:always;display:flex;justify-content:center;align-items:flex-start;}.page-break:last-child{page-break-after:auto;}img{width:100%;max-width:210mm;height:auto;display:block;}</style></head><body>${imgTags}</body></html>`
-      );
-      printWindow.document.close();
-      await waitForPrintImagesReady(printWindow);
-      printWindow.focus();
-      printWindow.print();
-    } catch {
+      handle.cleanup();
       handleDownload();
-      setPrintNotice('Print dialog could not open — downloaded canonical PDF instead.');
+      setPrintNotice(err?.message || 'Unable to open print dialog — downloaded canonical PDF instead.');
     } finally {
       setIsPrinting(false);
     }
-  }, [numPages, title, documentLabel, handleDownload]);
+  }, [pdfBlob, numPages, handleDownload]);
 
   // Optional auto-print trigger once official PDF finishes loading
   useEffect(() => {
@@ -533,6 +421,13 @@ export const PdfDocumentPreviewModal: React.FC<PdfDocumentPreviewModalProps> = (
     didAutoPrintRef.current = true;
     void handlePrint();
   }, [isOpen, autoPrintOnLoad, isLoading, error, numPages, pdfBlob, handlePrint]);
+
+  useEffect(() => {
+    return () => {
+      activePrintCleanupRef.current?.();
+      activePrintCleanupRef.current = null;
+    };
+  }, []);
 
   if (!isOpen) return null;
 

@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { ZodError } from 'zod';
 import { requireOwnerSession } from '../../middleware/requireOwnerSession.js';
+import { AppError } from '../../utils/errors.js';
 import { appDataService } from './appData.service.js';
 import { ReadModelUnavailableError } from '../readModels/readModelsQuery.service.js';
 
@@ -127,6 +128,14 @@ appDataRouter.post('/notifications/:id/read', requireOwnerSession, async (req: R
       ...result,
     });
   } catch (err) {
+    if (err instanceof AppError) {
+      res.status(err.status).json({
+        success: false,
+        code: err.code,
+        message: err.message,
+      });
+      return;
+    }
     if (err instanceof ReadModelUnavailableError) {
       res.status(503).json({
         success: false,

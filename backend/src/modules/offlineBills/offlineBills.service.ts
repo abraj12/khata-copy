@@ -110,21 +110,30 @@ export class OfflineBillsService {
     // Verify image in storage
     const verified = await storageService.verifyObject(data.imageObjectKey, 'offline-bills');
 
-    const result = await appPool.query(
-      `INSERT INTO offline_bill_records
-        (customer_name, customer_phone, normalized_customer_phone, image_object_key, image_content_type, image_size_bytes, original_filename, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-       RETURNING id, customer_name, customer_phone, normalized_customer_phone, image_object_key, image_content_type, image_size_bytes, original_filename, created_at, updated_at`,
-      [
-        trimmedName,
-        trimmedPhone,
-        normalizedPhone,
-        data.imageObjectKey,
-        verified.contentType,
-        verified.contentLength,
-        data.originalFilename || null,
-      ]
-    );
+    let result;
+    try {
+      result = await appPool.query(
+        `INSERT INTO offline_bill_records
+          (customer_name, customer_phone, normalized_customer_phone, image_object_key, image_content_type, image_size_bytes, original_filename, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+         RETURNING id, customer_name, customer_phone, normalized_customer_phone, image_object_key, image_content_type, image_size_bytes, original_filename, created_at, updated_at`,
+        [
+          trimmedName,
+          trimmedPhone,
+          normalizedPhone,
+          data.imageObjectKey,
+          verified.contentType,
+          verified.contentLength,
+          data.originalFilename || null,
+        ]
+      );
+    } catch (dbErr: any) {
+      // Do not delete shared key on unique key replay; clean up freshly orphaned uploads on other DB errors.
+      if (dbErr?.code !== '23505') {
+        await storageService.deleteObject(data.imageObjectKey).catch(() => {});
+      }
+      throw dbErr;
+    }
 
     const [createdWithUrl] = await this.attachPresignedUrls(result.rows);
     return createdWithUrl;
