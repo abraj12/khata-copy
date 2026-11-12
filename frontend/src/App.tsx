@@ -108,10 +108,13 @@ export function KhataDashboard() {
 
   return (
     <div
-      className="min-h-screen flex flex-col"
+      className="min-h-screen min-h-[100dvh] flex flex-col"
       style={{ backgroundColor: 'var(--khata-bg)', color: 'var(--khata-text)' }}
     >
-      <div className="mhi-no-print sticky top-0 z-30">
+      <div
+        className="mhi-no-print sticky top-0 z-30"
+        style={{ paddingTop: 'env(safe-area-inset-top, 0px)', background: 'var(--khata-surface)' }}
+      >
         <Navbar
           currentTab={currentTab}
           onTabChange={handleTabChange}
@@ -134,8 +137,11 @@ export function KhataDashboard() {
       </main>
 
       <footer
-        className="mhi-no-print py-4 border-t border-[var(--khata-border)] text-center text-xs font-medium text-[var(--khata-text-muted)] px-4"
-        style={{ background: 'var(--khata-surface)' }}
+        className="mhi-no-print print:hidden sticky bottom-0 z-10 w-full py-2.5 sm:py-3.5 border-t border-[var(--khata-border)] shadow-sm text-center text-xs font-medium text-[var(--khata-text-muted)] px-3 sm:px-4"
+        style={{
+          background: 'var(--khata-surface)',
+          paddingBottom: 'max(0.625rem, env(safe-area-inset-bottom, 0px))',
+        }}
       >
         Designed and managed by Algions AI Labs Pvt. Ltd.
       </footer>

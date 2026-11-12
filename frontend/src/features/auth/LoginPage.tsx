@@ -75,7 +75,7 @@ export const LoginPage: React.FC = () => {
 
   return (
     <div
-      className="min-h-screen flex flex-col items-center justify-center p-4 pt-16 sm:pt-4 relative"
+      className="min-h-screen min-h-[100dvh] flex flex-col items-center justify-center p-4 pt-16 sm:pt-4 relative"
       style={{ backgroundColor: 'var(--khata-bg)' }}
     >
       {/* Top Floating Appearance & Accessibility Control */}

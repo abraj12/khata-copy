@@ -195,31 +195,39 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange, onOpenA
 
       <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8">
         <div className="flex flex-wrap xl:flex-nowrap items-center justify-between min-h-[52px] sm:min-h-[60px] py-1.5 sm:py-2.5 gap-x-2 sm:gap-x-3 xl:gap-x-4 gap-y-2">
-          {/* Brand Identity / Store Badge */}
+          {/* Brand Identity / Store Badge (Navigates to Home) */}
           <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 min-w-0 flex-1 xl:flex-initial xl:shrink-0">
-            <div
-              className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-inner border border-[var(--khata-border)] shrink-0"
-              style={{ background: 'var(--khata-surface-inset)' }}
-              aria-hidden="true"
+            <button
+              type="button"
+              onClick={() => handleSelectTab('home')}
+              aria-label="Go to Home dashboard"
+              title="Go to Home"
+              className="group flex flex-wrap items-center gap-2 sm:gap-2.5 min-w-0 max-w-full text-left rounded-xl p-0.5 -m-0.5 cursor-pointer select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--khata-accent)] active:scale-[0.98] transition-transform"
             >
-              <Store className="w-4 h-4 sm:w-5 sm:h-5 text-[var(--khata-accent)]" />
-            </div>
-            <div className="min-w-0 flex-1 xl:flex-initial">
-              <div className="flex items-center gap-1.5 min-w-0">
-                <h1 className="text-sm sm:text-base md:text-lg font-black tracking-tight text-[var(--khata-text)] leading-none shrink-0">
-                  Khata
-                </h1>
-                <span
-                  className="md:hidden inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold shrink truncate max-w-[5.75rem] bg-[var(--khata-surface-inset)] text-[var(--khata-accent)] border border-[var(--khata-border)]"
-                  data-testid="mobile-active-tab-badge"
-                >
-                  {NAV_TAB_LABELS[currentTab]}
+              <span
+                className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-inner border border-[var(--khata-border)] group-hover:border-[var(--khata-accent)] shrink-0 transition-colors"
+                style={{ background: 'var(--khata-surface-inset)' }}
+                aria-hidden="true"
+              >
+                <Store className="w-4 h-4 sm:w-5 sm:h-5 text-[var(--khata-accent)]" />
+              </span>
+              <span className="min-w-0 flex-1 xl:flex-initial block">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-sm sm:text-base md:text-lg font-black tracking-tight text-[var(--khata-text)] group-hover:text-[var(--khata-accent)] leading-none shrink-0 transition-colors">
+                    Khata
+                  </span>
+                  <span
+                    className="md:hidden inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold shrink truncate max-w-[5.75rem] bg-[var(--khata-surface-inset)] text-[var(--khata-accent)] border border-[var(--khata-border)]"
+                    data-testid="mobile-active-tab-badge"
+                  >
+                    {NAV_TAB_LABELS[currentTab]}
+                  </span>
                 </span>
-              </div>
-              <p className="text-[10px] sm:text-[11px] text-[var(--khata-text-muted)] font-medium mt-0.5 truncate max-w-full xl:max-w-[11.5rem] 2xl:max-w-none">
-                Algions AI Labs Private Limited
-              </p>
-            </div>
+                <span className="block text-[10px] sm:text-[11px] text-[var(--khata-text-muted)] font-medium mt-0.5 truncate max-w-full xl:max-w-[11.5rem] 2xl:max-w-none">
+                  Algions AI Labs Private Limited
+                </span>
+              </span>
+            </button>
           </div>
 
           {/* Navigation Tabs (Collapsible 2x3/3x2 grid on phones; centered row on md/lg; inline bar on xl desktop) */}
